@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -86,8 +87,21 @@ const laneEnv = "E2E_INTERNAL_LANE"
 
 // runLabel labels every container and network of a run with its
 // process id, so tearDown finds them all, the lanes' second servers
-// included.
+// included, and a later run's sweepGone those of a run gone.
 const runLabel = "devopsy-e2e"
+
+// keepLabel marks what a run with E2E_KEEP keeps, which sweepGone leaves
+// for its look afterwards.
+const keepLabel = "devopsy-e2e.keep"
+
+// runLabels are the labels of what the run of process id makes.
+func runLabels(id string) []string {
+	labels := []string{"--label", runLabel + "=" + id}
+	if os.Getenv("E2E_KEEP") != "" {
+		labels = append(labels, "--label", keepLabel+"=1")
+	}
+	return labels
+}
 
 // lanes is E2E_LANES, else 4: how many servers and operators run tests
 // at once (runLanes). 1 runs every test in this process, one after
@@ -105,6 +119,7 @@ func setUp() error {
 	if _, err := docker("version"); err != nil {
 		return fmt.Errorf("docker is needed: %v", err)
 	}
+	sweepGone()
 	_, file, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(file)
 	if out, err := docker("build", "-q", "-t", image, dir); err != nil {
@@ -118,7 +133,7 @@ func setUp() error {
 	if goarch == "" {
 		return fmt.Errorf("unknown architecture %q", arch)
 	}
-	bin = filepath.Join(os.TempDir(), fmt.Sprintf("devopsy-e2e-%d", os.Getpid()))
+	bin = binOf(fmt.Sprint(os.Getpid()))
 	build := exec.Command("go", "build", "-o", bin, "./cmd/devopsy")
 	build.Dir = filepath.Dir(dir)
 	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+goarch, "CGO_ENABLED=0")
@@ -137,8 +152,8 @@ var mirror string
 
 func startMirror() error {
 	mirror = fmt.Sprintf("devopsy-e2e-mirror-%d", os.Getpid())
-	if out, err := docker("run", "-d", "--name", mirror, "--label", runLabel+"="+fmt.Sprint(os.Getpid()),
-		"-v", "devopsy-e2e-mirror:/var/lib/registry", "-e", "REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io", mirrorImage); err != nil {
+	if out, err := docker(slices.Concat([]string{"run", "-d", "--name", mirror}, runLabels(fmt.Sprint(os.Getpid())), []string{
+		"-v", "devopsy-e2e-mirror:/var/lib/registry", "-e", "REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io", mirrorImage})...); err != nil {
 		return fmt.Errorf("starting the registry mirror: %v\n%s", err, out)
 	}
 	return nil
@@ -165,7 +180,7 @@ func (l lane) server2() string { return "devopsy-e2e-server2-" + l.run }
 // startLane starts l: its network, operator and server, and lets the
 // operator reach the server's deploy user over SSH.
 func startLane(l lane) error {
-	if out, err := docker("network", "create", "--label", runLabel+"="+fmt.Sprint(os.Getpid()), l.network); err != nil {
+	if out, err := docker(slices.Concat([]string{"network", "create"}, runLabels(fmt.Sprint(os.Getpid())), []string{l.network})...); err != nil {
 		return fmt.Errorf("%v: %s", err, out)
 	}
 	if mirror != "" {
@@ -420,7 +435,7 @@ func writeTimes(times map[string]float64) {
 // named name, reached as role on l's network, with devopsy.
 func (l lane) start(name, role string) error {
 	runID, _, _ := strings.Cut(l.run, "-")
-	args := []string{"run", "-d", "--privileged", "--name", name, "--label", runLabel + "=" + runID, "--hostname", role, "--network", l.network, "--network-alias", role}
+	args := slices.Concat([]string{"run", "-d", "--privileged", "--name", name}, runLabels(runID), []string{"--hostname", role, "--network", l.network, "--network-alias", role})
 	if role != "operator" {
 		args = append(args, "-v", "/var/lib/docker")
 	}
@@ -485,15 +500,65 @@ func secondServer(t *testing.T) {
 }
 
 // tearDown removes the run's containers and networks, every lane's.
-func tearDown() {
-	filter := "label=" + runLabel + "=" + fmt.Sprint(os.Getpid())
+func tearDown() { removeRun(fmt.Sprint(os.Getpid())) }
+
+// removeRun removes the containers and networks of the run of process
+// id, and its build of devopsy (binOf).
+func removeRun(id string) {
+	filter := "label=" + runLabel + "=" + id
 	if out, err := docker("ps", "-aq", "--filter", filter); err == nil && strings.TrimSpace(out) != "" {
 		_, _ = docker(append([]string{"rm", "-f", "-v"}, strings.Fields(out)...)...)
 	}
 	if out, err := docker("network", "ls", "-q", "--filter", filter); err == nil && strings.TrimSpace(out) != "" {
 		_, _ = docker(append([]string{"network", "rm"}, strings.Fields(out)...)...)
 	}
-	os.Remove(bin)
+	os.Remove(binOf(id))
+}
+
+// binOf is where the run of process id builds devopsy.
+func binOf(id string) string { return filepath.Join(os.TempDir(), "devopsy-e2e-"+id) }
+
+// sweepGone removes what runs whose process is gone left behind (killed,
+// cut off: their tearDown never ran), their builds of devopsy included,
+// all but the containers and networks one kept with E2E_KEEP: Docker's
+// address pools run out of networks otherwise. A run's label is its
+// process id, so a live run's are never touched.
+func sweepGone() {
+	gone := map[string]bool{}
+	format := `{{.Label "` + runLabel + `"}} {{.Label "` + keepLabel + `"}}`
+	for _, list := range [][]string{{"ps", "-a"}, {"network", "ls"}} {
+		out, err := docker(append(list, "--filter", "label="+runLabel, "--format", format)...)
+		if err != nil {
+			continue
+		}
+		for line := range strings.Lines(out) {
+			if id, keep, _ := strings.Cut(strings.TrimSpace(line), " "); keep == "" && !alive(id) {
+				gone[id] = true
+			}
+		}
+	}
+	// A build alone says nothing kept: a kept run leaves its build too.
+	builds, _ := filepath.Glob(binOf("*"))
+	for _, b := range builds {
+		if !alive(strings.TrimPrefix(filepath.Base(b), "devopsy-e2e-")) {
+			os.Remove(b)
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(gone)) {
+		removeRun(id)
+		fmt.Fprintf(os.Stderr, "e2e: removed what run %s left, its process gone\n", id)
+	}
+}
+
+// alive says whether process id runs, a label that is no process id
+// counted as alive, so its things stay.
+func alive(id string) bool {
+	pid, err := strconv.Atoi(id)
+	if err != nil || pid <= 0 {
+		return true
+	}
+	err = syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // docker runs docker args and returns its combined output.
@@ -746,4 +811,45 @@ func project(t *testing.T, name string, files map[string]string) string {
 		t.Fatalf("%v: %s", err, out)
 	}
 	return dir
+}
+
+// A run's sweep removes what a run whose process is gone left, and
+// leaves a live run's and what a run kept with E2E_KEEP, whose build of
+// devopsy, left too, goes alone.
+func TestSweepRemovesGoneRuns(t *testing.T) {
+	ended := func() string {
+		t.Helper()
+		p := exec.Command("true")
+		if err := p.Run(); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprint(p.Process.Pid)
+	}
+	kept := ended()
+	if err := os.WriteFile(binOf(kept), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(binOf(kept)) })
+	nets := map[string][]string{
+		"gone": {"--label", runLabel + "=" + ended()},
+		"kept": {"--label", runLabel + "=" + kept, "--label", keepLabel + "=1"},
+		"live": {"--label", runLabel + "=" + fmt.Sprint(os.Getpid())},
+	}
+	name := func(what string) string { return "devopsy-e2e-sweep-" + what + "-" + run }
+	for what, labels := range nets {
+		if out, err := docker(slices.Concat([]string{"network", "create"}, labels, []string{name(what)})...); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		t.Cleanup(func() { _, _ = docker("network", "rm", name(what)) })
+	}
+	sweepGone()
+	for what := range nets {
+		_, err := docker("network", "inspect", name(what))
+		if there := err == nil; there != (what != "gone") {
+			t.Errorf("the %s run's network there after the sweep: %v", what, there)
+		}
+	}
+	if _, err := os.Stat(binOf(kept)); err == nil {
+		t.Error("the kept run's build is left after the sweep")
+	}
 }

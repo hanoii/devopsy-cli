@@ -21,7 +21,8 @@
 // They need Docker (Docker Desktop, OrbStack, Linux, GitHub's runners)
 // and the network (the image, then images the test projects pull).
 // E2E_KEEP=1 leaves the containers for a look afterwards, all labeled
-// devopsy-e2e=<the run's process id>.
+// devopsy-e2e=<the run's process id> and devopsy-e2e.keep. A run first
+// removes what runs whose process is gone left, all but what one kept.
 //
 // Rules: internals/e2e.md.
 package e2e
