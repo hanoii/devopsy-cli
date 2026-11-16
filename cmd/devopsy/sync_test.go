@@ -2929,7 +2929,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	// The capability's warning, its fix under it, every key aligned on
 	// the longest.
 	out, code = s.run([]string{"FAKE_SHOW=warning\tmaintenance\ton\tdevopsy maintenance off\n"}, "--status")
-	if code != statusWarned || !strings.Contains(out, "url          https://shop.example\n") || !strings.Contains(out, "maintenance  on\n             to fix it:\n             $ devopsy maintenance off\n") {
+	if code != statusWarned || !strings.Contains(out, "url          https://shop.example\n") || !strings.Contains(out, "maintenance  warning: on\n             | to fix it:\n             | $ devopsy maintenance off\n") {
 		t.Errorf("the capability's warning (%d):\n%s", code, out)
 	}
 	// A line of another format is warned, the others still shown.
@@ -3972,7 +3972,7 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 		t.Errorf("the failed first release's containers stay:\n%s", docker)
 	}
 	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
-	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || len(entries) != 1 || !strings.Contains(out, "release     none: "+entries[0].Name()+" failed\n            see why:\n            $ devopsy @devopsy@one:dev --log\n") {
+	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || len(entries) != 1 || !strings.Contains(out, "release     warning: none: "+entries[0].Name()+" failed\n            | see why:\n            | $ devopsy @devopsy@one:dev --log\n") {
 		t.Errorf("--status after a failed first release (%d):\n%s", code, out)
 	}
 	// The command it names copies as shown, a server in brackets quoted.

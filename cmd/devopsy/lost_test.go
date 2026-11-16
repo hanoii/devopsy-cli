@@ -239,7 +239,7 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	if s.current("solo") != "releases/"+ids[1] || !strings.HasPrefix(readString(mark), ids[1]+"\trollback\t"+ids[2]+"\t") {
 		t.Fatalf("a rollback killed past its switch: current %q, mark %q:\n%s", s.current("solo"), readString(mark), out)
 	}
-	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the rollback to "+ids[1]+" was cut off past its switch: its run step may not have run\n            to fix it:\n            finish it:\n            $ devopsy @devopsy@one:solo --rollback\n") {
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the rollback to "+ids[1]+" was cut off past its switch: its run step may not have run\n            | to fix it:\n            | finish it:\n            | $ devopsy @devopsy@one:solo --rollback\n") {
 		t.Errorf("--status after a cut rollback:\n%s", out)
 	}
 	if out, _ := s.run(nil, "@solo", "--releases"); !strings.Contains(out, ids[1]) || !strings.Contains(out, "  CUT") {
@@ -259,7 +259,7 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	if cut == ids[1] || !strings.HasPrefix(readString(mark), cut+"\trelease\t"+ids[1]+"\t") {
 		t.Fatalf("a release killed past its switch: current %q, mark %q:\n%s", cut, readString(mark), out)
 	}
-	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the release of "+cut+" was cut off past its switch: its run step may not have run\n            to fix it:\n            release it again:\n            $ devopsy @devopsy@one:solo --release\n") {
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the release of "+cut+" was cut off past its switch: its run step may not have run\n            | to fix it:\n            | release it again:\n            | $ devopsy @devopsy@one:solo --release\n") {
 		t.Errorf("--status after a cut release:\n%s", out)
 	}
 	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 || fileExists(mark) {
@@ -288,7 +288,7 @@ func TestActivationCutPastSwitch(t *testing.T) {
 		t.Errorf("--status names the failed rollback to %s as cut off, finished by --rollback, while current is %s, whose restart was cut:\n%s", failed, cur, out)
 	}
 	// It names the restart that was cut instead, on current.
-	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the restart of "+cur+" after "+failed+" failed was cut off: its run step may not have run\n            to fix it:\n            release it again:\n            $ devopsy @devopsy@one:solo --release\n") {
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the restart of "+cur+" after "+failed+" failed was cut off: its run step may not have run\n            | to fix it:\n            | release it again:\n            | $ devopsy @devopsy@one:solo --release\n") {
 		t.Errorf("--status does not name the restart of %s that was cut:\n%s", cur, out)
 	}
 	if out, _ := s.run(nil, "@solo", "--releases"); !strings.Contains(out, "  CUT") {
@@ -478,7 +478,7 @@ func TestCutReleaseFixOnChildWithSyncFiles(t *testing.T) {
 	fix := ""
 	if _, after, ok := strings.Cut(status, "its run step may not have run\n"); ok {
 		for _, line := range strings.Split(after, "\n") {
-			if c, ok := strings.CutPrefix(strings.TrimSpace(line), "$ "); ok {
+			if c, ok := strings.CutPrefix(strings.TrimLeft(line, " |"), "$ "); ok {
 				fix = c
 				break
 			}

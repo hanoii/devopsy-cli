@@ -1909,18 +1909,19 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		groups[project] = append(groups[project], e)
 		// --status's warnings (envState.entries), whose fixes --status
 		// gives: this names the environment by its row.
-		var problems []string
+		var problems [][]string
 		for _, w := range h.entries(envAt{}) {
 			if w.Level == remote.StatusWarning {
-				problems = append(problems, w.Lines...)
+				problems = append(problems, w.Lines)
 			}
 		}
 		if len(bad) > 0 {
-			problems = append(problems, strings.Join(bad, ", "))
+			problems = append(problems, []string{strings.Join(bad, ", ")})
 		}
-		// One warning of every problem, with the --status that shows them.
-		if len(problems) > 0 {
-			groups[project] = append(groups[project], entry(remote.StatusWarning, project, rest, problems, statusHint(host, info.Root, env)))
+		// A warning per problem, its message and its details, each with the --status that
+		// shows them, said once after the last (sharedLater).
+		for _, lines := range problems {
+			groups[project] = append(groups[project], entry(remote.StatusWarning, project, rest, lines, statusHint(host, info.Root, env)))
 		}
 	}
 	// An environment claim with no row of its own and none of what is left (a project user's

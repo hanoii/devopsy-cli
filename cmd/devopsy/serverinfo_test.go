@@ -718,12 +718,12 @@ func TestServerInfoReport(t *testing.T) {
 	info.Setup.Refusals = []setup.Refusal{{Item: "Docker", Message: "Docker has no compose plugin", Fix: "install Docker's compose plugin", Stops: setup.RefusalPlugins}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	want := "  setup      warning: never set up by devopsy: --upgrade applies nothing here\n" +
-		"             warning: Docker: Docker has no compose plugin\n             to fix it:\n             install Docker's compose plugin\n" +
+		"             warning: Docker: Docker has no compose plugin\n             | to fix it:\n             | install Docker's compose plugin\n" +
 		"             warning: socket buffers: /etc/sysctl.d/90-devopsy-net.conf differs from what devopsy writes\n" +
 		"             warning: mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes\n" +
 		"             warning: metadata firewall: containers reach the cloud's metadata services"
 	if !strings.Contains(out, want) || strings.Count(out, "$ devopsy @vm1: --server-setup") != 1 ||
-		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n             to fix it:\n             $ devopsy @vm1: --server-setup\n") {
+		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n             | to fix it:\n             | $ devopsy @vm1: --server-setup\n") {
 		t.Errorf("the setup's one fix, once:\n%s", out)
 	}
 	if len(warnings) != 5 || slices.ContainsFunc(warnings, func(w said) bool { return len(w.fixes) != 1 }) {
@@ -744,14 +744,18 @@ func TestServerInfoReport(t *testing.T) {
 		if reboot {
 			detail = "nothing is lost by waiting: the reboot the server needs (/run/reboot-required) does it"
 		}
-		want := "Docker: needs a restart to take daemon.json (live-restore)\n             " + detail + "\n             to restart Docker sooner:\n             $ devopsy @vm1: --server-setup\n"
+		// A warning's detail after a bar, a note's a line of its row.
+		want := "warning: Docker: needs a restart to take daemon.json (live-restore)\n             | " + detail + "\n             | to restart Docker sooner:\n             | $ devopsy @vm1: --server-setup\n"
+		if reboot {
+			want = "Docker: needs a restart to take daemon.json (live-restore)\n             " + detail + "\n             | to restart Docker sooner:\n             | $ devopsy @vm1: --server-setup\n"
+		}
 		n := 0
 		for _, w := range warnings {
 			if !w.note {
 				n++
 			}
 		}
-		if !strings.Contains(out, want) || n != warned || reboot != strings.Contains(out, "W0004: the server needs a reboot\n             /run/reboot-required, for devopsy\n") {
+		if !strings.Contains(out, want) || n != warned || reboot != strings.Contains(out, "W0004: the server needs a reboot\n             | /run/reboot-required, for devopsy\n") {
 			t.Errorf("pending, reboot %v: %d warnings %+v\n%s", reboot, n, warnings, out)
 		}
 	}
@@ -774,20 +778,35 @@ func TestServerInfoReport(t *testing.T) {
 		t.Errorf("no flock: %+v\n%s", warnings, out)
 	}
 
-	// Every problem of an environment is warned, as --status says each
-	// (review: the first alone was), in one warning with the --status
-	// that shows them.
+	// Every problem of an environment is warned, as --status says each,
+	// a warning of its own (its message tagged, as devopsy's own lines
+	// are), each with the --status that shows them, said once after the
+	// last.
 	info = healthy()
 	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")})
-	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || len(strings.Split(warnings[0].msg, "\n")) != 2 || len(warnings[0].fixes) != 1 {
-		t.Errorf("two problems of shop/dev, one warning with its fix: %+v", warnings)
+	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+	if len(warnings) != 2 || strings.Contains(warnings[0].msg+warnings[1].msg, "\n") || len(warnings[0].fixes) != 1 || len(warnings[1].fixes) != 1 ||
+		strings.Count(out, "warning: ") != 2 || strings.Count(out, "$ devopsy @vm1:dev --status") != 1 {
+		t.Errorf("two problems of shop/dev, a warning each with its fix said once: %+v\n%s", warnings, out)
 	}
 }
 
 // saysWords says whether out, a report a section of which wraps its prose, holds want's
-// words in a row, whatever the spaces and line breaks between them.
+// words in a row, whatever the spaces, line breaks and bars between them.
 func saysWords(out, want string) bool {
-	return strings.Contains(strings.Join(strings.Fields(out), " "), strings.Join(strings.Fields(want), " "))
+	return strings.Contains(strings.Join(strings.Fields(unbarred(out)), " "), strings.Join(strings.Fields(want), " "))
+}
+
+// unbarred is out without the bar (report.BarMark) a line starts with after its spaces: a
+// warning's detail, wrapped, goes on after one.
+func unbarred(out string) string {
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if rest, ok := strings.CutPrefix(strings.TrimLeft(l, " "), report.BarMark); ok {
+			lines[i] = rest
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // said is a warning --server-info shows, or a note (said with its
@@ -904,7 +923,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"  disks      /  ",
 		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
 		"  shop       project uid ",
-		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n             in shop's checkout:\n             $ devopsy @devopsy@one:dev --status\n",
+		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n             | in shop's checkout:\n             | $ devopsy @devopsy@one:dev --status\n",
 		"\n    eu/prod  not released yet\n",
 		"\n    prod     released just now by ",
 		"0 of 1 running  uid ",
@@ -916,7 +935,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		// step, so --server-setup is offered only past that refusal, once after the last line
 		// it fixes. A server never set up says the first setup records the login it runs as.
 		"  setup      warning: never set up by devopsy: --upgrade applies nothing here\n             no deploy user recorded yet: the first --server-setup records the login it runs as",
-		"(its instance's credentials)\n             to fix it:\n             fix what refuses every step of the setup first, then run --server-setup\n",
+		"(its instance's credentials)\n             | to fix it:\n             | fix what refuses every step of the setup first, then run --server-setup\n",
 		"             warning: Docker: systemd is not this host's init",
 		"             warning: daemon.json: logs: none, devopsy's",
 	} {
@@ -926,9 +945,9 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	for _, want := range []string{
 		"\nleftovers\n",
-		"  images     busybox:1.37  4.3 MB\n             no release holds it, nor any container uses it\n             remove it once nothing needs it, on the server:\n             $ devopsy @devopsy@one: --shell-host\n             $ docker rmi busybox:1.37",
+		"  images     busybox:1.37  4.3 MB\n             no release holds it, nor any container uses it\n             | remove it once nothing needs it, on the server:\n             | $ devopsy @devopsy@one: --shell-host\n             | $ docker rmi busybox:1.37",
 		"\n    gone     gone, no environment and no uid claim on the server, and left: containers web (exited)\n",
-		"\n    old      a --destroy cut off while it removed it left old.rm.999999999, 0 B\n             run it again, which resumes it, in shop's checkout:\n             $ devopsy @devopsy@one:old --destroy",
+		"\n    old      a --destroy cut off while it removed it left old.rm.999999999, 0 B\n             | run it again, which resumes it, in shop's checkout:\n             | $ devopsy @devopsy@one:old --destroy",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)

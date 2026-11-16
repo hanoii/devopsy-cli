@@ -139,12 +139,13 @@ func pad(s string, n int) string {
 }
 
 // The kinds of a laid out line: a section's heading, a project's
-// heading of its own, an entry's line, a remedy's line.
+// heading of its own, an entry's line, a line after a bar (a warning's
+// detail, a remedy's line).
 const (
 	lineSection = iota
 	lineGroup
 	lineEntry
-	lineRemedy
+	lineBar
 )
 
 // laidLine is one line of a report before its key column is known, its
@@ -154,10 +155,11 @@ type laidLine struct {
 	section string
 	indent  int
 	key     string // shown on this line only
+	first   bool   // its entry's first line: a warning's message, the rest its details
 	value   string
 	cells   []string // a row of cells, as they show
 	widths  []int    // a row of cells: its run's widths, of all but its last
-	hang    int      // a remedy's text: where a part cut from it goes on
+	hang    int      // a line after a bar: where a part cut from its text goes on
 	level   string
 	group   bool // the key is its project's name, the line its heading's
 }
@@ -197,10 +199,22 @@ func layOut(es []remote.StatusEntry) []laidLine {
 		if e.Head {
 			key = report.Copyable(e.Group)
 		}
-		for j, l := range e.Lines {
-			line := laidLine{kind: lineEntry, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level}
-			if j == 0 && e.Level == remote.StatusWarning && e.Section != "" {
-				line.value = report.WarnLevel.Mark() + line.value
+		// The entry as report says a message (report.Rows): a warning's first line its
+		// message, tagged, and its other lines its details; any entry's lines its values,
+		// and its remedies, unless a later entry shares them, after a bar.
+		level, values, details := report.InfoLevel, e.Lines, []string(nil)
+		if e.Level == remote.StatusWarning && len(e.Lines) > 0 {
+			level, values, details = report.WarnLevel, e.Lines[:1], e.Lines[1:]
+		}
+		var remedies []report.Remedy
+		if !sharedLater(es, i) {
+			remedies = e.Remedies
+		}
+		rows := report.Rows(level, strings.Join(values[:min(len(values), 1)], ""), details, remedies)
+		for j, l := range values {
+			line := laidLine{kind: lineEntry, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level, first: j == 0}
+			if j == 0 {
+				line.value = rows[0].Text
 			}
 			if j == 0 && newKey {
 				line.key, line.group = key, e.Head
@@ -213,10 +227,8 @@ func layOut(es []remote.StatusEntry) []laidLine {
 			}
 			out = append(out, line)
 		}
-		if !sharedLater(es, i) {
-			for _, r := range report.RemedyRows(e.Remedies) {
-				out = append(out, laidLine{kind: lineRemedy, section: e.Section, indent: indent, value: report.Copyable(r.Text), hang: r.Hang, level: e.Level})
-			}
+		for _, r := range rows[1:] {
+			out = append(out, laidLine{kind: lineBar, section: e.Section, indent: indent, value: r.Text, hang: r.Hang, level: e.Level})
 		}
 		prev = e
 	}
@@ -267,19 +279,23 @@ func cellWidths(es []remote.StatusEntry) map[int][]int {
 }
 
 // print prints es as layOut lays them out: a section's heading bold
-// after a blank line, a project's name in its color, a warning's lines
-// and texts yellow, a highlight's bold,
-// each command bold; in a section, prose past the width wraps at a word
-// to its column (wrapAt), and a row of cells past it moves its last
-// cell whole to a line of its own at the column (cellRow).
+// after a blank line, a project's name in its color, a warning's
+// message and the lines after a bar colored as devopsy's own lines are
+// (report.Colored, report.PaintBar: the message yellow, the bar dim,
+// its text plain, a command bold), a highlight's lines bold; in a
+// section, prose past the width wraps at a word to its column (wrapAt),
+// a line after a bar each part after one, and a row of cells past it
+// moves its last cell whole to a line of its own at the column
+// (cellRow).
 func (t entryTable) print(es []remote.StatusEntry) {
 	for _, l := range layOut(es) {
 		col := t.cols[l.section]
 		paint := func(s string) string { return s }
-		switch l.level {
-		case remote.StatusWarning:
-			paint = t.st.warn
-		case remote.StatusHighlight:
+		switch {
+		case !t.st.on:
+		case l.level == remote.StatusWarning && l.kind == lineEntry && l.first:
+			paint = func(s string) string { return report.Colored(report.WarnLevel, s) }
+		case l.level == remote.StatusHighlight && l.kind == lineEntry:
 			paint = t.st.head
 		}
 		indent := strings.Repeat(" ", l.indent)
@@ -314,15 +330,20 @@ func (t entryTable) print(es []remote.StatusEntry) {
 				}
 				fmt.Fprintln(t.w, paint(strings.TrimRight(key+part, " ")))
 			}
-		case lineRemedy:
+		case lineBar:
 			// Quoted before it is painted (layOut): the quotes are the
-			// command's, inside its bold.
-			if lead, cmd, ok := report.SplitCmd(l.value); ok {
-				fmt.Fprintln(t.w, strings.Repeat(" ", col)+lead+t.st.head(cmd))
-				continue
+			// command's, inside its bold. A command never wraps.
+			parts := []string{l.value}
+			if _, _, ok := report.SplitCmd(l.value); !ok {
+				parts = wrapAt(l.value, col+len(report.BarMark), t.width, l.hang, wrap)
 			}
-			for _, part := range wrapAt(l.value, col, t.width, l.hang, wrap) {
-				fmt.Fprintln(t.w, paint(strings.TrimRight(strings.Repeat(" ", col)+part, " ")))
+			for _, part := range parts {
+				part = strings.TrimRight(part, " ")
+				line := strings.TrimRight(report.BarMark+part, " ")
+				if t.st.on {
+					line = report.PaintBar(part)
+				}
+				fmt.Fprintln(t.w, strings.Repeat(" ", col)+line)
 			}
 		}
 	}

@@ -49,8 +49,12 @@ const (
 // Prefix starts every line devopsy says.
 const Prefix = "devopsy: "
 
+// BarMark starts a line that continues the one before, after the
+// Prefix: details and fixes.
+const BarMark = "| "
+
 // Bar starts a line that continues the one before: details and fixes.
-const Bar = Prefix + "| "
+const Bar = Prefix + BarMark
 
 // cmdMark starts a command to copy: only this package writes it
 // (TestNothingSaysAround), so every command is laid out one way.
@@ -120,25 +124,40 @@ func RemedyLines(rs []Remedy) []string {
 	return out
 }
 
-// RemedyLine is a line of RemedyRows: its text, and Hang, the column in
-// it where a part of it cut to fit a width goes on (under a numbered
-// fix's text, its number's width).
-type RemedyLine struct {
+// Row is a line of Rows: its text (Copyable), whether it goes after a
+// bar (BarMark), and Hang, the column in its text where a part of it
+// cut to fit a width goes on (under a numbered fix's text, its number's
+// width).
+type Row struct {
 	Text string
+	Bar  bool
 	Hang int
 }
 
-// RemedyRows are RemedyLines' lines one by one, a string of several
-// lines split, each with its hang.
-func RemedyRows(rs []Remedy) []RemedyLine {
-	out, hangs := remedyLines(rs)
-	var rows []RemedyLine
-	for i, s := range out {
-		for _, l := range strings.Split(s, "\n") {
-			rows = append(rows, RemedyLine{Text: l, Hang: hangs[i]})
+// Rows lay out msg at level l as Lines does, without the Prefix: msg's
+// first line after l's Mark, then msg's other lines, the details and
+// the remedies (RemedyLines), each after a bar (every string split at
+// its newlines). A report laid out apart from Lines (a table of
+// entries) shows a message by them.
+func Rows(l Level, msg string, details []string, remedies []Remedy) []Row {
+	head, rest, _ := strings.Cut(strings.TrimRight(msg, "\n"), "\n")
+	out := []Row{{Text: l.Mark() + Copyable(head)}}
+	add := func(s string, hang int) {
+		for _, x := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+			out = append(out, Row{Text: strings.TrimRight(Copyable(x), " "), Bar: true, Hang: hang})
 		}
 	}
-	return rows
+	if rest != "" {
+		add(rest, 0)
+	}
+	for _, d := range details {
+		add(d, 0)
+	}
+	lines, hangs := remedyLines(remedies)
+	for i, r := range lines {
+		add(r, hangs[i])
+	}
+	return out
 }
 
 // remedyLines is RemedyLines' layout, with each string's hang.
@@ -200,21 +219,13 @@ func remedyLines(rs []Remedy) (out []string, hangs []int) {
 // msg's other lines, the details and the remedies (RemedyLines), each on
 // a Bar line (every string split at its newlines).
 func Lines(l Level, msg string, details []string, remedies []Remedy) []string {
-	head, rest, _ := strings.Cut(strings.TrimRight(msg, "\n"), "\n")
-	out := []string{Head(l) + Copyable(head)}
-	add := func(s string) {
-		for _, x := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
-			out = append(out, strings.TrimRight(Bar+Copyable(x), " "))
+	var out []string
+	for _, r := range Rows(l, msg, details, remedies) {
+		line := Prefix + r.Text
+		if r.Bar {
+			line = strings.TrimRight(Bar+r.Text, " ")
 		}
-	}
-	if rest != "" {
-		add(rest)
-	}
-	for _, d := range details {
-		add(d)
-	}
-	for _, r := range RemedyLines(remedies) {
-		add(r)
+		out = append(out, line)
 	}
 	return out
 }

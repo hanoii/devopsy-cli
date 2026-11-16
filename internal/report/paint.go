@@ -38,25 +38,59 @@ func Paint(line string) string {
 	}
 	switch {
 	case strings.HasPrefix(line, Head(ErrorLevel)):
-		return red + line + reset
+		return Colored(ErrorLevel, line)
 	case strings.HasPrefix(line, Head(WarnLevel)):
-		return yellow + line + reset
+		return Colored(WarnLevel, line)
 	case strings.HasPrefix(line, Head(DebugLevel)), strings.HasPrefix(line, Head(TraceLevel)):
-		return dim + line + reset
+		return Colored(DebugLevel, line)
 	case line == strings.TrimRight(Bar, " ") || strings.HasPrefix(line, Bar):
-		bar, text := line[:min(len(line), len(Bar))], line[min(len(line), len(Bar)):]
-		if lead, cmd, ok := SplitCmd(text); ok {
-			return dim + bar + reset + lead + bold + cmd + reset
-		}
-		return dim + bar + reset + text
+		return paintBar(line[:min(len(line), len(Bar))], line[min(len(line), len(Bar)):])
 	case strings.HasPrefix(line, Prefix):
-		return cyan + line + reset
+		return Colored(InfoLevel, line)
 	case composeDone.MatchString(line):
 		return green + line + reset
 	case composeStep.MatchString(line):
 		return dim + line + reset
 	}
 	return line
+}
+
+// Colored is s in the color Paint gives a line of level l: an error's
+// red, a warning's yellow, info cyan, debug and trace dim. A report laid
+// out apart from Lines (a table of entries) colors its messages with it,
+// as devopsy's own lines show.
+func Colored(l Level, s string) string {
+	color := map[Level]string{ErrorLevel: red, WarnLevel: yellow, InfoLevel: cyan, DebugLevel: dim, TraceLevel: dim}[l]
+	if s == "" {
+		return s
+	}
+	return color + s + reset
+}
+
+// PaintBar is text after its bar (BarMark), as Paint colors a Bar line:
+// the bar dim, its text plain, a command bold.
+func PaintBar(text string) string {
+	if text == "" {
+		return paintBar(strings.TrimRight(BarMark, " "), "")
+	}
+	return paintBar(BarMark, text)
+}
+
+// paintBar is bar dim, then text plain, a command in it bold.
+func paintBar(bar, text string) string {
+	if lead, cmd, ok := SplitCmd(text); ok {
+		return dim + bar + reset + lead + Command(cmd)
+	}
+	return dim + bar + reset + text
+}
+
+// Command is cmd, a command offered after "$ ", in the bold Paint gives
+// it.
+func Command(cmd string) string {
+	if cmd == "" {
+		return cmd
+	}
+	return bold + cmd + reset
 }
 
 // Colorize paints a session's lines for a terminal as they arrive

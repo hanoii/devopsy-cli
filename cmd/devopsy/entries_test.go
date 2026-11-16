@@ -20,8 +20,8 @@ func TestEntryTableQuotesBeforePainting(t *testing.T) {
 	var b bytes.Buffer
 	newEntryTable(&b, style{on: true}, es).print(es)
 	want := "sync  none\n" +
-		"      from its parent:\n" +
-		"      \033[1m$ devopsy @dev --sync --from @'[2001:db8::1]:prod'\033[0m\n"
+		"      \033[2m| \033[0mfrom its parent:\n" +
+		"      \033[2m| \033[0m\033[1m$ devopsy @dev --sync --from @'[2001:db8::1]:prod'\033[0m\n"
 	if b.String() != want {
 		t.Errorf("a command ending in a bracketed address:\n%q\nwant:\n%q", b.String(), want)
 	}
@@ -77,8 +77,8 @@ server
   system     Linux
   disks      /  xfs
              warning: / is 95% full
-             to fix it:
-             $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
+             | to fix it:
+             | $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
   setup      a line long enough to wrap at a word once it runs past the report's width, which it
              does here
 
@@ -95,8 +95,8 @@ leftovers
   images     busybox:1.37  4.3 MB
              alpine:3      8.0 MB
              no release holds them
-             remove them:
-             $ docker rmi busybox:1.37 alpine:3
+             | remove them:
+             | $ docker rmi busybox:1.37 alpine:3
 `
 	if b.String() != want {
 		t.Errorf("sections:\n%s\nwant:\n%s", b.String(), want)
@@ -161,8 +161,8 @@ server
 	}
 }
 
-// A remedy's text that wraps goes on under its number, its first line keeping its indent: a
-// numbered fix's second line and its wrapped rest start where its text does.
+// A remedy's text that wraps goes on under its number, after its bar, its first line keeping
+// its indent: a numbered fix's second line and its wrapped rest start where its text does.
 func TestEntryWrappedRemedyKeepsItsIndent(t *testing.T) {
 	t.Parallel()
 	long := strings.TrimSpace(strings.Repeat("words ", 20))
@@ -171,7 +171,12 @@ func TestEntryWrappedRemedyKeepsItsIndent(t *testing.T) {
 	var b bytes.Buffer
 	newEntryTable(&b, style{}, es).print(es)
 	lines := strings.Split(b.String(), "\n")
-	at := func(l string) int { return len(l) - len(strings.TrimLeft(l, " ")) }
+	at := func(l string) int {
+		if !strings.HasPrefix(strings.TrimLeft(l, " "), report.BarMark) {
+			return -1
+		}
+		return len(l) - len(strings.TrimLeft(l, " |"))
+	}
 	for i, l := range lines {
 		if strings.Contains(l, "1. first") {
 			if want := at(l) + 3; at(lines[i+1]) != want || at(lines[i+2]) != want {

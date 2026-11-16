@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // image is the servers' and the operator's image (Dockerfile here).
@@ -638,9 +639,21 @@ func background(t *testing.T, dir, command, log string) {
 }
 
 // saysWords says whether out, --server-info's report, whose sections wrap their prose, holds
-// want's words in a row, whatever the spaces and line breaks between them.
+// want's words in a row, whatever the spaces, line breaks and bars between them.
 func saysWords(out, want string) bool {
-	return strings.Contains(strings.Join(strings.Fields(out), " "), strings.Join(strings.Fields(want), " "))
+	return strings.Contains(strings.Join(strings.Fields(unbarred(out)), " "), strings.Join(strings.Fields(want), " "))
+}
+
+// unbarred is out without the bar (report.BarMark) a line starts with after its spaces: a
+// warning's detail, wrapped, goes on after one.
+func unbarred(out string) string {
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if rest, ok := strings.CutPrefix(strings.TrimLeft(l, " "), report.BarMark); ok {
+			lines[i] = rest
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // eventually waits until cond holds, failing after within.

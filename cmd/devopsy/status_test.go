@@ -118,19 +118,19 @@ func TestStatusPrint(t *testing.T) {
 release      20261107000000  just now
 disks        /                ext4  50.0 GB free of 100.0 GB  50% used  releases /srv
              /var/lib/docker  xfs   2.0 GB free of 100.0 GB   98% used  docker /var/lib/docker
-             /var/lib/docker is 98% full, 2.0 GB free: builds, pulls, uploads, logs and databases fail once it is full
-             to fix it:
-             remove what nothing on the server owns, listed first with its sizes:
-             $ devopsy @vm1: --gc
+             warning: /var/lib/docker is 98% full, 2.0 GB free: builds, pulls, uploads, logs and databases fail once it is full
+             | to fix it:
+             | remove what nothing on the server owns, listed first with its sizes:
+             | $ devopsy @vm1: --gc
 containers
   app      running  up 3 hours (healthy)
   db       running  healthy
   worker   no container
 url          https://shop.example
              https://www.shop.example
-maintenance  on
-             to fix it:
-             $ devopsy maintenance off
+maintenance  warning: on
+             | to fix it:
+             | $ devopsy maintenance off
 `
 	if out.String() != want || code != statusWarned {
 		t.Errorf("--status (%d):\n%s\nwant:\n%s", code, out.String(), want)
@@ -172,7 +172,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	out, code := s.run(warn, "@prod", "--status")
 	if code != statusWarned || !strings.Contains(out, "\nrelease      "+id) || !regexp.MustCompile(`\ndisks        \S+ .* releases `).MatchString(out) ||
 		!strings.Contains(out, "\ncontainers\n  app ") || !strings.Contains(out, "\nurl          https://shop-prod.example\n") ||
-		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  on\n             to fix it:\n             $ devopsy maintenance off\n") {
+		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  warning: on\n             | to fix it:\n             | $ devopsy maintenance off\n") {
 		t.Errorf("--status with a warning on the server (%d):\n%s", code, out)
 	}
 	stdout, stderr, code := s.runIO(warn, nil, "@prod", "--status", "--json")
@@ -338,23 +338,26 @@ func TestStatusPrintColors(t *testing.T) {
 		Entries: []remote.StatusEntry{
 			{Level: remote.StatusInfo, Key: "php", Lines: []string{"8.4"}},
 			{Level: remote.StatusHighlight, Key: "url", Lines: []string{"https://shop.example"}},
-			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on"}, Remedies: []report.Remedy{report.Fix("bring it back:", "devopsy maintenance off")}},
+			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on", "since 10 min ago"}, Remedies: []report.Remedy{report.Fix("bring it back:", "devopsy maintenance off")}},
 		},
 	}, "vm1:")
 	var out bytes.Buffer
+	// A warning as devopsy's own lines show one: its message yellow and tagged, its details
+	// and its remedies after a dim bar, their texts plain, their commands bold.
 	code := r.print(&out, style{on: true}, "@vm1:prod (vm1:shop/prod)", false)
 	want := "\033[0;36m@vm1:prod (vm1:shop/prod)\033[0m\n" +
-		"\033[0;33mrelease      the release of 1 was cut off\033[0m\n" +
+		"\033[0;33mrelease      warning: the release of 1 was cut off\033[0m\n" +
 		"containers\n" +
 		"  app      \033[0;32mrunning\033[0m  up 1 hour (healthy)\n" +
 		"  db       \033[0;33mexited\033[0m\n" +
 		"  worker   \033[2mno container\033[0m\n" +
 		"php          8.4\n" +
 		"\033[1murl          https://shop.example\033[0m\n" +
-		"\033[0;33mmaintenance  on\033[0m\n" +
-		"\033[0;33m             to fix it:\033[0m\n" +
-		"\033[0;33m             bring it back:\033[0m\n" +
-		"             \033[1m$ devopsy maintenance off\033[0m\n"
+		"\033[0;33mmaintenance  warning: on\033[0m\n" +
+		"             \033[2m| \033[0msince 10 min ago\n" +
+		"             \033[2m| \033[0mto fix it:\n" +
+		"             \033[2m| \033[0mbring it back:\n" +
+		"             \033[2m| \033[0m\033[1m$ devopsy maintenance off\033[0m\n"
 	if out.String() != want || code != statusWarned {
 		t.Errorf("--status in color (%d):\n%q\nwant:\n%q", code, out.String(), want)
 	}
@@ -410,7 +413,7 @@ func TestStatusCapabilityTrouble(t *testing.T) {
 	write(t, filepath.Join(s.dot, "capabilities", "status", "show"), "#!/bin/sh\nprintf 'info\\turl\\thttps://shop.example\\n'\necho 'url https://old.example'\nexit 1\n", 0o755)
 	out, code := s.run(nil, "--status")
 	if code != statusWarned || !strings.Contains(out, "\nurl         https://shop.example\n") ||
-		!strings.Contains(out, "\ncapability  the status capability printed lines that are not "+statusShowFormat+":\n            \"url https://old.example\"\n            the status capability failed: exit status 1\n") {
+		!strings.Contains(out, "\ncapability  warning: the status capability printed lines that are not "+statusShowFormat+":\n            | \"url https://old.example\"\n            warning: the status capability failed: exit status 1\n") {
 		t.Errorf("--status with a capability in trouble (%d):\n%s", code, out)
 	}
 	stdout, stderr, code := s.runIO(nil, nil, "--status", "--json")

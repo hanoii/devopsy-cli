@@ -2869,7 +2869,7 @@ func TestServerSetupLoadsTheFirewallBesideARefusal(t *testing.T) {
 	}
 	write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	if data, err := os.ReadFile(jumps); code != 1 || err != nil || !strings.Contains(string(data), remote.DoorChain) || !strings.Contains(out, "metadata firewall  W0001: the server's firewall is not loaded as devopsy loads it") ||
+	if data, err := os.ReadFile(jumps); code != 1 || err != nil || !strings.Contains(string(data), remote.DoorChain) || !strings.Contains(out, "metadata firewall  warning: W0001: the server's firewall is not loaded as devopsy loads it") ||
 		!strings.Contains(out, "devopsy leaves the file as it is") || !strings.Contains(out, "loaded devopsy's firewall") || readString(filepath.Join(host, setup.DaemonFile)) != "[]\n" {
 		t.Errorf("(%d):\n%s", code, out)
 	}
