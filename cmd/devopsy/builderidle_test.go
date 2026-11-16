@@ -579,3 +579,39 @@ esac
 		t.Errorf("a build whose builder's network another build made first is refused, the network there: %v", err)
 	}
 }
+
+// Two builds of one project that find its network gone (a prune took it from the builder
+// stopped between them) both get it back: the one whose network create comes second finds the
+// network the other made, and builds on it.
+//
+// The bug this proves (builderBootable, builderidle.go): the network is looked at (network ls)
+// and made (network create) with no lock and no look again, so when another build of the
+// project, another environment's, makes it between the two, Docker refuses the create
+// ("network with name ... already exists", Docker 25 and later, which refuse a name twice),
+// and the build is refused ("its network could not be made") though the network is there, as
+// devopsy makes it. buildx create beside it looks again on a failure (ensureBuilder: "another
+// environment's build may have made it meanwhile"). The fake's other build makes the network
+// right after the look.
+func TestBuilderBootableWhenAnotherBuildMadeItsNetwork(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	net := filepath.Join(dir, "net")
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  'container inspect '*) echo 'Error: No such container: buildx_buildkit_devopsy-shop0' >&2; exit 1 ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$')
+    if [ -e `+net+` ]; then cat `+net+`; else echo theirs >`+net+`; fi ;;
+  'network create devopsy-shop-build')
+    if [ -e `+net+` ]; then echo 'Error response from daemon: network with name devopsy-shop-build already exists' >&2; exit 1; fi
+    echo ours >`+net+` ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	run := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
+	if err := builderBootable(run, run, filepath.Join(dir, "space"), "shop", testBuilderTiming); err != nil {
+		t.Errorf("a build whose builder's network another build made meanwhile is refused: %v; docker was asked:\n%s", err, readString(log))
+	}
+}
