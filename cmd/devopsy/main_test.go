@@ -1983,6 +1983,28 @@ func TestLocalRefusalsOfferTheirCommandsAsFixes(t *testing.T) {
 	}
 }
 
+// A command given a word it does not take names that word, its usage under it, before any
+// connection; --snapshot given one of --snapshots' words says which flag takes it. Without a
+// target, --release and --reload name it too.
+func TestTakesNoNamesTheWord(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"@prod", "--reload", "--yes"}, "devopsy: error: --reload takes no --yes\ndevopsy: | usage: devopsy @devopsy@one:prod --reload\n"},
+		{[]string{"@prod", "--snapshot", "restore", "20260101000000"}, "devopsy: error: --snapshot takes no restore\ndevopsy: | usage: devopsy @devopsy@one:prod --snapshot\ndevopsy: | --snapshots restore does that, with the snapshot's id\n"},
+		{[]string{"@devopsy@one:", "--project-users", "add", "shop", "--yes"}, "devopsy: error: --project-users add takes no --yes\ndevopsy: | usage: devopsy @devopsy@one: --project-users [list | add <project> |"},
+		{[]string{"--reload", "x"}, "devopsy: error: --reload " + vocab.NoTarget + " takes no x\n"},
+		{[]string{"--release", "x"}, "devopsy: error: --release " + vocab.NoTarget + " takes no x\n"},
+	} {
+		if out, code := s.run(nil, c.args...); code == 0 || !strings.Contains(out, c.want) {
+			t.Errorf("%v (%d):\n%s", c.args, code, out)
+		}
+	}
+}
+
 // An environment with no release steps is shown the same run step in
 // either mode, with no --pull: devopsy fetches the images before the
 // switch, and a project user's door refuses a --pull but never.

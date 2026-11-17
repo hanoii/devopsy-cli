@@ -38,8 +38,7 @@ func reloadWords(t *remote.Target) liveWords {
 // release's.
 func runReload(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, args []string) int {
 	if len(args) > 0 {
-		report.Error("usage: devopsy @" + targetRef(t) + " --reload")
-		return 2
+		return takesNo(2, "--reload", args[0], "usage: devopsy @"+targetRef(t)+" --reload")
 	}
 	rlog := newReleaseLog("reload", t)
 	log := report.Default().Tee(rlog.Line)
@@ -88,8 +87,7 @@ func runLocalReload(cwd string, args []string, color bool) int {
 		return 0
 	}
 	if len(args) > 0 {
-		report.Say(report.ErrorLevel, "--reload "+vocab.NoTarget+" takes no argument", nil, report.Fix("", "devopsy --reload"), report.Fix("a target's:", "devopsy @<target> --reload"))
-		return 2
+		return takesNo(2, "--reload "+vocab.NoTarget, args[0], "", report.Fix("", "devopsy --reload"), report.Fix("a target's:", "devopsy @<target> --reload"))
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {

@@ -465,6 +465,18 @@ func fail(msg string) int {
 	return 1
 }
 
+// takesNo fails a command given a word it does not take: the word named (what takes no
+// word), then usage when there is one and the remedies, exit code returned as the caller
+// had it. A usage alone leaves the reader to find which word was wrong.
+func takesNo(code int, what, word, usage string, remedies ...report.Remedy) int {
+	var details []string
+	if usage != "" {
+		details = []string{usage}
+	}
+	report.Say(report.ErrorLevel, what+" takes no "+word, details, remedies...)
+	return code
+}
+
 // failErr says err whole (report.Fail: its details, fixes and the
 // failures it carries, each data service without its version among them)
 // and is a command's exit 1: never err.Error() alone, which keeps only

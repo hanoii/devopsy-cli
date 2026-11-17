@@ -29,7 +29,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return 0
 	}
 	if len(args) > 0 {
-		return failErr(&report.Failure{Msg: "--release " + vocab.NoTarget + " takes no argument", Remedies: []report.Remedy{report.Fix("", "devopsy --release"), report.Fix("a target's:", "devopsy @<target> --release")}})
+		return takesNo(1, "--release "+vocab.NoTarget, args[0], "", report.Fix("", "devopsy --release"), report.Fix("a target's:", "devopsy @<target> --release"))
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {

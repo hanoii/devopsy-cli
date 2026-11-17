@@ -1810,8 +1810,13 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 		return 0
 	}
 	if len(args) > 0 {
-		report.Error("usage: devopsy @" + targetRef(t) + " --snapshot")
-		return 2
+		var hint []report.Remedy
+		// A word of --snapshots' (restore, remove, export, import): said in words, since its
+		// id is the operator's to choose.
+		if slices.Contains([]string{"restore", "remove", "export", "import"}, args[0]) {
+			hint = append(hint, report.Hint("--snapshots "+args[0]+" does that, with the snapshot's id"))
+		}
+		return takesNo(2, "--snapshot", args[0], "usage: devopsy @"+targetRef(t)+" --snapshot", hint...)
 	}
 	if !t.SnapshotsManual.Enabled {
 		report.Error("manual snapshots are off for " + t.Name + ": its config's snapshots: manual is false")
