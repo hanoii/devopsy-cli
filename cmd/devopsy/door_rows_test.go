@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,8 +69,9 @@ func TestDoorEnvironmentIsItsOwn(t *testing.T) {
 
 // doorRecord keeps each refusal on one line: what was refused holds a caller's words, and a
 // newline there would be a line of the log's own, naming whoever it likes. What a leaked key
-// tried is worth having only if it cannot write the log. Who asked is sudo's word, the reason
-// and the arguments quoted (%q).
+// tried is worth having only if it cannot write the log. Each line starts with its time, UTC,
+// so an admin tells the refusal just seen from older ones; who asked is sudo's word, the
+// reason and the arguments quoted (%q).
 //
 // Not parallel: it sets doorLog and doorWho.
 func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
@@ -81,8 +83,8 @@ func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
 	if code := side.request("", []string{"run", "x"}); code != 2 {
 		t.Fatalf("the control: %d", code)
 	}
-	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "devopsy-shop\t") || strings.Count(string(got), "\n") != 1 {
-		t.Fatalf("the control: a refusal is one line, naming who: %q", got)
+	if got, _ := os.ReadFile(log); !regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\tdevopsy-shop\t`).Match(got) || strings.Count(string(got), "\n") != 1 {
+		t.Fatalf("the control: a refusal is one line, its time in UTC, then who: %q", got)
 	}
 	if code := side.request("", []string{"run", "x\ndevopsy-other\trefused: forged"}); code != 2 {
 		t.Fatalf("exit %d", code)
@@ -92,7 +94,7 @@ func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
 		t.Errorf("two refusals, %d lines:\n%s", n, got)
 	}
 	for _, line := range strings.Split(string(got), "\n") {
-		if strings.HasPrefix(line, "devopsy-other\t") {
+		if f := strings.Split(line, "\t"); len(f) > 1 && f[1] == "devopsy-other" {
 			t.Errorf("a line forged in another's name: %q", line)
 		}
 	}

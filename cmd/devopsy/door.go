@@ -88,8 +88,9 @@ func doorRecord(what string) {
 		return
 	}
 	if f, err := os.OpenFile(doorLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-		// Who is sudo's word. The rest quoted, so a caller's cannot make a line of their own.
-		fmt.Fprintf(f, "%s\t%q\t%q\n", doorWho, what, os.Args[1:])
+		// Its time first, UTC, so a refusal just seen stands out from older ones. Who is
+		// sudo's word. The rest quoted, so a caller's cannot make a line of their own.
+		fmt.Fprintf(f, "%s\t%s\t%q\t%q\n", time.Now().UTC().Format(time.RFC3339), doorWho, what, os.Args[1:])
 		f.Close()
 	}
 }
