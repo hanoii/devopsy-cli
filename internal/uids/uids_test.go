@@ -104,8 +104,13 @@ func TestOwnerNamesChecked(t *testing.T) {
 			t.Errorf("%q parsed", s)
 		}
 	}
-	if _, err := EnvOwner("shop", "", "pr-12.b_x"); err != nil {
+	if _, err := EnvOwner("shop", "", "pr-12-b"); err != nil {
 		t.Error(err)
+	}
+	for _, env := range []string{"pr-12.b", "pr_12", "pr--12", "pr-"} {
+		if _, err := EnvOwner("shop", "", env); err == nil {
+			t.Errorf("%q: an environment name", env)
+		}
 	}
 }
 

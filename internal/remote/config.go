@@ -434,9 +434,8 @@ func StepArgs(step string) []string {
 
 var (
 	envName = uids.EnvRe
-	// envPattern is an environments: key with * standing for one or more
-	// name characters.
-	envPattern = regexp.MustCompile(`^[a-z0-9_.*-]+$`)
+	// aliasRe is an alias's name, which names no variable.
+	aliasRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 	// nameRe is a project's or an instance's name: a directory and part of
 	// compose and host names.
 	nameRe  = uids.NameRe
@@ -673,8 +672,8 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				return nil, fmt.Errorf("%s: environments: %w", file, err)
 			}
 			for name, n := range nodes {
-				if !envName.MatchString(name) && !envPattern.MatchString(name) {
-					return nil, fmt.Errorf("%s: environments: %q: lowercase letters, digits, '.', '_', '-' and * in patterns", file, name)
+				if !envName.MatchString(name) && !isPattern(name) {
+					return nil, fmt.Errorf("%s: environments: %q: lowercase letters, digits and - between them, * in patterns", file, name)
 				}
 				t, nulls, err := decodeTarget(file, name, &n, true)
 				if err != nil {
@@ -694,7 +693,7 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 			}
 			for i := 0; i+1 < len(node.Content); i += 2 {
 				name := node.Content[i].Value
-				if !envName.MatchString(name) {
+				if !aliasRe.MatchString(name) {
 					return nil, fmt.Errorf("%s: aliases: %q: lowercase letters, digits, '.', '_' and '-'", file, name)
 				}
 				for j := 0; j+1 < len(node.Content[i+1].Content); j += 2 {
@@ -1330,7 +1329,7 @@ func match(envs map[string]*Target, name string) (*Target, string, error) {
 		if !strings.Contains(key, "*") {
 			continue
 		}
-		re := "^" + strings.ReplaceAll(regexp.QuoteMeta(key), `\*`, `[A-Za-z0-9_.-]+`) + "$"
+		re := "^" + strings.ReplaceAll(regexp.QuoteMeta(key), `\*`, `[a-z0-9-]+`) + "$"
 		if !regexp.MustCompile(re).MatchString(name) {
 			continue
 		}
@@ -1348,26 +1347,85 @@ func match(envs map[string]*Target, name string) (*Target, string, error) {
 	return best, bestKey, nil
 }
 
-// PatternVar is the server variable of an environment pattern: its literal
-// part, * and the separators next to it left out (pr-*: DEVOPSY_SERVER_PR,
-// pr-big-*: DEVOPSY_SERVER_PR_BIG); "" for "*" alone.
-func PatternVar(pattern string) string {
-	name := strings.Trim(strings.ReplaceAll(pattern, "*", ""), "-_.")
-	if name == "" || pattern == "" {
-		return ""
+// isPattern reports whether an environments: key is a pattern: a name
+// with * standing for one or more of its characters, each * a name of its
+// own (pr-*, *-eu, pr-*-eu, but not pr--*).
+func isPattern(key string) bool {
+	return strings.Contains(key, "*") && envName.MatchString(strings.ReplaceAll(key, "*", "x"))
+}
+
+// patternName is the name a pattern's server variables use: its literal
+// parts, without * and the - next to it (pr-*: pr, pr-*-eu: pr-eu); "" for
+// "*" alone.
+func patternName(pattern string) string {
+	var parts []string
+	for _, p := range strings.Split(pattern, "*") {
+		if p = strings.Trim(p, "-"); p != "" {
+			parts = append(parts, p)
+		}
 	}
-	return EnvironmentVar(name)
+	return strings.Join(parts, "-")
+}
+
+// PatternVar is the server variable of an environment pattern, by its
+// patternName (pr-*: DEVOPSY_SERVER_PR, pr-big-*: DEVOPSY_SERVER_PR_BIG);
+// "" for "*" alone.
+func PatternVar(pattern string) string {
+	if name := patternName(pattern); name != "" {
+		return EnvironmentVar(name)
+	}
+	return ""
+}
+
+// InstanceServerVar is the variable naming the server of an instance's
+// environment, or of a pattern's by its patternName: DEVOPSY_SERVER_, the
+// instance, __ and the environment, each as in EnvironmentVar (ieeecss and
+// prod: DEVOPSY_SERVER_IEEECSS__PROD). Names never hold __ (uids.NameRe),
+// so it never reads as another instance's or environment's.
+func InstanceServerVar(instance, env string) string {
+	return ServerVar + "_" + varPart(instance) + "__" + varPart(env)
+}
+
+// ServerVars are the variables that name the server of instance's ("" for
+// none) environment env, matched by pattern ("" for none), the first set
+// winning: the instance's environment, the instance's pattern, the
+// environment at any instance, the pattern at any instance, then
+// DEVOPSY_SERVER.
+func ServerVars(instance, env, pattern string) []string {
+	var vars []string
+	name := patternName(pattern)
+	if instance != "" {
+		vars = append(vars, InstanceServerVar(instance, env))
+		if name != "" {
+			vars = append(vars, InstanceServerVar(instance, name))
+		}
+	}
+	vars = append(vars, EnvironmentVar(env))
+	if name != "" {
+		vars = append(vars, EnvironmentVar(name))
+	}
+	return append(vars, ServerVar)
 }
 
 // Servers lists the servers a project's environments name, without an
-// address: DEVOPSY_SERVER, then each environment's variable (a pattern's,
-// DEVOPSY_SERVER_PR for pr-*), looked up in lookup. Each once, in that
-// order.
-func Servers(projectDir string, lookup func(string) (string, bool)) ([]string, error) {
+// address, in environ (KEY=value): DEVOPSY_SERVER, then each environment's
+// variable (a pattern's, DEVOPSY_SERVER_PR for pr-*) and its instances'
+// (DEVOPSY_SERVER_<INSTANCE>__PR), which no config lists, so they are
+// found by name. Each once, in that order.
+func Servers(projectDir string, environ []string) ([]string, error) {
 	c, err := LoadConfig(projectDir)
 	if err != nil {
 		return nil, err
 	}
+	values := map[string]string{}
+	var names []string
+	for _, kv := range environ {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			values[k] = v
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
 	vars := []string{ServerVar}
 	keys := make([]string, 0, len(c.Environments))
 	for k := range c.Environments {
@@ -1375,17 +1433,24 @@ func Servers(projectDir string, lookup func(string) (string, bool)) ([]string, e
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
+		name := k
 		if strings.Contains(k, "*") {
-			if v := PatternVar(k); v != "" {
-				vars = append(vars, v)
+			if name = patternName(k); name == "" {
+				continue
 			}
-		} else {
-			vars = append(vars, EnvironmentVar(k))
+		}
+		vars = append(vars, EnvironmentVar(name))
+		suffix := "__" + varPart(name)
+		for _, n := range names {
+			rest, server := strings.CutPrefix(n, ServerVar+"_")
+			if inst, ok := strings.CutSuffix(rest, suffix); server && ok && varPartRe.MatchString(inst) {
+				vars = append(vars, n)
+			}
 		}
 	}
 	var servers []string
 	for _, name := range vars {
-		if v, _ := lookup(name); v != "" && !slices.Contains(servers, v) {
+		if v := values[name]; v != "" && !slices.Contains(servers, v) {
 			servers = append(servers, v)
 		}
 	}
@@ -1399,11 +1464,20 @@ const ServerVar = "DEVOPSY_SERVER"
 // InstanceVar is the instance when the address names none.
 const InstanceVar = "DEVOPSY_INSTANCE"
 
-// EnvironmentVar is the variable naming an environment's server:
-// DEVOPSY_SERVER_ and the name in upper case, anything but letters and
-// digits as "_" (staging-eu: DEVOPSY_SERVER_STAGING_EU).
+// EnvironmentVar is the variable naming an environment's server at any
+// instance: DEVOPSY_SERVER_ and its varPart (staging-eu:
+// DEVOPSY_SERVER_STAGING_EU).
 func EnvironmentVar(name string) string {
-	suffix := strings.Map(func(r rune) rune {
+	return ServerVar + "_" + varPart(name)
+}
+
+// varPartRe is what varPart makes of a name (uids.NameRe).
+var varPartRe = regexp.MustCompile(`^[A-Z0-9]+(_[A-Z0-9]+)*$`)
+
+// varPart is a name as part of a variable: upper case, anything but
+// letters and digits as "_".
+func varPart(name string) string {
+	return strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z':
 			return r - 'a' + 'A'
@@ -1412,7 +1486,6 @@ func EnvironmentVar(name string) string {
 		}
 		return '_'
 	}, name)
-	return ServerVar + "_" + suffix
 }
 
 // ReleasesHere reports whether release and rollback may run for t from the
@@ -1551,8 +1624,10 @@ func parseAddress(s string) (address, error) {
 		}
 	}
 	a.env = rest
-	if !envName.MatchString(a.env) {
-		if envName.MatchString(strings.ToLower(a.env)) {
+	// An alias's name or an environment's, which loadTarget checks once
+	// it knows which.
+	if !aliasRe.MatchString(a.env) {
+		if aliasRe.MatchString(strings.ToLower(a.env)) {
 			return a, fmt.Errorf("@%s: environment %q: names are lowercase", s, a.env)
 		}
 		return a, fmt.Errorf("@%s: not an address: @[<server>:][<instance>/]<environment>", s)
@@ -1610,7 +1685,7 @@ func ServerTarget(projectDir, addr string, projectEnv func(string) (string, bool
 		return nil, err
 	}
 	if t.Host == "" {
-		return nil, noServer(addr, "devopsy @<server>", t.Name)
+		return nil, noServer(addr, "devopsy @<server>", t.Instance, t.Name)
 	}
 	return t, nil
 }
@@ -1671,6 +1746,9 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		default:
 			return nil, fmt.Errorf("alias %s: needs source: (the project's checkout) or project: (its name)", aliasName)
 		}
+	}
+	if !envName.MatchString(a.env) {
+		return nil, fmt.Errorf("@%s: environment %q: lowercase letters, digits and - between them", addr, a.env)
 	}
 	if project == nil || project.Name == "" {
 		if projectDir == "" && alias == nil {
@@ -1787,16 +1865,11 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		t.From["instance"] = from
 	}
 
-	// The server: the address, else the environment's variable, its
-	// pattern's (pr-*: DEVOPSY_SERVER_PR), then DEVOPSY_SERVER.
+	// The server: the address, else the first of ServerVars set.
 	if a.server != "" {
 		t.Host, t.From["server"] = a.server, "the address"
 	} else {
-		vars := []string{EnvironmentVar(a.env)}
-		if pv := PatternVar(t.Pattern); pv != "" {
-			vars = append(vars, pv)
-		}
-		for _, name := range append(vars, ServerVar) {
+		for _, name := range ServerVars(instance, a.env, t.Pattern) {
 			if v, k := lookup(name); v != "" {
 				t.Host, t.From["server"] = v, k
 				break
@@ -1824,7 +1897,7 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 				Remedies: []report.Remedy{report.Fix("set " + a.env + "'s server in .devopsy/.env, as the templates do: " + EnvironmentVar(a.env) + "=<server> (or " + ServerVar + " for every environment)")},
 			}}
 		}
-		return nil, noServer(addr, "devopsy @<server>:"+addr, a.env)
+		return nil, noServer(addr, "devopsy @<server>:"+addr, instance, a.env)
 	}
 
 	dir := project.Name
@@ -1923,10 +1996,14 @@ func ReleaseEnvironment(projectDir string) (*Target, error) {
 
 // noServer is the refusal of an address with no server, addr as typed:
 // the server in the address (cmd, how it starts), or the variable that
-// names it, for every environment or env's.
-func noServer(addr, cmd, env string) error {
+// names it, for every environment, env's, or instance's env's.
+func noServer(addr, cmd, instance, env string) error {
+	set := "set " + ServerVar + ", or " + EnvironmentVar(env) + " for " + env + " alone"
+	if instance != "" {
+		set = "set " + ServerVar + ", " + EnvironmentVar(env) + " for " + env + " at any instance, or " + InstanceServerVar(instance, env) + " for " + instance + "/" + env + " alone"
+	}
 	return &report.Failure{Msg: "no server for @" + addr, Remedies: []report.Remedy{
 		report.Fix("name it in the address:", cmd),
-		report.Fix("set " + ServerVar + ", or " + EnvironmentVar(env) + " for " + env + " alone"),
+		report.Fix(set),
 	}}
 }

@@ -78,12 +78,14 @@ func DomainOf(uid uint32) (Domain, bool) {
 }
 
 var (
-	// NameRe is a project's or an instance's name: a directory, and part of compose and
-	// host names. The config takes names by it.
-	NameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-	// EnvRe is an environment's name, lowercase: the compose name lowercases it, so two
+	// NameRe is a project's, an instance's or an environment's name: a directory, and
+	// part of compose and host names and of the server variables, where - is _ and
+	// __ parts an instance from its environment (DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT>),
+	// so no - starts, ends or doubles. Lowercase: the compose name lowercases it, so two
 	// names differing in case would be one set of containers. The config takes names by it.
-	EnvRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
+	NameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	// EnvRe is an environment's name, the same as NameRe.
+	EnvRe = NameRe
 )
 
 // nameMax is the longest file name a claim can have.
@@ -117,7 +119,7 @@ func (o Owner) check() error {
 	case o.Instance != "" && !NameRe.MatchString(o.Instance):
 		return fmt.Errorf("%q is no instance name", o.Instance)
 	case o.Env != "" && !EnvRe.MatchString(o.Env):
-		return fmt.Errorf("%q is no environment name (lowercase letters, digits, '_', '.' and '-')", o.Env)
+		return fmt.Errorf("%q is no environment name (lowercase letters, digits and -)", o.Env)
 	case len(o.String()) > nameMax:
 		return fmt.Errorf("%s: too long for a claim's name, %d bytes at most", o, nameMax)
 	}

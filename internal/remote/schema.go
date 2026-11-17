@@ -106,7 +106,8 @@ defaults:
     release: {enabled: false, keep: 1}
     mirror: false
 
-# The environments: prod, staging... A name with * is a pattern (one or
+# The environments: prod, staging... Names are lowercase letters and
+# digits, - between them. A name with * is a pattern (one or
 # more name characters): "pr-*" matches pr-12; an exact name wins, then the
 # pattern with the most literal characters; "*" allows any name.
 environments:
@@ -123,8 +124,9 @@ environments:
     # A child of prod (an environment of this project, not a pattern): its
     # first release copies prod's data (shared/mnt) once current, before
     # its run step; devopsy @staging --sync copies it again. Resolved at
-    # the child's instance, on the server DEVOPSY_SERVER_PROD names, else
-    # DEVOPSY_SERVER, never the child's. Per environment only (a pattern
+    # the child's instance, on the server its variables name
+    # (DEVOPSY_SERVER_<INSTANCE>__PROD, DEVOPSY_SERVER_PROD, DEVOPSY_SERVER),
+    # never the child's. Per environment only (a pattern
     # too), never in defaults:, and never itself.
     parent: prod
   "pr-*":
@@ -137,9 +139,11 @@ environments:
 # Targets: devopsy @[<server>:][<instance>/]<environment> ...
 #   @vm1:prod  @vm1:shop-demo/prod  @prod
 # What the target leaves out comes from variables, in the environment or
-# .devopsy/.env: the server from DEVOPSY_SERVER_<ENVIRONMENT> (upper case,
-# others as _), the pattern's (pr-*: DEVOPSY_SERVER_PR), then DEVOPSY_SERVER;
-# the instance from DEVOPSY_INSTANCE.
+# .devopsy/.env, names upper case and - as _: the server from
+# DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT>, the instance's pattern's
+# (pr-*: DEVOPSY_SERVER_<INSTANCE>__PR), DEVOPSY_SERVER_<ENVIRONMENT> at any
+# instance, the pattern's (DEVOPSY_SERVER_PR), then DEVOPSY_SERVER; the
+# instance from DEVOPSY_INSTANCE.
 #
 # On a server, an environment lives in <project>/[<instance>/]<environment>
 # under the release root, named <project>[-<instance>]-<environment>.
