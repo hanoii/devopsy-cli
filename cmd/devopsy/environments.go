@@ -37,12 +37,12 @@ func runEnvironments(cwd string, args []string, color bool) int {
 	if err := cli.LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
 		return fail(err.Error())
 	}
-	servers, err := remote.Servers(projectDir, env.Lookup)
+	servers, err := remote.Servers(projectDir, env.Environ())
 	if err != nil {
 		return fail(err.Error())
 	}
 	if len(servers) == 0 {
-		return failErr(&report.Failure{Msg: "--environments: no server", Remedies: []report.Remedy{report.Fix("name it:", "devopsy @<server> --environments"), report.Fix("set " + remote.ServerVar + ", or DEVOPSY_SERVER_<ENVIRONMENT> for one environment")}})
+		return failErr(&report.Failure{Msg: "--environments: no server", Remedies: []report.Remedy{report.Fix("name it:", "devopsy @<server> --environments"), report.Fix("set " + remote.ServerVar + ", DEVOPSY_SERVER_<ENVIRONMENT> for one environment, or DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT> for one instance's")}})
 	}
 	return listEnvironments(project, servers, color)
 }

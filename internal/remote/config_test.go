@@ -219,6 +219,19 @@ func TestConfigErrors(t *testing.T) {
 		"uppercase environment": "project: app\nenvironments:\n  prod: {}\n  Stage: {}\n",
 		"a uid in env":          "project: app\nenvironments:\n  prod: {env: {DEVOPSY_PROJECT_UID: '1'}}\n",
 		"uppercase pattern":     "project: app\nenvironments:\n  prod: {}\n  \"PR-*\": {}\n",
+		// Names are lowercase letters and digits with single - between them: - is _ in the
+		// server variables and __ parts an instance from its environment, so stage_demo,
+		// stage.demo and stage-demo would read one variable, and a doubled, leading or
+		// trailing - could read as that __.
+		"_ in an environment":       "project: app\nenvironments:\n  prod: {}\n  stage_demo: {}\n",
+		". in an environment":       "project: app\nenvironments:\n  prod: {}\n  stage.demo: {}\n",
+		"doubled - in an env":       "project: app\nenvironments:\n  prod: {}\n  stage--demo: {}\n",
+		"leading - in an env":       "project: app\nenvironments:\n  prod: {}\n  -stage: {}\n",
+		"trailing - in an env":      "project: app\nenvironments:\n  prod: {}\n  stage-: {}\n",
+		"doubled - in a pattern":    "project: app\nenvironments:\n  prod: {}\n  \"pr--*\": {}\n",
+		"_ in a pattern":            "project: app\nenvironments:\n  prod: {}\n  \"pr_*\": {}\n",
+		"doubled - in the project":  "project: a--b\nenvironments:\n  prod: {}\n",
+		"trailing - in the project": "project: app-\nenvironments:\n  prod: {}\n",
 	} {
 		dir := t.TempDir()
 		write(t, filepath.Join(dir, ConfigFile), config)
@@ -411,6 +424,13 @@ environments:
 	if got := PatternVar("pr-big-*"); got != "DEVOPSY_SERVER_PR_BIG" || PatternVar("*") != "" {
 		t.Errorf("PatternVar: %s", got)
 	}
+	// A * inside a pattern goes with the - next to it, never leaving a
+	// doubled _ that would read as an instance's __.
+	for pattern, want := range map[string]string{"*-eu": "DEVOPSY_SERVER_EU", "pr-*-eu": "DEVOPSY_SERVER_PR_EU", "pr*": "DEVOPSY_SERVER_PR", "*-*": ""} {
+		if got := PatternVar(pattern); got != want {
+			t.Errorf("PatternVar(%s): %q, want %q", pattern, got, want)
+		}
+	}
 	t.Setenv("DEVOPSY_SERVER_PR", "pr-box")
 	if pr, err := LoadTarget(dir, "pr-9", nil); err != nil || pr.Host != "pr-box" || pr.From["server"] != "DEVOPSY_SERVER_PR" {
 		t.Fatalf("pattern's server: %+v %v", pr, err)
@@ -421,6 +441,131 @@ environments:
 	}
 	if pats := Patterns(dir); len(pats) != 4 {
 		t.Errorf("patterns: %v", pats)
+	}
+}
+
+// The server of a target the address leaves it out of is the first set of
+// ServerVars: the instance's environment, the instance's pattern, the
+// environment at any instance, the pattern at any instance, then
+// DEVOPSY_SERVER. Every combination of them set, for each kind of target,
+// takes the first one set, and no variable of another instance or
+// environment is ever read, however its name splits: instance ieee-css's
+// prod and instance ieee's css-prod are two variables.
+//
+// Not parallel: it sets DEVOPSY_HOME and clears the server variables
+// (t.Setenv), so the caller's never win over the project's .env.
+func TestServerVarsOrder(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	t.Setenv(InstanceVar, "")
+	sites, plain := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(sites, ConfigFile), "project: sites\ninstances: true\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n  css-prod: {}\n")
+	write(t, filepath.Join(plain, ConfigFile), "project: app\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n  css-prod: {}\n")
+	const s = ServerVar
+	// Set in every combination: none of them names these targets' server.
+	decoys := []string{
+		s + "_IEEE__CSS_PROD",    // instance ieee's css-prod
+		s + "_IEEE_CSS_PROD",     // css-prod at instance ieee, written without __
+		s + "_CSS_PROD",          // css-prod at any instance
+		s + "_OTHER__PROD",       // another instance's prod
+		s + "__PROD",             // no instance
+		s + "_IEEE_CSS__PR_9",    // another environment of the pattern
+		s + "_IEEE_CSS__PROD_EU", // another environment
+	}
+	for _, c := range []struct {
+		dir, addr string
+		vars      []string
+	}{
+		{sites, "ieee-css/prod", []string{s + "_IEEE_CSS__PROD", s + "_PROD", s}},
+		{sites, "ieee-css/pr-12", []string{s + "_IEEE_CSS__PR_12", s + "_IEEE_CSS__PR", s + "_PR_12", s + "_PR", s}},
+		{plain, "prod", []string{s + "_PROD", s}},
+		{plain, "pr-12", []string{s + "_PR_12", s + "_PR", s}},
+	} {
+		for _, k := range append(append([]string{}, c.vars...), decoys...) {
+			t.Setenv(k, "")
+		}
+		inst, env, _ := strings.Cut(c.addr, "/")
+		if env == "" {
+			inst, env = "", inst
+		}
+		pattern := ""
+		if strings.HasPrefix(env, "pr-") {
+			pattern = "pr-*"
+		}
+		if got := ServerVars(inst, env, pattern); !slices.Equal(got, c.vars) {
+			t.Errorf("ServerVars(%q, %q, %q): %v, want %v", inst, env, pattern, got, c.vars)
+		}
+		for mask := 0; mask < 1<<len(c.vars); mask++ {
+			vars := map[string]string{}
+			for _, d := range decoys {
+				vars[d] = "decoy"
+			}
+			first := -1
+			for i, k := range c.vars {
+				if mask&(1<<i) != 0 {
+					vars[k] = fmt.Sprintf("vm%d", i)
+					if first < 0 {
+						first = i
+					}
+				}
+			}
+			projectEnv := func(k string) (string, bool) { v, ok := vars[k]; return v, ok }
+			tg, err := LoadTarget(c.dir, c.addr, projectEnv)
+			if first < 0 {
+				want := "set " + s + ", " + s + "_PROD for prod at any instance, or " + s + "_IEEE_CSS__PROD for ieee-css/prod alone"
+				switch {
+				case err == nil || err.Error() != "no server for @"+c.addr:
+					t.Errorf("%s, none set: %v, want no server", c.addr, err)
+				case c.addr == "ieee-css/prod" && report.Remedies(err)[1].Text != want:
+					t.Errorf("%s, none set: %q, want %q", c.addr, report.Remedies(err)[1].Text, want)
+				}
+				continue
+			}
+			if err != nil || tg.Host != vars[c.vars[first]] || tg.From["server"] != c.vars[first]+" in .devopsy/.env" {
+				t.Errorf("%s, set %v: %+v %v, want %s", c.addr, vars, tg, err, c.vars[first])
+			}
+		}
+	}
+
+	// A parent resolves at its child's instance, by its own variables.
+	write(t, filepath.Join(sites, ConfigFile), "project: sites\ninstances: true\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n")
+	vars := map[string]string{s + "_IEEE_CSS__DEV": "vm-dev", s + "_IEEE_CSS__PROD": "vm-prod", s + "_PROD": "vm-any"}
+	projectEnv := func(k string) (string, bool) { v, ok := vars[k]; return v, ok }
+	for _, k := range []string{s + "_IEEE_CSS__DEV", s + "_DEV"} {
+		t.Setenv(k, "")
+	}
+	if tg, err := LoadTarget(sites, "ieee-css/dev", projectEnv); err != nil || tg.Host != "vm-dev" || tg.ParentTarget == nil || tg.ParentTarget.Host != "vm-prod" {
+		t.Errorf("parent at the instance: %+v %v", tg, err)
+	}
+	if tg, err := LoadTarget(sites, "other/dev", projectEnv); err == nil || tg != nil && tg.ParentTarget != nil {
+		t.Errorf("other/dev has no server of its own: %+v %v", tg, err)
+	}
+	vars["DEVOPSY_SERVER_OTHER__DEV"] = "vm-other"
+	if tg, err := LoadTarget(sites, "other/dev", projectEnv); err != nil || tg.Host != "vm-other" || tg.ParentTarget == nil || tg.ParentTarget.Host != "vm-any" {
+		t.Errorf("parent at any instance: %+v %v", tg, err)
+	}
+
+	// An instance's name has single - only, in the address or DEVOPSY_INSTANCE.
+	for _, addr := range []string{"vm1:ieee--css/prod", "vm1:-ieee/prod", "vm1:ieee-/prod", "vm1:ieee_css/prod"} {
+		if _, err := LoadTarget(sites, addr, nil); err == nil || !strings.Contains(err.Error(), "lowercase letters, digits and -") {
+			t.Errorf("%s: %v, want a refusal of the instance", addr, err)
+		}
+	}
+	t.Setenv(InstanceVar, "ieee-")
+	if _, err := LoadTarget(sites, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), InstanceVar) {
+		t.Errorf("%s=ieee-: %v, want a refusal", InstanceVar, err)
+	}
+
+	// So has an environment's, even where a "*" pattern takes any name; an
+	// alias's names no variable and keeps '.' and '_'.
+	write(t, filepath.Join(plain, ConfigFile), "project: app\nenvironments:\n  \"*\": {}\n")
+	for _, addr := range []string{"vm1:a--b", "vm1:a.b", "vm1:a_b", "vm1:a-"} {
+		if _, err := LoadTarget(plain, addr, nil); err == nil || !strings.Contains(err.Error(), "lowercase letters, digits and - between them") {
+			t.Errorf("%s: %v, want a refusal of the environment", addr, err)
+		}
+	}
+	write(t, filepath.Join(os.Getenv("DEVOPSY_HOME"), "config.yaml"), "aliases:\n  edge.b_1: {project: app, to: \"vm1:prod\"}\n")
+	if tg, err := LoadTarget(plain, "edge.b_1", nil); err != nil || tg.Host != "vm1" || tg.Name != "prod" {
+		t.Errorf("an alias with . and _: %+v %v", tg, err)
 	}
 }
 
@@ -712,12 +857,16 @@ func TestServers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte("project: app\nenvironments:\n  prod: {}\n  staging-eu: {}\n  \"pr-*\": {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	vars := map[string]string{"DEVOPSY_SERVER": "vm1", "DEVOPSY_SERVER_STAGING_EU": "vm2", "DEVOPSY_SERVER_PR": "vm1", "DEVOPSY_SERVER_OTHER": "vm3"}
-	got, err := Servers(dir, func(k string) (string, bool) { v, ok := vars[k]; return v, ok })
+	// An instance's variables are found by name, the instances listed
+	// nowhere; one of another environment, or no instance's, is not.
+	environ := []string{"DEVOPSY_SERVER=vm1", "DEVOPSY_SERVER_STAGING_EU=vm2", "DEVOPSY_SERVER_PR=vm1", "DEVOPSY_SERVER_OTHER=vm3",
+		"DEVOPSY_SERVER_SHOP__PROD=vm4", "DEVOPSY_SERVER_SHOP__PR=vm5", "DEVOPSY_SERVER_SHOP__OTHER=vm6",
+		"DEVOPSY_SERVER___PROD=vm7", "DEVOPSY_SERVER_A__B__PROD=vm8", "DEVOPSY_SERVER_SHOP_PROD=vm9", "OTHER_SHOP__PROD=vm10"}
+	got, err := Servers(dir, environ)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, " ") != "vm1 vm2" {
+	if strings.Join(got, " ") != "vm1 vm5 vm4 vm2" {
 		t.Errorf("servers: %v", got)
 	}
 }

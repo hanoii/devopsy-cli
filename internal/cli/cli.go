@@ -535,7 +535,8 @@ reachable from the parent's as ssh -G resolves it ` + vocab.Operator.On + `
 (no ProxyCommand or ProxyJump). Both sides are project users, or neither.
 
 The parent comes from the child's instance and the usual server variables
-(DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), never the child's server:
+(DEVOPSY_SERVER_<INSTANCE>__<PARENT>, DEVOPSY_SERVER_<PARENT>,
+DEVOPSY_SERVER), never the child's server:
 without one the sync fails naming the variable, or --from names it.
 Before copying, the variables the parent's inherit: names are read from
 its server's .env files (shared/.env, its inherit.env, the instance's,
@@ -1028,8 +1029,9 @@ or ~/.ssh/config names: root's ~/.ssh/authorized_keys must have your key.
 The project's environments on the server, as addresses: <environment>, or
 <instance>/<environment> for a project with instances: true. The project is
 the checkout's, or an alias's. Without a target, on every server
-DEVOPSY_SERVER and the environments' DEVOPSY_SERVER_<ENVIRONMENT> name (the
-caller's environment, then .devopsy/.env).
+DEVOPSY_SERVER and the environments' DEVOPSY_SERVER_<ENVIRONMENT> and
+DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT> name (the caller's environment, then
+.devopsy/.env).
 `,
 	"--upgrade": `Usage: devopsy @<server> --upgrade [vX.Y.Z]
 
@@ -1452,6 +1454,15 @@ Where each runs:
     @s   on a server: @<server> (@<server>: when a name is ambiguous, and
          always with a port or an IPv6 address), or any target's
   [@t]   optional: without it, where devopsy runs, in the project you are in
+
+A target's server, when the address has none, is the first of these set
+(the caller's environment, then .devopsy/.env; names upper case, - as _):
+    DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT>
+    DEVOPSY_SERVER_<INSTANCE>__<PATTERN>     pr-*: DEVOPSY_SERVER_<INSTANCE>__PR
+    DEVOPSY_SERVER_<ENVIRONMENT>             at any instance
+    DEVOPSY_SERVER_<PATTERN>                 pr-*: DEVOPSY_SERVER_PR
+    DEVOPSY_SERVER
+  Its instance is DEVOPSY_INSTANCE's; devopsy @<target> --debug shows which.
 
 `)
 	if projectDir == "" {

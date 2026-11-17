@@ -47,9 +47,11 @@ How the keys combine:
   removes the list. `snapshots:` merges key by key: `true` and `false`
   only turn a kind on or off, `{keep: <n>}` only changes the count, and
   `~` goes back to the default.
-- An environment's name is lowercase letters, digits, `.`, `_` and `-`,
-  starting with a letter or a digit: a compose name lowercases it, so two
-  names differing only in case would be one set of containers.
+- An environment's name, like a project's and an instance's, is lowercase
+  letters and digits with single `-` between them: a compose name
+  lowercases it, so two names differing only in case would be one set of
+  containers, and in a server variable `-` is `_` and `__` parts an
+  instance from its environment.
 - An environment key with `*` is a pattern, matching one or more name
   characters (`"*"` matches any name). An exact name wins over a pattern,
   then the pattern with the most literal characters.
@@ -77,16 +79,21 @@ have none. An IPv6 address with a port needs its brackets, and zsh needs
 them quoted, as the commands devopsy suggests write them.
 
 What the address leaves out comes from your environment or the project's
-`.devopsy/.env`, the most specific first:
+`.devopsy/.env`, the most specific first, names in upper case and `-` as
+`_`:
 
 ```sh
-DEVOPSY_SERVER_PR_12=...       # one environment's server (upper case, others as _)
-DEVOPSY_SERVER_PR=...          # a pattern's: pr-* without the *
+DEVOPSY_SERVER_SHOP__PR_12=... # one instance's environment (shop/pr-12)
+DEVOPSY_SERVER_SHOP__PR=...    # one instance's pattern: pr-* without the *
+DEVOPSY_SERVER_PR_12=...       # one environment's server, at any instance
+DEVOPSY_SERVER_PR=...          # a pattern's, at any instance
 DEVOPSY_SERVER=vm1             # any environment's
 DEVOPSY_INSTANCE=b
 ```
 
-No server from any of them is an error. A server in a variable takes
+The two with `__` are only for a project with instances, `__` parting the
+instance from the environment. No server from any of them is an error,
+and `devopsy @<target> --debug` shows which one named it. A server in a variable takes
 the same forms, a port included (`DEVOPSY_SERVER=devopsy@vm1:5369`).
 
 ## Instances
@@ -118,7 +125,8 @@ shows this where the child is defined.
 
 The parent resolves like a target of its own, one level only: at the
 child's instance, on the server its own variables name
-(`DEVOPSY_SERVER_<PARENT>`, `DEVOPSY_SERVER`), not the child's server.
+(`DEVOPSY_SERVER_<INSTANCE>__<PARENT>`, `DEVOPSY_SERVER_<PARENT>`,
+`DEVOPSY_SERVER`), not the child's server.
 A guess could copy the wrong data, so a sync without one fails and says
 which variable to set. `@vm2:develop` with `DEVOPSY_SERVER_PROD=vm1` syncs
 from `vm1:prod`. Without the variable, an address does it for one
