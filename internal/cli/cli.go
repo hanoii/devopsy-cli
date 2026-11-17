@@ -1362,7 +1362,7 @@ Examples:
   devopsy @devopsy@vm1: --project-users
 `,
 	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [--for <project>] [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
-       devopsy --ssh-keys-generate [<name>] [--out <file>]
+       devopsy [@<server>] --ssh-keys-generate [<name>] [--out <file>] [--for <project>] [--restricted]
 
 The keys that may log in as the deploy user on the server: its
 ~/.ssh/authorized_keys, edited over the usual session as that user, no
@@ -1385,6 +1385,10 @@ root. Any target on the server does too; the keys are the server's.
 --ssh-keys-generate, without a target, makes a local ed25519 pair with ssh-keygen,
 ~/.ssh/<name> and .pub (default devopsy-ci; --out another file), the
 comment the name. Nothing is sent anywhere: add the .pub to each server.
+With a server it then adds the .pub there, as --ssh-keys add does, with
+--for and --restricted as add takes them; with --for the name defaults
+to the project user's (devopsy-<project>). A pair whose add fails is
+removed. The private key never leaves the machine it was made on.
 
 For CI: generate one, add the .pub with --restricted, store the private key as
 a protected file variable, and in the job run devopsy --ssh-option
@@ -1398,6 +1402,7 @@ Examples:
   devopsy @prod --ssh-keys add ~/.ssh/id_ed25519.pub
   devopsy @prod --ssh-keys remove ci-prod1
   devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
+  devopsy @devopsy@vm1: --ssh-keys-generate --for shop --restricted
 `,
 }
 

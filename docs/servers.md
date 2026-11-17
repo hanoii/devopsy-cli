@@ -821,6 +821,12 @@ too.
 - Without a target, `devopsy --ssh-keys-generate [<name>]` makes an
   ed25519 pair in `~/.ssh` (`devopsy-ci` by default; `--out <file>` for
   elsewhere), sending nothing anywhere.
+- With a server, `devopsy @<server> --ssh-keys-generate [<name>]` makes
+  the pair the same way, then adds its `.pub` there as `add` does, taking
+  `--restricted` and `--for <project>` (the name then defaulting to the
+  project user's, `devopsy-<project>`). The private key stays on the
+  operator's machine. A pair whose add fails is removed, so the same
+  command can run again.
 
 For CI: generate a pair, `add` the `.pub` on each server with
 `--restricted`, store the private key as a protected file variable, and

@@ -96,6 +96,7 @@ var Flags = []FlagGroup{
 		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "a local SSH key pair, for CI"},
 		{Name: "--project-users", Args: "[add <project> | remove <project> [--destroy] | setup]", Scope: Server, Desc: "project users, with no Docker socket"},
 		{Name: "--ssh-keys", Args: "[--for <project>] [list | add <file> | remove <key>]", Scope: Server, Desc: "keys of the deploy user, or a project user"},
+		{Name: "--ssh-keys-generate", Args: "[<name>] [--for <project>]", Scope: Server, Desc: "the same, its public half added to the\nserver's keys or a project user's"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--server-setup", Args: "[--yes] [--root <dir>]", Scope: Server, Desc: "the server's setup for devopsy: Docker's\ndaemon.json, buffers, the release root"},

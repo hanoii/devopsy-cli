@@ -246,6 +246,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--ssh-keys":
 		return runSSHKeys(t, args[1:], color)
 
+	case "--ssh-keys-generate":
+		return runSSHKeysGenerate(t, args[1:], color)
+
 	case "--project-users":
 		return runProjectUsers(t, args[1:])
 

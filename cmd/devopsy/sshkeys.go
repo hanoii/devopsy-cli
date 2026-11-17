@@ -16,19 +16,116 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// runSSHKeys implements devopsy @<target> --ssh-keys [list | add <file>
-// [--restricted] | remove <key>]: the deploy user's authorized_keys on the
-// target's server, edited over the usual session, as that user. Public
-// keys only ever travel; runSSHKeysGenerate makes a local pair.
 // errSaid is a failure already said, with its fix: nothing more to say.
 var errSaid = errors.New("said")
 
+// keyEditor is whose keys a --ssh-keys or a --ssh-keys-generate with a target edits on t's
+// server: the deploy user's own, or with --for a project user's, over the usual session as
+// the deploy user. command is the command as typed, flag and arguments, for the hint of a
+// refusal asked as a project user.
+type keyEditor struct {
+	t             *remote.Target
+	user, project string // the project user and its project (--for), "" for the deploy user's own
+	command       string
+}
+
+// newKeyEditor is t's keys for flag and its args as typed.
+func newKeyEditor(t *remote.Target, flag string, args []string) keyEditor {
+	words := []string{flag}
+	for _, a := range args {
+		words = append(words, remote.QuoteWord(a))
+	}
+	return keyEditor{t: t, command: strings.Join(words, " ")}
+}
+
+// takeFor takes --for's project at args[*i+1], moving *i past it: false for none, a second
+// --for or a name devopsy refuses.
+func (o *keyEditor) takeFor(args []string, i *int) bool {
+	if *i+1 >= len(args) || o.user != "" || !remote.ValidName(args[*i+1]) {
+		return false
+	}
+	*i++
+	o.project, o.user = args[*i], door.UserOf(args[*i])
+	return true
+}
+
+// whose names the keys in what devopsy says: the server's, or its project user's.
+func (o keyEditor) whose() string {
+	if o.user != "" {
+		return o.user + "'s on " + o.t.Host
+	}
+	return o.t.Host + "'s"
+}
+
+// run runs script, and turns a --for asked as a project user into the hint: the script knows
+// the deploy user's name, and the host is the one typed.
+func (o keyEditor) run(script string, in io.Reader, out *bytes.Buffer) (int, error) {
+	code, err := remote.SSH(o.t, script, in, out, false)
+	if err == nil && o.user != "" && code == remote.AskedAsProjectUser {
+		refuseProjectUser(o.t, out.String(), "a project user's keys are its deploy user's to edit", o.command)
+		return 0, errSaid
+	}
+	return code, err
+}
+
+// list reads the keys; a code other than 0 is the script's exit, which said why (a refusal, a
+// lock not taken) or ssh's, which says its own: the command's exit, nothing more to say, as
+// add's and remove's.
+func (o keyEditor) list() ([]remote.AuthorizedKey, int, error) {
+	var buf bytes.Buffer
+	code, err := o.run(remote.KeysReadScript(o.user, targetRef(o.t)), bytes.NewReader(nil), &buf)
+	if err != nil || code != 0 {
+		return nil, code, err
+	}
+	return remote.ParseAuthorizedKeys(buf.String()), 0, nil
+}
+
+// add authorizes k, restricted (RestrictedKeyOptions) or as it is, and says so: the command's
+// exit.
+func (o keyEditor) add(k remote.AuthorizedKey, restricted bool) int {
+	if restricted {
+		k.Options = remote.RestrictedKeyOptions
+	}
+	fp, err := k.Fingerprint()
+	if err != nil {
+		return fail(err.Error())
+	}
+	var buf bytes.Buffer
+	code, err := o.run(remote.KeysAddScript(o.user, targetRef(o.t)), strings.NewReader(k.Line()+"\n"), &buf)
+	if err == errSaid {
+		return 1
+	}
+	if err != nil {
+		return fail(err.Error())
+	}
+	if code != 0 {
+		return code
+	}
+	what := "authorized " + fp
+	if k.Comment != "" {
+		what += " (" + k.Comment + ")"
+	}
+	if o.user != "" {
+		what += " for " + o.user + " on " + o.t.Host + " in " + strings.TrimSpace(buf.String())
+	} else {
+		what += " for " + o.t.Host + " in " + strings.TrimSpace(buf.String())
+	}
+	if restricted {
+		report.Info(what, "restricted: commands only, no shell, no pty, no forwarding")
+	} else {
+		report.Info(what)
+	}
+	return 0
+}
+
+// runSSHKeys implements devopsy @<target> --ssh-keys [--for <project>] [list | add <file>
+// [--restricted] | remove <key>]: the keys of keyEditor. Public keys only ever travel;
+// runSSHKeysGenerate makes a pair on the operator's machine.
 func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	say := func(msg string, details ...string) { report.Info(msg, details...) }
-	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [--for <project>] [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a local key pair, no target)"
+	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [--for <project>] [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy [@<server>] --ssh-keys-generate [<name>] [--out <file>] [--for <project>] [--restricted]"
 	restricted := false
-	// user is the project user whose keys these are (--for), "" for the deploy user's own.
-	user, project := "", ""
+	ed := newKeyEditor(t, "--ssh-keys", args)
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -38,11 +135,9 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		case "--restricted":
 			restricted = true
 		case "--for":
-			if i+1 >= len(args) || user != "" || !remote.ValidName(args[i+1]) {
+			if !ed.takeFor(args, &i) {
 				return fail(usage)
 			}
-			i++
-			project, user = args[i], door.UserOf(args[i])
 		default:
 			if strings.HasPrefix(a, "-") && a != "-" {
 				return fail(usage)
@@ -54,67 +149,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	if len(words) > 0 {
 		action, words = words[0], words[1:]
 	}
-	// whose names the keys in what devopsy says: the server's, or its project user's.
-	whose := t.Host + "'s"
-	if user != "" {
-		whose = user + "'s on " + t.Host
-	}
-	// asked runs a script, and turns a --for asked as a project user into the hint: the
-	// script knows the deploy user's name, and the host is the one typed.
-	asked := func(script string, in io.Reader, out *bytes.Buffer) (int, error) {
-		code, err := remote.SSH(t, script, in, out, false)
-		if err == nil && user != "" && code == remote.AskedAsProjectUser {
-			refuseProjectUser(t, out.String(), "a project user's keys are its deploy user's to edit", "--ssh-keys --for "+project+" "+strings.Join(append([]string{action}, words...), " "))
-			return 0, errSaid
-		}
-		return code, err
-	}
-	// list reads the keys; a code other than 0 is the script's exit, which said why (a
-	// refusal, a lock not taken) or ssh's, which says its own: the command's exit, nothing more
-	// to say, as add's and remove's.
-	list := func() ([]remote.AuthorizedKey, int, error) {
-		var buf bytes.Buffer
-		code, err := asked(remote.KeysReadScript(user, targetRef(t)), bytes.NewReader(nil), &buf)
-		if err != nil || code != 0 {
-			return nil, code, err
-		}
-		return remote.ParseAuthorizedKeys(buf.String()), 0, nil
-	}
-	add := func(k remote.AuthorizedKey) int {
-		if restricted {
-			k.Options = remote.RestrictedKeyOptions
-		}
-		fp, err := k.Fingerprint()
-		if err != nil {
-			return fail(err.Error())
-		}
-		var buf bytes.Buffer
-		code, err := asked(remote.KeysAddScript(user, targetRef(t)), strings.NewReader(k.Line()+"\n"), &buf)
-		if err == errSaid {
-			return 1
-		}
-		if err != nil {
-			return fail(err.Error())
-		}
-		if code != 0 {
-			return code
-		}
-		what := "authorized " + fp
-		if k.Comment != "" {
-			what += " (" + k.Comment + ")"
-		}
-		if user != "" {
-			what += " for " + user + " on " + t.Host + " in " + strings.TrimSpace(buf.String())
-		} else {
-			what += " for " + t.Host + " in " + strings.TrimSpace(buf.String())
-		}
-		if restricted {
-			say(what, "restricted: commands only, no shell, no pty, no forwarding")
-		} else {
-			say(what)
-		}
-		return 0
-	}
+	user, project, whose, list := ed.user, ed.project, ed.whose(), ed.list
 
 	switch action {
 	case "list":
@@ -186,7 +221,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if key == nil {
 			return fail(words[0] + ": no public key in it")
 		}
-		return add(*key)
+		return ed.add(*key, restricted)
 
 	case "remove":
 		if len(words) != 1 || restricted {
@@ -240,7 +275,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return fail(fp + " is " + t.Host + "'s last key: removing it would lock everyone out")
 		}
 		var buf bytes.Buffer
-		code, err = asked(remote.KeysRemoveScript(user, targetRef(t)), strings.NewReader(k.Blob+"\n"), &buf)
+		code, err = ed.run(remote.KeysRemoveScript(user, targetRef(t)), strings.NewReader(k.Blob+"\n"), &buf)
 		if err == errSaid {
 			return 1
 		}
@@ -261,13 +296,19 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	return fail(usage)
 }
 
-// runSSHKeysGenerate implements devopsy --ssh-keys-generate [<name>]
-// [--out <file>]: a local ed25519 pair, with ssh-keygen, for a CI system
-// or a machine, to authorize with devopsy @<target> --ssh-keys add. The
-// private key stays where it was made.
-func runSSHKeysGenerate(args []string, color bool) int {
-	usage := "usage: devopsy --ssh-keys-generate [<name>] [--out <file>]"
-	name, out := "", ""
+// runSSHKeysGenerate implements devopsy [@<server>] --ssh-keys-generate [<name>] [--out
+// <file>] [--for <project>] [--restricted]: an ed25519 pair made with ssh-keygen on the
+// operator's machine, the private key staying where it was made. Without a target nothing is
+// sent, and the hints name --ssh-keys add; with one (t) its public half is added as --ssh-keys
+// add does, to the deploy user's keys or with --for a project user's, and a pair whose add
+// fails is removed: its name is free for the next try.
+func runSSHKeysGenerate(t *remote.Target, args []string, color bool) int {
+	usage := "usage: devopsy [@<server>] --ssh-keys-generate [<name>] [--out <file>] [--for <project>] [--restricted]"
+	name, out, restricted := "", "", false
+	var keys keyEditor
+	if t != nil {
+		keys = newKeyEditor(t, "--ssh-keys-generate", args)
+	}
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--help", "-h":
@@ -279,6 +320,15 @@ func runSSHKeysGenerate(args []string, color bool) int {
 			}
 			i++
 			out = args[i]
+		case "--for", "--restricted":
+			if t == nil {
+				return fail(a + " adds the key to a server: its address first, before --ssh-keys-generate")
+			}
+			if a == "--restricted" {
+				restricted = true
+			} else if !keys.takeFor(args, &i) {
+				return fail(usage)
+			}
 		default:
 			if strings.HasPrefix(a, "-") || name != "" || !remote.ValidName(a) {
 				return fail(usage)
@@ -288,6 +338,9 @@ func runSSHKeysGenerate(args []string, color bool) int {
 	}
 	if name == "" {
 		name = "devopsy-ci"
+		if keys.user != "" {
+			name = keys.user
+		}
 	}
 	if out == "" {
 		home, err := os.UserHomeDir()
@@ -296,8 +349,24 @@ func runSSHKeysGenerate(args []string, color bool) int {
 		}
 		out = filepath.Join(home, ".ssh", name)
 	}
+	// addLater is the --ssh-keys add of out's public half to t's server, as asked.
+	addLater := func() string {
+		cmd := "devopsy @" + targetRef(t) + " --ssh-keys"
+		if keys.user != "" {
+			cmd += " --for " + keys.project
+		}
+		cmd += " add " + remote.QuoteWord(out+".pub")
+		if restricted {
+			cmd += " --restricted"
+		}
+		return cmd
+	}
 	if _, err := os.Lstat(out); err == nil {
-		return fail(out + " exists: another name, or --out another file")
+		f := &report.Failure{Msg: out + " exists: another name, or --out another file"}
+		if t != nil {
+			f.Remedies = []report.Remedy{report.Hint("to add that pair instead:", addLater())}
+		}
+		return failErr(f)
 	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
 		return fail(err.Error())
@@ -316,9 +385,24 @@ func runSSHKeysGenerate(args []string, color bool) int {
 		return fail(out + ".pub: " + errors.New("not a public key").Error())
 	}
 	fp, _ := k.Fingerprint()
-	report.Say(report.InfoLevel, "made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub", nil,
-		report.Hint("authorize it on a server, --restricted for CI (commands only, no shell):", "devopsy @<target> --ssh-keys add "+out+".pub --restricted"),
-		report.Hint("then store the private key in CI as a protected file variable and use it in the job:", "devopsy --ssh-option IdentityFile=\"$DEVOPSY_SSH_KEY\" @<target> --release"))
+	if t == nil {
+		report.Say(report.InfoLevel, "made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub", nil,
+			report.Hint("authorize it on a server, --restricted for CI (commands only, no shell):", "devopsy @<target> --ssh-keys add "+out+".pub --restricted"),
+			report.Hint("then store the private key in CI as a protected file variable and use it in the job:", "devopsy --ssh-option IdentityFile=\"$DEVOPSY_SSH_KEY\" @<target> --release"))
+		return 0
+	}
+	if code := keys.add(*k, restricted); code != 0 {
+		// Nothing was authorized, or nothing is known to be: the pair goes either way, and a
+		// key authorized all the same has no private half left to log in with.
+		os.Remove(out)
+		os.Remove(out + ".pub")
+		return code
+	}
+	var hints []report.Remedy
+	if restricted {
+		hints = append(hints, report.Hint("for CI, store the private key as a protected file variable, and give it to devopsy in the job with --ssh-option IdentityFile=\"$DEVOPSY_SSH_KEY\""))
+	}
+	report.Say(report.InfoLevel, "made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub", nil, hints...)
 	return 0
 }
 

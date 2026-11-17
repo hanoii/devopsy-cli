@@ -238,8 +238,10 @@ what `config.yaml` sets.
   whatever `~/.ssh/config` says; `devopsy --ssh-option ForwardAgent=yes
   @<server> --shell-host` does, for that command (`--ssh-option
   <key=value>` goes first, repeatable, an ssh `-o` for every session).
-- CI releases with a restricted key: `devopsy --ssh-keys-generate`, then
-  `devopsy @t --ssh-keys add <key>.pub --restricted`; the job runs
+- CI releases with a restricted key: `devopsy @t --ssh-keys-generate
+  --restricted` (a pair on the operator's machine, its `.pub` added; without
+  `@t` only made, for `devopsy @t --ssh-keys add <key>.pub --restricted`
+  on each server); the job runs
   `devopsy --ssh-option IdentityFile=<key> @t --release`. A sync across
   servers uses a key of its own, never the agent.
 - A project with a user of its own, no Docker socket (`devopsy-<project>`):
@@ -250,7 +252,7 @@ what `config.yaml` sets.
   installed first),
   then each made as the deploy user with `devopsy @devopsy@<server>:
   --project-users add <project>`, its keys `--ssh-keys --for <project>
-  add <key>.pub`. A project user cannot edit its own keys. The first
+  add <key>.pub` (or `--ssh-keys-generate --for <project>`, a new pair). A project user cannot edit its own keys. The first
   `add` on a server waits for a reboot (`--reboot`) before project users
   log in.
   `--project-users remove <project>` drops its keys and keeps the rest;

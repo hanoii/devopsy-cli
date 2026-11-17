@@ -158,7 +158,7 @@ func run() int {
 		case "--probe":
 			return runProbe(args[1:], color)
 		case "--ssh-keys-generate":
-			return runSSHKeysGenerate(args[1:], color)
+			return runSSHKeysGenerate(nil, args[1:], color)
 		case howto.Flag:
 			return runHowto(args[1:], os.Stdout)
 		case "--project-users":

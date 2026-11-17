@@ -58,7 +58,7 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 - The same scripts edit both, the file a parameter (`keysPrelude`), and asked as a project user a `--for` script exits `AskedAsProjectUser` with the deploy user's name, for the hint: only the server knows it.
 - Lines are parsed on the operator's machine (`ParseAuthorizedKey`, the fingerprint from the blob, no ssh-keygen) and edited on the server under a lock next to the file, by blob: a comment never identifies a key.
 - `add` refuses a duplicate (exit 3) and `remove` the last key (exit 4; commented-out keys are none, and devopsy refuses it on the operator's machine before opening a session); `--restricted` on `add` writes `RestrictedKeyOptions`, the one place that line is written.
-- `--ssh-keys-generate [<name>] [--out <file>]` is local and its own flag: `ssh-keygen`, nothing sent; the `.pub` is added per server.
+- `--ssh-keys-generate [<name>] [--out <file>]` is its own flag, the pair always made by `ssh-keygen` on the operator's machine: without a target nothing is sent; with a server the `.pub` goes through `--ssh-keys add`'s own path (`keyEditor`), `--for` and `--restricted` included, and a pair whose add fails is removed.
 
 ## Completion and the skill
 

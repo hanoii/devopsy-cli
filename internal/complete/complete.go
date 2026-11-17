@@ -375,6 +375,15 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return filter(Result{Candidates: []Candidate{{"--yes", "apply what is missing without asking", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		return Result{Directive: DirectiveNoFileComp}
+	case "--ssh-keys-generate":
+		// A name, --for's project and --out's file are the user's to type.
+		r := Result{Directive: DirectiveNoFileComp}
+		if strings.HasPrefix(cur, "-") {
+			r.Candidates = []Candidate{{"--for", "a project user's key", GroupDevopsy},
+				{"--restricted", "a machine's key: commands only, forwardings for syncs", GroupDevopsy},
+				{"--out", "where the private key goes", GroupDevopsy}, help}
+		}
+		return filter(r, cur)
 	case "--ssh-keys":
 		switch {
 		case len(words) == 2:

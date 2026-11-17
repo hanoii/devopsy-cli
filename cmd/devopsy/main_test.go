@@ -1673,6 +1673,25 @@ func TestRemoteSSHKeys(t *testing.T) {
 	if out, code := run("", "@prod", "--ssh-keys", "remove", fp[:8]); code == 0 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "ci-server") {
 		t.Errorf("remove the last key (%d):\n%s", code, out)
 	}
+	// generate with a target: the pair made here, its public half added as add does; again, the
+	// pair there already, the hint adds it instead. Without a target, --for and --restricted
+	// need one.
+	two := filepath.Join(tmp, "ci-two")
+	out, code = run("", "@prod", "--ssh-keys-generate", "ci-two", "--out", two, "--restricted")
+	if code != 0 || !strings.Contains(out, "devopsy: authorized SHA256:") || !strings.Contains(out, "(ci-two) for devopsy@server") || !strings.Contains(out, "devopsy: | restricted:") || !strings.Contains(out, "devopsy: made SHA256:") || !strings.Contains(out, "private key "+two+", public key "+two+".pub") {
+		t.Fatalf("generate and add (%d):\n%s", code, out)
+	}
+	if got := readString(authorized); !strings.Contains(got, "restrict ssh-ed25519 ") || !strings.Contains(got, " ci-two\n") || strings.Contains(got, "PRIVATE") {
+		t.Errorf("authorized_keys after generate: %q", got)
+	}
+	if out, code := run("", "@prod", "--ssh-keys-generate", "ci-two", "--out", two, "--restricted"); code == 0 || !strings.Contains(out, "exists") || !strings.Contains(out, "to add that pair instead:") || !strings.Contains(out, " --ssh-keys add "+two+".pub --restricted\n") {
+		t.Errorf("generate over an existing pair (%d):\n%s", code, out)
+	}
+	for _, flag := range []string{"--for", "--restricted"} {
+		if out, code := run("", "--ssh-keys-generate", flag, "shop"); code == 0 || !strings.Contains(out, flag+" adds the key to a server") {
+			t.Errorf("generate %s without a target (%d):\n%s", flag, code, out)
+		}
+	}
 }
 
 // A project user's keys are in the door's directory, which the deploy user edits with --for and
@@ -1740,6 +1759,23 @@ func TestRemoteSSHKeysForAProjectUser(t *testing.T) {
 	}
 	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "Shop!"); code == 0 || !strings.Contains(out, "usage:") {
 		t.Errorf("a project name devopsy refuses (%d):\n%s", code, out)
+	}
+	// generate --for: the pair made here, named for the project user by default, its public
+	// half in the door's keys. A pair whose add fails goes, its name free again: a project with
+	// no user, and asked as the project user, the hint the command again.
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys-generate", "--for", "shop"); code != 0 || !strings.Contains(out, "(devopsy-shop) for devopsy-shop on devopsy@vm1 in "+keys) || !strings.Contains(out, "private key "+filepath.Join(tmp, ".ssh", "devopsy-shop")+",") {
+		t.Fatalf("generate for a project user (%d):\n%s", code, out)
+	}
+	if !strings.Contains(readString(keys), " devopsy-shop\n") || !fileExists(filepath.Join(tmp, ".ssh", "devopsy-shop")) || fileExists(filepath.Join(tmp, ".ssh", "authorized_keys")) {
+		t.Errorf("the pair, or its public half in the door's keys: %q", readString(keys))
+	}
+	blog := filepath.Join(tmp, "blog-key")
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys-generate", "--for", "blog", "--out", blog); code == 0 || !strings.Contains(out, "no project user devopsy-blog here") || fileExists(blog) || fileExists(blog+".pub") {
+		t.Errorf("generate for a project with no user (%d):\n%s", code, out)
+	}
+	asUser := filepath.Join(tmp, "as-user")
+	if out, code := run(true, "@devopsy-shop@vm1:", "--ssh-keys-generate", "--for", "shop", "--out", asUser); code == 0 || !strings.Contains(out, "devopsy-shop is a project user") || !strings.Contains(out, "--ssh-keys-generate --for shop --out "+asUser) || fileExists(asUser) {
+		t.Errorf("generate asked as the project user (%d):\n%s", code, out)
 	}
 }
 
