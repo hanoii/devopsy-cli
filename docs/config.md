@@ -85,15 +85,16 @@ What the address leaves out comes from your environment or the project's
 ```sh
 DEVOPSY_SERVER_SHOP__PR_12=... # one instance's environment (shop/pr-12)
 DEVOPSY_SERVER_SHOP__PR=...    # one instance's pattern: pr-* without the *
+DEVOPSY_SERVER_SHOP__=...      # one instance, at any environment
 DEVOPSY_SERVER_PR_12=...       # one environment's server, at any instance
 DEVOPSY_SERVER_PR=...          # a pattern's, at any instance
 DEVOPSY_SERVER=vm1             # any environment's
 DEVOPSY_INSTANCE=b
 ```
 
-The two with `__` are only for a project with instances, `__` parting the
-instance from the environment. No server from any of them is an error,
-and `devopsy @<target> --debug` shows which one named it. A server in a variable takes
+The three with `__` are only for a project with instances, `__` parting
+the instance from the environment. No server from any of them is an error,
+and `devopsy --debug environments <target>` shows which one named it. A server in a variable takes
 the same forms, a port included (`DEVOPSY_SERVER=devopsy@vm1:5369`).
 
 ## Instances
@@ -125,8 +126,8 @@ shows this where the child is defined.
 
 The parent resolves like a target of its own, one level only: at the
 child's instance, on the server its own variables name
-(`DEVOPSY_SERVER_<INSTANCE>__<PARENT>`, `DEVOPSY_SERVER_<PARENT>`,
-`DEVOPSY_SERVER`), not the child's server.
+(`DEVOPSY_SERVER_<INSTANCE>__<PARENT>`, `DEVOPSY_SERVER_<INSTANCE>__`,
+`DEVOPSY_SERVER_<PARENT>`, `DEVOPSY_SERVER`), not the child's server.
 A guess could copy the wrong data, so a sync without one fails and says
 which variable to set. `@vm2:develop` with `DEVOPSY_SERVER_PROD=vm1` syncs
 from `vm1:prod`. Without the variable, an address does it for one

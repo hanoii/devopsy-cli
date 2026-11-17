@@ -446,8 +446,8 @@ environments:
 
 // The server of a target the address leaves it out of is the first set of
 // ServerVars: the instance's environment, the instance's pattern, the
-// environment at any instance, the pattern at any instance, then
-// DEVOPSY_SERVER. Every combination of them set, for each kind of target,
+// instance at any environment, the environment at any instance, the
+// pattern at any instance, then DEVOPSY_SERVER. Every combination of them set, for each kind of target,
 // takes the first one set, and no variable of another instance or
 // environment is ever read, however its name splits: instance ieee-css's
 // prod and instance ieee's css-prod are two variables.
@@ -470,13 +470,16 @@ func TestServerVarsOrder(t *testing.T) {
 		s + "__PROD",             // no instance
 		s + "_IEEE_CSS__PR_9",    // another environment of the pattern
 		s + "_IEEE_CSS__PROD_EU", // another environment
+		s + "_IEEE__",            // instance ieee at any environment
+		s + "_OTHER__",           // another instance at any environment
+		s + "___",                // no instance at any environment
 	}
 	for _, c := range []struct {
 		dir, addr string
 		vars      []string
 	}{
-		{sites, "ieee-css/prod", []string{s + "_IEEE_CSS__PROD", s + "_PROD", s}},
-		{sites, "ieee-css/pr-12", []string{s + "_IEEE_CSS__PR_12", s + "_IEEE_CSS__PR", s + "_PR_12", s + "_PR", s}},
+		{sites, "ieee-css/prod", []string{s + "_IEEE_CSS__PROD", s + "_IEEE_CSS__", s + "_PROD", s}},
+		{sites, "ieee-css/pr-12", []string{s + "_IEEE_CSS__PR_12", s + "_IEEE_CSS__PR", s + "_IEEE_CSS__", s + "_PR_12", s + "_PR", s}},
 		{plain, "prod", []string{s + "_PROD", s}},
 		{plain, "pr-12", []string{s + "_PR_12", s + "_PR", s}},
 	} {
@@ -511,7 +514,7 @@ func TestServerVarsOrder(t *testing.T) {
 			projectEnv := func(k string) (string, bool) { v, ok := vars[k]; return v, ok }
 			tg, err := LoadTarget(c.dir, c.addr, projectEnv)
 			if first < 0 {
-				want := "set " + s + ", " + s + "_PROD for prod at any instance, or " + s + "_IEEE_CSS__PROD for ieee-css/prod alone"
+				want := "set " + s + ", " + s + "_PROD for prod at any instance, " + s + "_IEEE_CSS__ for ieee-css at any environment, or " + s + "_IEEE_CSS__PROD for ieee-css/prod alone"
 				switch {
 				case err == nil || err.Error() != "no server for @"+c.addr:
 					t.Errorf("%s, none set: %v, want no server", c.addr, err)
@@ -530,7 +533,7 @@ func TestServerVarsOrder(t *testing.T) {
 	write(t, filepath.Join(sites, ConfigFile), "project: sites\ninstances: true\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n")
 	vars := map[string]string{s + "_IEEE_CSS__DEV": "vm-dev", s + "_IEEE_CSS__PROD": "vm-prod", s + "_PROD": "vm-any"}
 	projectEnv := func(k string) (string, bool) { v, ok := vars[k]; return v, ok }
-	for _, k := range []string{s + "_IEEE_CSS__DEV", s + "_DEV"} {
+	for _, k := range []string{s + "_IEEE_CSS__DEV", s + "_DEV", s + "_OTHER__DEV"} {
 		t.Setenv(k, "")
 	}
 	if tg, err := LoadTarget(sites, "ieee-css/dev", projectEnv); err != nil || tg.Host != "vm-dev" || tg.ParentTarget == nil || tg.ParentTarget.Host != "vm-prod" {
@@ -861,12 +864,13 @@ func TestServers(t *testing.T) {
 	// nowhere; one of another environment, or no instance's, is not.
 	environ := []string{"DEVOPSY_SERVER=vm1", "DEVOPSY_SERVER_STAGING_EU=vm2", "DEVOPSY_SERVER_PR=vm1", "DEVOPSY_SERVER_OTHER=vm3",
 		"DEVOPSY_SERVER_SHOP__PROD=vm4", "DEVOPSY_SERVER_SHOP__PR=vm5", "DEVOPSY_SERVER_SHOP__OTHER=vm6",
-		"DEVOPSY_SERVER___PROD=vm7", "DEVOPSY_SERVER_A__B__PROD=vm8", "DEVOPSY_SERVER_SHOP_PROD=vm9", "OTHER_SHOP__PROD=vm10"}
+		"DEVOPSY_SERVER___PROD=vm7", "DEVOPSY_SERVER_A__B__PROD=vm8", "DEVOPSY_SERVER_SHOP_PROD=vm9", "OTHER_SHOP__PROD=vm10",
+		"DEVOPSY_SERVER_SITE__=vm11", "DEVOPSY_SERVER___=vm12", "DEVOPSY_SERVER_A__B__=vm13"}
 	got, err := Servers(dir, environ)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, " ") != "vm1 vm5 vm4 vm2" {
+	if strings.Join(got, " ") != "vm1 vm11 vm5 vm4 vm2" {
 		t.Errorf("servers: %v", got)
 	}
 }

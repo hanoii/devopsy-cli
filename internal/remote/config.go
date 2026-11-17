@@ -1378,10 +1378,12 @@ func PatternVar(pattern string) string {
 }
 
 // InstanceServerVar is the variable naming the server of an instance's
-// environment, or of a pattern's by its patternName: DEVOPSY_SERVER_, the
-// instance, __ and the environment, each as in EnvironmentVar (ieeecss and
-// prod: DEVOPSY_SERVER_IEEECSS__PROD). Names never hold __ (uids.NameRe),
-// so it never reads as another instance's or environment's.
+// environment, of a pattern's by its patternName, or of any of its
+// environments for env "": DEVOPSY_SERVER_, the instance, __ and the
+// environment, each as in EnvironmentVar (ieeecss and prod:
+// DEVOPSY_SERVER_IEEECSS__PROD; ieeecss alone: DEVOPSY_SERVER_IEEECSS__).
+// Names never hold __ (uids.NameRe), so it never reads as another
+// instance's or environment's.
 func InstanceServerVar(instance, env string) string {
 	return ServerVar + "_" + varPart(instance) + "__" + varPart(env)
 }
@@ -1389,8 +1391,8 @@ func InstanceServerVar(instance, env string) string {
 // ServerVars are the variables that name the server of instance's ("" for
 // none) environment env, matched by pattern ("" for none), the first set
 // winning: the instance's environment, the instance's pattern, the
-// environment at any instance, the pattern at any instance, then
-// DEVOPSY_SERVER.
+// instance at any environment, the environment at any instance, the
+// pattern at any instance, then DEVOPSY_SERVER.
 func ServerVars(instance, env, pattern string) []string {
 	var vars []string
 	name := patternName(pattern)
@@ -1399,6 +1401,7 @@ func ServerVars(instance, env, pattern string) []string {
 		if name != "" {
 			vars = append(vars, InstanceServerVar(instance, name))
 		}
+		vars = append(vars, InstanceServerVar(instance, ""))
 	}
 	vars = append(vars, EnvironmentVar(env))
 	if name != "" {
@@ -1408,10 +1411,11 @@ func ServerVars(instance, env, pattern string) []string {
 }
 
 // Servers lists the servers a project's environments name, without an
-// address, in environ (KEY=value): DEVOPSY_SERVER, then each environment's
+// address, in environ (KEY=value): DEVOPSY_SERVER, the instances' at any
+// environment (DEVOPSY_SERVER_<INSTANCE>__), then each environment's
 // variable (a pattern's, DEVOPSY_SERVER_PR for pr-*) and its instances'
-// (DEVOPSY_SERVER_<INSTANCE>__PR), which no config lists, so they are
-// found by name. Each once, in that order.
+// (DEVOPSY_SERVER_<INSTANCE>__PR). No config lists the instances, so
+// their variables are found by name. Each once, in that order.
 func Servers(projectDir string, environ []string) ([]string, error) {
 	c, err := LoadConfig(projectDir)
 	if err != nil {
@@ -1427,6 +1431,15 @@ func Servers(projectDir string, environ []string) ([]string, error) {
 	}
 	sort.Strings(names)
 	vars := []string{ServerVar}
+	instanceVars := func(suffix string) {
+		for _, n := range names {
+			rest, server := strings.CutPrefix(n, ServerVar+"_")
+			if inst, ok := strings.CutSuffix(rest, suffix); server && ok && varPartRe.MatchString(inst) {
+				vars = append(vars, n)
+			}
+		}
+	}
+	instanceVars("__")
 	keys := make([]string, 0, len(c.Environments))
 	for k := range c.Environments {
 		keys = append(keys, k)
@@ -1440,13 +1453,7 @@ func Servers(projectDir string, environ []string) ([]string, error) {
 			}
 		}
 		vars = append(vars, EnvironmentVar(name))
-		suffix := "__" + varPart(name)
-		for _, n := range names {
-			rest, server := strings.CutPrefix(n, ServerVar+"_")
-			if inst, ok := strings.CutSuffix(rest, suffix); server && ok && varPartRe.MatchString(inst) {
-				vars = append(vars, n)
-			}
-		}
+		instanceVars("__" + varPart(name))
 	}
 	var servers []string
 	for _, name := range vars {
@@ -2000,7 +2007,7 @@ func ReleaseEnvironment(projectDir string) (*Target, error) {
 func noServer(addr, cmd, instance, env string) error {
 	set := "set " + ServerVar + ", or " + EnvironmentVar(env) + " for " + env + " alone"
 	if instance != "" {
-		set = "set " + ServerVar + ", " + EnvironmentVar(env) + " for " + env + " at any instance, or " + InstanceServerVar(instance, env) + " for " + instance + "/" + env + " alone"
+		set = "set " + ServerVar + ", " + EnvironmentVar(env) + " for " + env + " at any instance, " + InstanceServerVar(instance, "") + " for " + instance + " at any environment, or " + InstanceServerVar(instance, env) + " for " + instance + "/" + env + " alone"
 	}
 	return &report.Failure{Msg: "no server for @" + addr, Remedies: []report.Remedy{
 		report.Fix("name it in the address:", cmd),

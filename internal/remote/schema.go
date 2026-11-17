@@ -125,8 +125,8 @@ environments:
     # first release copies prod's data (shared/mnt) once current, before
     # its run step; devopsy @staging --sync copies it again. Resolved at
     # the child's instance, on the server its variables name
-    # (DEVOPSY_SERVER_<INSTANCE>__PROD, DEVOPSY_SERVER_PROD, DEVOPSY_SERVER),
-    # never the child's. Per environment only (a pattern
+    # (DEVOPSY_SERVER_<INSTANCE>__PROD, DEVOPSY_SERVER_<INSTANCE>__,
+    # DEVOPSY_SERVER_PROD, DEVOPSY_SERVER), never the child's. Per environment only (a pattern
     # too), never in defaults:, and never itself.
     parent: prod
   "pr-*":
@@ -141,9 +141,10 @@ environments:
 # What the target leaves out comes from variables, in the environment or
 # .devopsy/.env, names upper case and - as _: the server from
 # DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT>, the instance's pattern's
-# (pr-*: DEVOPSY_SERVER_<INSTANCE>__PR), DEVOPSY_SERVER_<ENVIRONMENT> at any
-# instance, the pattern's (DEVOPSY_SERVER_PR), then DEVOPSY_SERVER; the
-# instance from DEVOPSY_INSTANCE.
+# (pr-*: DEVOPSY_SERVER_<INSTANCE>__PR), DEVOPSY_SERVER_<INSTANCE>__ at any
+# environment, DEVOPSY_SERVER_<ENVIRONMENT> at any instance, the pattern's
+# (DEVOPSY_SERVER_PR), then DEVOPSY_SERVER; the instance from
+# DEVOPSY_INSTANCE.
 #
 # On a server, an environment lives in <project>/[<instance>/]<environment>
 # under the release root, named <project>[-<instance>]-<environment>.

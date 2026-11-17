@@ -535,8 +535,8 @@ reachable from the parent's as ssh -G resolves it ` + vocab.Operator.On + `
 (no ProxyCommand or ProxyJump). Both sides are project users, or neither.
 
 The parent comes from the child's instance and the usual server variables
-(DEVOPSY_SERVER_<INSTANCE>__<PARENT>, DEVOPSY_SERVER_<PARENT>,
-DEVOPSY_SERVER), never the child's server:
+(DEVOPSY_SERVER_<INSTANCE>__<PARENT>, DEVOPSY_SERVER_<INSTANCE>__,
+DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), never the child's server:
 without one the sync fails naming the variable, or --from names it.
 Before copying, the variables the parent's inherit: names are read from
 its server's .env files (shared/.env, its inherit.env, the instance's,
@@ -1029,7 +1029,8 @@ or ~/.ssh/config names: root's ~/.ssh/authorized_keys must have your key.
 The project's environments on the server, as addresses: <environment>, or
 <instance>/<environment> for a project with instances: true. The project is
 the checkout's, or an alias's. Without a target, on every server
-DEVOPSY_SERVER and the environments' DEVOPSY_SERVER_<ENVIRONMENT> and
+DEVOPSY_SERVER, the instances' DEVOPSY_SERVER_<INSTANCE>__ and the
+environments' DEVOPSY_SERVER_<ENVIRONMENT> and
 DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT> name (the caller's environment, then
 .devopsy/.env).
 `,
@@ -1459,10 +1460,12 @@ A target's server, when the address has none, is the first of these set
 (the caller's environment, then .devopsy/.env; names upper case, - as _):
     DEVOPSY_SERVER_<INSTANCE>__<ENVIRONMENT>
     DEVOPSY_SERVER_<INSTANCE>__<PATTERN>     pr-*: DEVOPSY_SERVER_<INSTANCE>__PR
+    DEVOPSY_SERVER_<INSTANCE>__              at any environment
     DEVOPSY_SERVER_<ENVIRONMENT>             at any instance
     DEVOPSY_SERVER_<PATTERN>                 pr-*: DEVOPSY_SERVER_PR
     DEVOPSY_SERVER
-  Its instance is DEVOPSY_INSTANCE's; devopsy @<target> --debug shows which.
+  Its instance is DEVOPSY_INSTANCE's, and which one named the server shows
+  in devopsy --debug environments <target>.
 
 `)
 	if projectDir == "" {
