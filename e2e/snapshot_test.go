@@ -78,7 +78,7 @@ func TestSnapshotTakeRestore(t *testing.T) {
 		t.Fatalf("changing the data: %s", out)
 	}
 	out, code = op(t, dir, "devopsy @prod --snapshots restore "+m[1]+" --yes")
-	if code != 0 || !strings.Contains(out, "snapshot "+m[1]+"'s data is in") {
+	if code != 0 || !strings.Contains(out, "snapshot "+m[1]+"'s data restored (") {
 		t.Fatalf("restore (%d):\n%s", code, out)
 	}
 	table, _ := srv(t, "docker run --rm -v snaptake-prod_dbdata:/d busybox:1.37 cat /d/table")

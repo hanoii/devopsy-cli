@@ -2658,8 +2658,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		return stayDown("the snapshot's data is in, but " + err.Error())
 	}
 	// The mark and the record stay until the run step has started the set
-	// (restored): a shell killed before it leaves the set down, marked.
-	report.Info("snapshot " + id + "'s data is in")
+	// (restored): a shell killed before it leaves the set down, marked. The
+	// script says the data restored, with its time.
 	return 0
 }
 
