@@ -55,7 +55,13 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if err != nil {
 		return "", images.Image{}, err
 	}
-	refused := fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
+	// A project user logs in on the server alone (docker login, through the door), so the
+	// way out is said in words: a command offered would run on the operator's machine.
+	refused := &report.Failure{
+		Msg:      "refused: " + ref + ": its registry gives this project's logins no such image",
+		Details:  []string{"no login to it, a password changed since the login, or no image by that name and tag"},
+		Remedies: []report.Remedy{report.Fix("log in to the registry as " + s.policy.User + " on the server (docker login, the password on stdin), or correct the image's name, then try again")},
+	}
 	g := s.claimCut()
 	defer g.end()
 	m, err := s.platformManifest(g, ref, d)

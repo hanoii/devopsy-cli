@@ -54,11 +54,14 @@ func (s *doorSide) pull(config string, file map[string]any, profiles, dir string
 			// A registry's failure, not the door's refusal: said as one, an error when it
 			// ends the pull and a warning when the pull goes on past it.
 			said := strings.TrimPrefix(err.Error(), "refused: ")
+			level := report.WarnLevel
 			if !plan.IgnoreFailures {
-				report.Error(said)
+				level = report.ErrorLevel
+			}
+			report.Say(level, said, report.Details(err), report.Remedies(err)...)
+			if !plan.IgnoreFailures {
 				return 1
 			}
-			report.Warn(said)
 			continue
 		}
 		if timer != nil {
