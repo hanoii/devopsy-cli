@@ -20,6 +20,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // runProjectUsers implements devopsy @<server> --project-users [list | add <project> |
@@ -544,8 +545,10 @@ func leftGroupID(group, who string) (gid int, left bool, err error) {
 }
 
 // sayAdded says on l that add made project's user who, its entry at entry, or that it was there
-// already (had: its entry and its Unix user), with the way to its keys in words while it has
-// none (keys), on ref as typed when there is one: the key's file is the operator's to name.
+// already (had: its entry and its Unix user), with the ways to its keys while it has none
+// (keys), on ref as typed when there is one: adding a key in words, its file being the
+// operator's to name, and a pair made for it (--ssh-keys-generate) as a command, in words too
+// with no address known.
 func sayAdded(l *report.Logger, who, project, entry, ref string, had, keys bool) {
 	msg := "project user " + who + " for " + project + ", its entry in " + entry
 	if had {
@@ -554,10 +557,13 @@ func sayAdded(l *report.Logger, who, project, entry, ref string, had, keys bool)
 	var remedies []report.Remedy
 	if !keys {
 		way := "add its keys with --ssh-keys --for " + project + " add and each public key's file"
+		pair := "or make a pair for it, its public half added"
+		generate := report.Hint(pair + ", with --ssh-keys-generate --for " + project + " " + vocab.Operator.From + ", by this server's address")
 		if ref != "" {
 			way += ", on @" + ref
+			generate = report.Hint(pair+":", "devopsy @"+ref+" --ssh-keys-generate --for "+project)
 		}
-		remedies = append(remedies, report.Hint(way))
+		remedies = append(remedies, report.Hint(way), generate)
 	}
 	l.Say(report.InfoLevel, msg, nil, remedies...)
 }
