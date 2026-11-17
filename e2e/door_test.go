@@ -211,10 +211,16 @@ func doorRemoveClaims(t *testing.T, user string) {
 // doorUser is doorUserOn the lane's door server.
 func doorUser(t *testing.T, project string) string { return doorUserOn(t, "doorsrv", project) }
 
+// doorReboot is a door server's reboot, as far as the door goes: sshd takes a drop-in the
+// marker says it has not, and the marker goes as a boot would take it. A script that clears
+// the marker does it through this, or sshd keeps running without the drop-in for every later
+// test on the lane, its project users unable to log in.
+const doorReboot = `if [ -e ` + remote.DoorRebootMarker + ` ]; then kill -HUP "$(cat /run/sshd.pid)"; rm -f ` + remote.DoorRebootMarker + ` /run/reboot-required /run/reboot-required.pkgs; fi`
+
 // doorUserOn makes a project's user on a door server the way an admin does, from the
 // operator: --project-users add, then the operator's key for it (--ssh-keys --for), then the
 // admin's joinable: [shared] in its entry. The first add puts the door on the host, sshd's
-// part taken at a reboot: here sshd reloads, and the marker goes as a boot would take it.
+// part taken at a reboot (doorReboot).
 func doorUserOn(t *testing.T, alias, project string) string {
 	t.Helper()
 	user := "devopsy-" + project
@@ -227,7 +233,7 @@ func doorUserOn(t *testing.T, alias, project string) string {
 	}
 	entry := "/home/devopsy/.config/devopsy/door/users/" + user + ".yaml"
 	if out, code := execIn(t, []string{"-w", "/", name}, `set -e
-if [ -e /run/devopsy-door-reboot ]; then kill -HUP "$(cat /run/sshd.pid)"; rm -f /run/devopsy-door-reboot /run/reboot-required /run/reboot-required.pkgs; fi
+`+doorReboot+`
 grep -q joinable `+entry+` || echo 'joinable: [shared]' >>`+entry); code != 0 {
 		t.Fatalf("the reboot and the entry on %s (%d): %s", alias, code, out)
 	}
@@ -1999,9 +2005,9 @@ sshd -t`); code != 0 {
 		t.Fatalf("taking the Include out (%d): %s", code, out)
 	}
 	t.Cleanup(func() {
-		root(`cp /tmp/sshd_config.doorinc /etc/ssh/sshd_config; rm -f /run/devopsy-door-reboot /run/reboot-required /run/reboot-required.pkgs`)
+		root("cp /tmp/sshd_config.doorinc /etc/ssh/sshd_config; " + doorReboot)
 		op(t, "/", "devopsy @devopsy@doorsrv2: --project-users remove "+project)
-		root("pkill -u " + user + "; userdel -r " + user + " 2>/dev/null; true")
+		root("pkill -u " + user + "; userdel -r " + user + " 2>/dev/null; rm -f /home/devopsy/.config/devopsy/door/users/" + user + ".yaml; true")
 	})
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code == 0 || !strings.Contains(out, "sshd does not take /etc/ssh/sshd_config.d/devopsy.conf for "+user) {
 		t.Errorf("add on a host whose sshd does not read the drop-in (%d): %s", code, out)

@@ -307,6 +307,10 @@ func resetLane(l lane) {
 	// The door server's mounts a test made below the door's space (TestDoorReflinks' XFS), never
 	// the space's own: none there when the lane has no door server.
 	_, _ = docker("exec", "devopsy-e2e-door-"+l.run, "sh", "-c", "rm -f /etc/devopsy/deploy-user; for m in $(awk '$2 ~ \"^"+doorSpace+"/.\" || $2 ~ \"^/var/tmp/door\" {print $2}' /proc/mounts | sort -r); do umount -l \"$m\"; done; true")
+	// A door's sshd part a test put and left untaken (doorReboot), on either door server.
+	for _, name := range []string{"devopsy-e2e-door-" + l.run, "devopsy-e2e-doorsrv2-" + l.run} {
+		_, _ = docker("exec", name, "sh", "-c", doorReboot+"; true")
+	}
 }
 
 // listTests lists the tests -test.run selects, never -test.skip's.
