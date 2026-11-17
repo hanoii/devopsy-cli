@@ -58,8 +58,12 @@ func TestMntOwnersRelease(t *testing.T) {
 		t.Errorf("a leftover under the owners' container's own name not removed before it runs:\n%s", docker)
 	}
 	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache\n", 0o644)
-	switched, giving, deployed := strings.Index(out, "current is now"), strings.Index(out, "devopsy: giving mnt/cache to 10001:10001, mnt/storage to 10001:10001"), strings.Index(out, "deploy in shop-prod")
-	if code != 0 || switched < 0 || giving < switched || deployed < giving {
+	// Each entry said as its container starts giving, none that is its owner's already.
+	if out, code := s.run([]string{"FAKE_OWNED=1"}, "@prod", "--release"); code != 0 || strings.Contains(out, "giving mnt/") {
+		t.Errorf("a release onto entries their owner's already says them (%d):\n%s", code, out)
+	}
+	switched, giving, storage, deployed := strings.Index(out, "current is now"), strings.Index(out, "devopsy: giving mnt/cache to 10001:10001\n"), strings.Index(out, "devopsy: giving mnt/storage to 10001:10001\n"), strings.Index(out, "deploy in shop-prod")
+	if code != 0 || switched < 0 || giving < switched || storage < giving || deployed < storage {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	for _, want := range []string{
@@ -405,14 +409,14 @@ func TestMntOwnersInherited(t *testing.T) {
 	prodEnv := filepath.Join(s.root, "shop", "prod", "shared", ".env")
 	write(t, prodEnv, "FAKE_APP_OWNER=10001:10001\n", 0o600)
 	s.releaseProd([]string{"FAKE_APP_MOUNT2=/cache"})
-	if out, code := s.run([]string{"FAKE_APP_MOUNT2=/cache"}, "@dev", "--release"); code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 10001:10001, mnt/storage to 10001:10001") {
+	if out, code := s.run([]string{"FAKE_APP_MOUNT2=/cache"}, "@dev", "--release"); code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 10001:10001\ndevopsy: giving mnt/storage to 10001:10001") {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	s.logs()
 	write(t, prodEnv, "FAKE_APP_OWNER=20002:20002\n", 0o600)
 	out, code := s.run([]string{"FAKE_APP_MOUNT2=/cache"}, "@dev", "--release-sync", "--yes")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 20002:20002, mnt/storage to 20002:20002") || !strings.Contains(docker, "chown_entry \"$1\" \"$2\"\n sh cache 20002:20002\n") || !strings.Contains(docker, "--chown=20002:20002 /src/storage/ /dst/storage/") || strings.Contains(docker, "10001:10001") {
+	if code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 20002:20002\ndevopsy: giving mnt/storage to 20002:20002") || !strings.Contains(docker, "chown_entry \"$1\" \"$2\"\n sh cache 20002:20002\n") || !strings.Contains(docker, "--chown=20002:20002 /src/storage/ /dst/storage/") || strings.Contains(docker, "10001:10001") {
 		t.Errorf("a release that syncs, its owner inherited (%d):\n%s\n%s", code, out, docker)
 	}
 	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "inherit.env")); got != "FAKE_APP_OWNER='20002:20002'\n" {
@@ -517,7 +521,8 @@ func TestMntOwnersLocal(t *testing.T) {
 // scan of an entry another machine wrote would, then asks the real one
 // what is left (GNU's -ignore_readdir_race left out: macOS's has none),
 // or, with FOREIGN=<name>, takes the files of that name for another's
-// in that look too.
+// in that look too; with OWNED, an entry all its owner's, the first look
+// finds nothing, and nothing is said or given.
 // A FIFO in the entry is never given away nor counted as left with
 // another owner (review of 2026-10-23, round 4: the scan gave every kind
 // of file away, a device node to the entry's owner included).
@@ -529,10 +534,13 @@ func TestMntScripts(t *testing.T) {
 		}
 	}
 	tmp := t.TempDir()
-	mnt, bin := filepath.Join(tmp, "mnt"), filepath.Join(tmp, "bin")
+	mnt, bin, looked := filepath.Join(tmp, "mnt"), filepath.Join(tmp, "bin"), filepath.Join(tmp, "looked")
 	write(t, filepath.Join(bin, "find"), `#!/bin/sh
 p=$1; shift
+# The first look of a run (ownEntry's) and the chown's take every file
+# for another's; the look for what is left asks the real one.
 case " $* " in *" -exec "*) foreign=1 ;; *) foreign=${FOREIGN:-} ;; esac
+[ -n "${OWNED:-}" ] || [ -e '`+looked+`' ] || { : >'`+looked+`'; foreign=1; }
 [ -z "$foreign" ] || [ "$foreign" = 1 ] || set -- -name "$foreign" "$@"
 u=
 for a; do
@@ -564,6 +572,7 @@ exit ${st:-0}
 		write(t, filepath.Join(mnt, "storage", "tmp-123"), "x\n", 0o644)
 		chowned := filepath.Join(tmp, "chowned")
 		os.Remove(chowned)
+		os.Remove(looked)
 		cmd := exec.Command("sh", "-c", script, "sh", "storage", c.owner)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned, "FIND_FAIL=" + c.findFail}
 		out, err := cmd.CombinedOutput()
@@ -578,6 +587,15 @@ exit ${st:-0}
 		}
 	}
 
+	// An entry all its owner's already: nothing printed, so nothing said, and no chown.
+	chowned := filepath.Join(tmp, "chowned")
+	os.Remove(chowned)
+	cmd := exec.Command("sh", "-c", script, "sh", "storage", own)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned, "OWNED=1"}
+	if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 || fileExists(chowned) {
+		t.Errorf("an entry its owner's already: %v, chowned %v:\n%s", err, fileExists(chowned), out)
+	}
+
 	// A FIFO (as a device node, which only root can make) keeps its
 	// owner, and is not left with another either.
 	os.RemoveAll(filepath.Join(mnt, "storage"))
@@ -585,9 +603,9 @@ exit ${st:-0}
 	if err := syscall.Mkfifo(filepath.Join(mnt, "storage", "fifo"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	chowned := filepath.Join(tmp, "chowned")
 	os.Remove(chowned)
-	cmd := exec.Command("sh", "-c", script, "sh", "storage", own)
+	os.Remove(looked)
+	cmd = exec.Command("sh", "-c", script, "sh", "storage", own)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned, "FOREIGN=fifo"}
 	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(readString(chowned), "fifo") {
 		t.Errorf("a FIFO in the entry: %v, given away: %q\n%s", err, readString(chowned), out)
@@ -606,13 +624,14 @@ exit ${st:-0}
 		write(t, filepath.Join(mnt, "storage", "d"+strconv.Itoa(i), "f"), "x\n", 0o644)
 	}
 	calls := filepath.Join(tmp, "calls")
+	os.Remove(looked)
 	write(t, filepath.Join(bin, "chown"), "#!/bin/sh\necho >> \"$CALLS\"\n", 0o755)
 	cmd = exec.Command("sh", "-c", script, "sh", "storage", own)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CALLS=" + calls}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("a tree of many directories: %v\n%s", err, out)
 	}
-	if n := strings.Count(readString(calls), "\n"); n > 10 {
+	if n := strings.Count(readString(calls), "\n"); n == 0 || n > 10 {
 		t.Errorf("a tree of 200 directories given away in %d chowns", n)
 	}
 }

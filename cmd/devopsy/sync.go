@@ -1536,7 +1536,7 @@ func syncClone(ctx context.Context, env, base, id string, src dataSet) (string, 
 		}
 		return "", false
 	}
-	report.Info("the data clones by reflinks: cloned, the services start again, the copy made from the clone")
+	report.Info("the data clones by reflinks: the services start again while the copy is made from the clone")
 	return dir, true
 }
 

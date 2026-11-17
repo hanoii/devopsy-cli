@@ -316,7 +316,8 @@ missing) it says by its [code](codes.md), with no fix to run.
 
 A project user's compose file is an ordinary one, within these rules.
 The door names what it refuses, and logs each refusal in
-`<space>/refused.log`.
+`<space>/refused.log`, one line each: its time in UTC, the project
+user, the reason and the request.
 
 - Every service runs as the uid the server gives its environment, or
   its project's, as uid and gid both:

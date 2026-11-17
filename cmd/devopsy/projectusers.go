@@ -38,6 +38,10 @@ func runProjectUsers(t *remote.Target, args []string) int {
 		return runProjectUsersSetup(t, args[1:])
 	}
 	if code := projectUsersArgs(args, false); code != 0 {
+		// list and add take a set number of words: the first past them is the one refused.
+		if n := map[string]int{"list": 1, "add": 2}[args[0]]; n > 0 && len(args) > n && (n == 1 || remote.ValidName(args[1])) {
+			return takesNo(1, "--project-users "+args[0], args[n], usage)
+		}
 		return fail(usage)
 	}
 	if len(args) > 2 {

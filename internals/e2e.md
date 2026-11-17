@@ -28,5 +28,5 @@ Code: `e2e/` (`main_test.go` holds the lanes, the containers and the helpers; `D
 
 ## By hand
 
-- What only a real setup shows (Traefik, certificates, the templates) is checked by hand on a throwaway Linux machine set up with devopsy-server and a build of the checkout installed in it (for example an OrbStack Debian 13 machine, `orb create debian:trixie devopsy-test`, a linux/arm64 build, and targets like `@devopsy@devopsy-test@orb:prod`, since OrbStack's SSH needs no keys), deleted afterwards.
+- What only a real setup shows (Traefik, certificates, the templates) is checked by hand on a throwaway Linux machine set up with devopsy-server and a build of the checkout installed in it (for example an OrbStack Debian 13 machine, `orb create debian:trixie devopsy-test`, with `openssh-server`, a key of its own for the deploy user and each project user, a linux/arm64 build, and targets by the machine's address, `@devopsy@<address>:prod`, since devopsy takes no `<user>@<machine>@orb` server and OrbStack's own SSH stops at a hidden `/proc`, internals/gotchas.md), deleted afterwards.
 - The hand test releases the Traefik template, then a template importing from it, and checks `devopsy-target.env`, `--debug imports`, the Traefik `domains` command, an instance, a pattern environment, `--destroy`, a rollback and a release with Traefik stopped.

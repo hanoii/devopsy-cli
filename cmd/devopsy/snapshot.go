@@ -1810,8 +1810,13 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 		return 0
 	}
 	if len(args) > 0 {
-		report.Error("usage: devopsy @" + targetRef(t) + " --snapshot")
-		return 2
+		var hint []report.Remedy
+		// A word of --snapshots' (restore, remove, export, import): said in words, since its
+		// id is the operator's to choose.
+		if slices.Contains([]string{"restore", "remove", "export", "import"}, args[0]) {
+			hint = append(hint, report.Hint("--snapshots "+args[0]+" does that, with the snapshot's id"))
+		}
+		return takesNo(2, "--snapshot", args[0], "usage: devopsy @"+targetRef(t)+" --snapshot", hint...)
 	}
 	if !t.SnapshotsManual.Enabled {
 		report.Error("manual snapshots are off for " + t.Name + ": its config's snapshots: manual is false")
@@ -2653,8 +2658,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		return stayDown("the snapshot's data is in, but " + err.Error())
 	}
 	// The mark and the record stay until the run step has started the set
-	// (restored): a shell killed before it leaves the set down, marked.
-	report.Info("snapshot " + id + "'s data is in")
+	// (restored): a shell killed before it leaves the set down, marked. The
+	// script says the data restored, with its time.
 	return 0
 }
 

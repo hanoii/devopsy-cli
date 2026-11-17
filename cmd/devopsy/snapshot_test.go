@@ -231,7 +231,7 @@ func TestSnapshotRestoreSpaceWarns(t *testing.T) {
 	out, code = s.run([]string{"FAKE_FREE_KB=0", "FAKE_DU=0"}, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
 	docker, _ := s.logs()
 	warned := strings.Index(out, "'s data may not fit on fakefs: ")
-	if code != 0 || warned < 0 || !strings.Contains(out, " free with what it replaces (sparse files counted whole)") || !strings.Contains(out, "snapshot "+m[1]+"'s data is in") {
+	if code != 0 || warned < 0 || !strings.Contains(out, " free with what it replaces (sparse files counted whole)") || !strings.Contains(out, "snapshot "+m[1]+"'s data restored (") {
 		t.Errorf("a restore without room (%d):\n%s", code, out)
 	}
 	if first := strings.Index(out, "restoring mnt/"); !strings.Contains(docker, "-space ") || first < 0 || warned > first {

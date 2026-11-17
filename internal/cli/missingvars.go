@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -82,7 +83,12 @@ func MissingVars(p *loadedProject) (missing []string, said []string, err error) 
 	} else if stderr == "" {
 		return nil, nil, fmt.Errorf("docker compose config: %v", err)
 	} else {
-		said = strings.Split(stderr, "\n")
+		// Compose says a variable's warning once per reading of the files.
+		for _, line := range strings.Split(stderr, "\n") {
+			if !slices.Contains(said, line) {
+				said = append(said, line)
+			}
+		}
 	}
 	out, _, err := composeOut(p, "config", "--variables", "--format", "json")
 	if err != nil {
@@ -99,6 +105,12 @@ func MissingVars(p *loadedProject) (missing []string, said []string, err error) 
 	}
 	sort.Strings(missing)
 	return missing, said, nil
+}
+
+// VarsSet is the --vars set of keys, each by its name: a fix that works
+// when copied, asking each value.
+func VarsSet(keys []string) string {
+	return "--vars set " + strings.Join(keys, " ")
 }
 
 // composeOut runs compose as p's commands do, its files and environment, the docker of
@@ -167,7 +179,7 @@ func missingVars(p *loadedProject) error {
 	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
-	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On("--vars set <KEY>..."); cmd != "" {
+	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On(VarsSet(missing)); cmd != "" {
 		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmd)
 	}
 	return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose requires variables that are not set:", Details: lines, Remedies: []report.Remedy{fix}}}

@@ -232,10 +232,13 @@ func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string,
 // sayApplied says said, and what applies a change of t's variables, from
 // what the server's check found (remote.VarsApplied, ParseVarsApplied).
 func sayApplied(t *remote.Target, said, applied string, lines []string) {
-	var what []string
+	var what, missing []string
 	for _, l := range lines {
 		if k, v, ok := strings.Cut(l, " "); ok && (k == "missing" || k == "image") {
 			what = append(what, v)
+			if k == "missing" {
+				missing = append(missing, v)
+			}
 		}
 	}
 	switch applied {
@@ -253,7 +256,7 @@ func sayApplied(t *remote.Target, said, applied string, lines []string) {
 		report.Say(report.InfoLevel, said, append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), report.Hint("to apply it:", "devopsy @"+remote.HintAddress(t)+" --release"))
 	case "4":
 		report.Say(report.WarnLevel, said+": compose now requires variables that are not set, and the next reload or release refuses until they are: "+strings.Join(what, ", "), nil,
-			report.Fix("set them:", "devopsy @"+targetRef(t)+" --vars set <KEY>..."))
+			report.Fix("set them:", "devopsy @"+targetRef(t)+" "+cli.VarsSet(missing)))
 	case "":
 		// The instance's or the project's file, several environments'.
 		report.Info(said, "running containers keep their old values until they are recreated: each environment's --reload applies it")

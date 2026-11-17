@@ -199,7 +199,8 @@ func TestRestoreNoCodeChecksImages(t *testing.T) {
 
 // --vars set and unset on an environment say what applies the change: a
 // reload, a release when the variables now need another image, or
-// nothing until compose's required variables are set; refusing none.
+// nothing until compose's required variables are set, by their names;
+// refusing none.
 // The project's file, several environments', gets the plain line.
 func TestVarsApply(t *testing.T) {
 	t.Parallel()
@@ -222,7 +223,7 @@ func TestVarsApply(t *testing.T) {
 	vars(nil, "unset", "FAKE_DB_IMAGE")
 	write(t, filepath.Join(s.root, "shop", "prod", s.current("prod"), remote.CodeDir, ".devopsy", "compose.yaml"), "services:\n  app:\n    image: x\n    environment: [\"KEY=${REQUIRED:?}\"]\n  db:\n    image: y\n", 0o644)
 	vars([]string{"REQUIRED=1"}, "set", "REQUIRED")
-	if out := vars(nil, "unset", "REQUIRED"); !strings.Contains(out, "warning: unset REQUIRED in") || !strings.Contains(out, "refuses until they are: REQUIRED") {
+	if out := vars(nil, "unset", "REQUIRED"); !strings.Contains(out, "warning: unset REQUIRED in") || !strings.Contains(out, "refuses until they are: REQUIRED") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --vars set REQUIRED\n") {
 		t.Errorf("a required variable unset:\n%s", out)
 	}
 	if out, code := s.run([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); code != 0 || !strings.Contains(out, "each environment's --reload applies it") {

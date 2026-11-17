@@ -67,17 +67,30 @@ const chownEntry = `chown_entry() {
 `
 
 // ownEntry is the util container's script for one owned entry, its
-// arguments the entry and its owner (chownEntry).
-const ownEntry = "set -eu\n" + chownEntry + `chown_entry "$1" "$2"
+// arguments the entry and its owner (chownEntry). It first looks for one
+// path not the owner's, and prints give on stdout before giving anything,
+// so devopsy says the entry only when it changes: nothing found, nothing
+// said or scanned again. A failed look goes on to chown_entry, which says
+// what is left.
+const ownEntry = "set -eu\n" + chownEntry + `first=$(find "/mnt/$1" -ignore_readdir_race \( -type f -o -type d -o -type l \) \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -print -quit 2>/dev/null) || first=x
+[ -n "$first" ] || exit 0
+echo give
+chown_entry "$1" "$2"
 `
 
-// ownerLine says what ownMnt gives away: each entry and its owner.
-func ownerLine(entries []string, owned map[string]string) string {
-	var parts []string
-	for _, e := range entries {
-		parts = append(parts, "mnt/"+e+" to "+owned[e])
+// onFirstWrite runs say at its first write, once: an owners' container
+// prints only when it has something to give, which is when that is said.
+type onFirstWrite struct {
+	say  func()
+	done bool
+}
+
+func (w *onFirstWrite) Write(p []byte) (int, error) {
+	if !w.done {
+		w.done = true
+		w.say()
 	}
-	return "giving " + strings.Join(parts, ", ")
+	return len(p), nil
 }
 
 // ownMnt gives the owned entries of mnt (resolved: on servers
@@ -100,13 +113,17 @@ func ownMnt(ctx context.Context, mnt string, owned map[string]string, c containe
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	report.Info(ownerLine(entries, owned))
 	for i, e := range entries {
 		mount, err := bindMount(filepath.Join(mnt, e), "/mnt/"+e)
 		if err != nil {
 			return err
 		}
-		if err := dockerRunFresh(ctx, c.with(fmt.Sprintf("-%d", i)), "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
+		ec := c.with(fmt.Sprintf("-%d", i))
+		if err := removeNamed(ec.name); err != nil {
+			return err
+		}
+		said := &onFirstWrite{say: func() { report.Info("giving mnt/" + e + " to " + owned[e]) }}
+		if err := dockerRunIO(ctx, ec, nil, said, "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
 			return fmt.Errorf("giving mnt/%s to %s (%s): %w", e, owned[e], cli.MntOwnerLabel, err)
 		}
 	}
@@ -463,6 +480,18 @@ func checkStartBinds(cwd string) error {
 func fail(msg string) int {
 	report.Error(msg)
 	return 1
+}
+
+// takesNo fails a command given a word it does not take: the word named (what takes no
+// word), then usage when there is one and the remedies, exit code returned as the caller
+// had it. A usage alone leaves the reader to find which word was wrong.
+func takesNo(code int, what, word, usage string, remedies ...report.Remedy) int {
+	var details []string
+	if usage != "" {
+		details = []string{usage}
+	}
+	report.Say(report.ErrorLevel, what+" takes no "+word, details, remedies...)
+	return code
 }
 
 // failErr says err whole (report.Fail: its details, fixes and the

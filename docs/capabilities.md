@@ -24,7 +24,10 @@ bold, for the one or two facts people look for (the site's URL, its
 login). A warning is shown in color and makes `--status` exit 3, as
 anything else that needs attention does. The fix, when there is one, is
 a command to copy, shown under the fact after `$ `: a warning's under
-`to fix it:`, any other line's as a hint, a command worth knowing.
+`to fix it:`, any other line's as a hint, a command worth knowing. With
+a target, a command that starts with `devopsy ` and names no address
+gets the target's, as typed (`devopsy gc` shows as `devopsy @prod gc`),
+since it is copied on the operator's machine.
 Lines in a row with the same key are one fact of several lines (several
 URLs, a message on more than one line), at the highest of their levels,
 each command once. devopsy aligns the keys with its own,

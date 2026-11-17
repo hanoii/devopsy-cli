@@ -349,7 +349,7 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 	}
 	// The built service's tag is not in its registry: first by name, it ends the pull.
 	out, code = pull(file, "debug", "pull")
-	if code != 1 || copies() != 0 || !strings.Contains(out, "devopsy: error: ") || readString(log) != "" {
+	if code != 1 || copies() != 0 || !strings.Contains(out, "devopsy: error: "+built+": "+noSuchImage) || !strings.Contains(out, noSuchImageFix) || readString(log) != "" {
 		t.Errorf("a pull whose first claim fails (exit %d, %d copies, logged %q):\n%s", code, copies(), readString(log), out)
 	}
 	if out, code := pull(file, "debug", "pull --ignore-pull-failures"); code != 0 || !strings.Contains(out, built) || !strings.Contains(readString(calls), "imagetools inspect --raw "+private) {
@@ -390,7 +390,7 @@ func TestDoorClaimTakesOnlyWhatItAsked(t *testing.T) {
 	write(t, filepath.Join(dir, "raw", key(private+":big")), `{"config":{},"x":"`+strings.Repeat("x", maxManifest)+`"}`, 0o644)
 	for name, c := range map[string]struct{ ref, want string }{
 		"other bytes by digest": {private + "@" + other, "served other bytes"},
-		"a manifest too large":  {private + ":big", "do not pull it"},
+		"a manifest too large":  {private + ":big", "no such image"},
 	} {
 		if _, _, err := side.claim(c.ref, filepath.Join(dir, "none.json")); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
@@ -693,9 +693,17 @@ func TestDoorClaimChecksAPinnedIndexsBytes(t *testing.T) {
 	}
 }
 
+// noSuchImage and noSuchImageFix are what a claim its registry gives the project's logins
+// nothing for says, to a project user that can only log in on the server: what may be wrong
+// (no login, a password changed since, no such image) and the way out, in words.
+const (
+	noSuchImage    = "its registry gives this project's logins no such image\ndevopsy: | no login to it, a password changed since the login, or no image by that name and tag\n"
+	noSuchImageFix = "devopsy: | to fix it:\ndevopsy: | log in to the registry as devopsy-shop on the server (docker login, the password on stdin), or correct the image's name, then try again\n"
+)
+
 // Under --ignore-pull-failures the pull says each failed claim as a warning and exits 0: an
 // error is what fails the command, and a line in red in a release that succeeded reads as a
-// failure.
+// failure; with what may be wrong and the way out, as the error has.
 func TestDoorPullPastFailuresWarns(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -710,7 +718,7 @@ func TestDoorPullPastFailuresWarns(t *testing.T) {
 	if err != nil && !errors.As(err, &exit) {
 		t.Fatal(err)
 	}
-	if c.ProcessState.ExitCode() != 0 || strings.Contains(string(out), "devopsy: error: ") || !strings.Contains(string(out), "devopsy: warning: ") {
+	if c.ProcessState.ExitCode() != 0 || strings.Contains(string(out), "devopsy: error: ") || !strings.Contains(string(out), "devopsy: warning: registry.example.com/gone:1: "+noSuchImage) || !strings.Contains(string(out), noSuchImageFix) {
 		t.Errorf("a pull past its failures (exit %d) says:\n%s", c.ProcessState.ExitCode(), out)
 	}
 }

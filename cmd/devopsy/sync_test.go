@@ -430,10 +430,12 @@ case "$*" in
   # owner's already (nothing printed is no change).
   "run --rm --name devopsy-owners-"*"-roots "*)
     [ -z "${FAKE_VOLUME_ROOTS:-}" ] || printf '%s\n' "$FAKE_VOLUME_ROOTS" ;;
-  # The owners' containers, one per entry (devopsy made it).
+  # The owners' containers, one per entry (devopsy made it), each with a
+  # path to give (give, ownEntry's) unless FAKE_OWNED says all is owned.
   # FAKE_OWNERS_WAIT: each takes until $FAKE_OWNERS_WAIT.go exists.
   "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners-"*|"run --rm --name devopsy-import-"*"-owners-"*)
     if [ -n "${FAKE_OWNERS_WAIT:-}" ]; then : >"$FAKE_OWNERS_WAIT"; n=0; while [ ! -e "$FAKE_OWNERS_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    [ -n "${FAKE_OWNED:-}" ] || echo give
     [ -z "${FAIL_OWNERS:-}" ] || exit "$FAIL_OWNERS" ;;
   "run --rm --name devopsy-sync-"*"-wipe "*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -202,6 +203,7 @@ func statusShow(cwd, projectDir string, running []string) []remote.StatusEntry {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, &out, os.Stderr
 	runErr := cmd.Run()
 	entries, bad := parseStatusShow(out.String())
+	addressCommands(entries, sessionHint(cwd))
 	if len(bad) > 0 {
 		lines := []string{"the status capability printed lines that are not " + statusShowFormat + ":"}
 		for _, b := range bad {
@@ -213,6 +215,23 @@ func statusShow(cwd, projectDir string, running []string) []remote.StatusEntry {
 		entries = append(entries, problem("the status capability failed: "+runErr.Error()))
 	}
 	return entries
+}
+
+// addressCommands gives each devopsy command a capability's entries offer (devopsy gc) the
+// address h has, the one typed in the session, else the release's: a command is copied on
+// the operator's machine, where devopsy gc alone runs the checkout's. One that names an
+// address already, or with no address (no target), stays as written.
+func addressCommands(entries []remote.StatusEntry, h remote.Session) {
+	for i := range entries {
+		for j := range entries[i].Remedies {
+			cmds := entries[i].Remedies[j].Cmds
+			for k, c := range cmds {
+				if args, ok := strings.CutPrefix(c, "devopsy "); ok && !strings.HasPrefix(args, "@") {
+					cmds[k] = cmp.Or(h.On(args), c)
+				}
+			}
+		}
+	}
 }
 
 // statusLevels are the status capability's levels, lowest first.

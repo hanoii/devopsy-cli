@@ -1526,7 +1526,7 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		t.Errorf("a claimed image labelled devopsy.role: %v", err)
 	}
 	for _, image := range []string{"registry.example.com/app:2", "sha256:0123", "blog-prod-web", "blog-prod-web:latest"} {
-		if _, err := start(image); err == nil || !strings.Contains(err.Error(), "its registry logins do not pull it") {
+		if _, err := start(image); err == nil || !strings.Contains(err.Error(), "its registry gives this project's logins no such image") {
 			t.Errorf("%s, another's, ran: %v", image, err)
 		}
 	}
