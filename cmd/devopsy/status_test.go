@@ -155,7 +155,9 @@ func TestStatusScriptNeedsFacts(t *testing.T) {
 
 // With a target, the capability's warning and its fix show under the
 // release and the disks, every key aligned on the longest, the services
-// running given to show, exit 3; --json carries the target, the server,
+// running given to show, exit 3, its command run by the address typed, as
+// it is copied on the operator's machine, and as written without a target;
+// --json carries the target, the server,
 // the release, the disks, the containers with their levels and
 // attention, with the same exit code, and nothing else on stdout.
 func TestStatusTarget(t *testing.T) {
@@ -172,8 +174,12 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	out, code := s.run(warn, "@prod", "--status")
 	if code != statusWarned || !strings.Contains(out, "\nrelease      "+id) || !regexp.MustCompile(`\ndisks        \S+ .* releases `).MatchString(out) ||
 		!strings.Contains(out, "\ncontainers\n  app ") || !strings.Contains(out, "\nurl          https://shop-prod.example\n") ||
-		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  warning: on\n             | to fix it:\n             | $ devopsy maintenance off\n") {
+		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  warning: on\n             | to fix it:\n             | $ devopsy @devopsy@one:prod maintenance off\n") {
 		t.Errorf("--status with a warning on the server (%d):\n%s", code, out)
+	}
+	// Without a target the command stays as written, where it runs.
+	if out, _ := s.run(warn, "--status"); !strings.Contains(out, "| $ devopsy maintenance off\n") {
+		t.Errorf("--status without a target:\n%s", out)
 	}
 	stdout, stderr, code := s.runIO(warn, nil, "@prod", "--status", "--json")
 	var r statusReport
@@ -193,7 +199,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	for _, e := range r.Entries {
 		keys[e.Key] = e
 	}
-	if e := keys["maintenance"]; e.Level != remote.StatusWarning || len(e.Remedies) != 1 || strings.Join(e.Remedies[0].Cmds, " ") != "devopsy maintenance off" {
+	if e := keys["maintenance"]; e.Level != remote.StatusWarning || len(e.Remedies) != 1 || strings.Join(e.Remedies[0].Cmds, " ") != "devopsy @devopsy@one:prod maintenance off" {
 		t.Errorf("the capability's warning in JSON: %+v", e)
 	}
 	if e, ok := keys["disks"]; !ok || e.Level != remote.StatusInfo {
