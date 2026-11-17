@@ -1982,3 +1982,16 @@ func TestLocalRefusalsOfferTheirCommandsAsFixes(t *testing.T) {
 		}
 	}
 }
+
+// An environment with no release steps is shown the same run step in
+// either mode, with no --pull: devopsy fetches the images before the
+// switch, and a project user's door refuses a --pull but never.
+func TestMissingStepsExample(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{remote.ModeImage, remote.ModeBuild} {
+		got := missingSteps(&remote.Target{Name: "prod", File: "/p/.devopsy/config.yaml", Mode: mode}, "release")
+		if !strings.Contains(got, "      release: up -d --wait --remove-orphans\n") || strings.Contains(got, "--pull") {
+			t.Errorf("mode %s:\n%s", mode, got)
+		}
+	}
+}
