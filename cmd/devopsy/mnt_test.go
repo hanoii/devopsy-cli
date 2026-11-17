@@ -534,13 +534,13 @@ func TestMntScripts(t *testing.T) {
 		}
 	}
 	tmp := t.TempDir()
-	mnt, bin := filepath.Join(tmp, "mnt"), filepath.Join(tmp, "bin")
+	mnt, bin, looked := filepath.Join(tmp, "mnt"), filepath.Join(tmp, "bin"), filepath.Join(tmp, "looked")
 	write(t, filepath.Join(bin, "find"), `#!/bin/sh
 p=$1; shift
 # The first look of a run (ownEntry's) and the chown's take every file
 # for another's; the look for what is left asks the real one.
 case " $* " in *" -exec "*) foreign=1 ;; *) foreign=${FOREIGN:-} ;; esac
-[ -n "${OWNED:-}" ] || [ -e "$CHOWNED.looked" ] || { : >"$CHOWNED.looked"; foreign=1; }
+[ -n "${OWNED:-}" ] || [ -e '`+looked+`' ] || { : >'`+looked+`'; foreign=1; }
 [ -z "$foreign" ] || [ "$foreign" = 1 ] || set -- -name "$foreign" "$@"
 u=
 for a; do
@@ -572,7 +572,7 @@ exit ${st:-0}
 		write(t, filepath.Join(mnt, "storage", "tmp-123"), "x\n", 0o644)
 		chowned := filepath.Join(tmp, "chowned")
 		os.Remove(chowned)
-		os.Remove(chowned + ".looked")
+		os.Remove(looked)
 		cmd := exec.Command("sh", "-c", script, "sh", "storage", c.owner)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned, "FIND_FAIL=" + c.findFail}
 		out, err := cmd.CombinedOutput()
@@ -604,7 +604,7 @@ exit ${st:-0}
 		t.Fatal(err)
 	}
 	os.Remove(chowned)
-	os.Remove(chowned + ".looked")
+	os.Remove(looked)
 	cmd = exec.Command("sh", "-c", script, "sh", "storage", own)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned, "FOREIGN=fifo"}
 	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(readString(chowned), "fifo") {
@@ -624,13 +624,14 @@ exit ${st:-0}
 		write(t, filepath.Join(mnt, "storage", "d"+strconv.Itoa(i), "f"), "x\n", 0o644)
 	}
 	calls := filepath.Join(tmp, "calls")
+	os.Remove(looked)
 	write(t, filepath.Join(bin, "chown"), "#!/bin/sh\necho >> \"$CALLS\"\n", 0o755)
 	cmd = exec.Command("sh", "-c", script, "sh", "storage", own)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CALLS=" + calls}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("a tree of many directories: %v\n%s", err, out)
 	}
-	if n := strings.Count(readString(calls), "\n"); n > 10 {
+	if n := strings.Count(readString(calls), "\n"); n == 0 || n > 10 {
 		t.Errorf("a tree of 200 directories given away in %d chowns", n)
 	}
 }
