@@ -7,6 +7,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // --release-settings prints the server's settings the scripts read, as the config writes them,
@@ -55,5 +57,36 @@ func TestReleaseSettingsPrints(t *testing.T) {
 	}
 	if out := settings(link + ":/usr/bin:/bin"); !strings.Contains(out, "root="+root+"\n") || !strings.Contains(out, "\nimages="+home+"\n") {
 		t.Errorf("a project user's image lock not in its home:\n%s", out)
+	}
+}
+
+// A project user's --release-settings refuses an environment of another project, naming its
+// own and the fixes, before the script uploads anything; its own project's goes on.
+func TestReleaseSettingsOwnProjectOnly(t *testing.T) {
+	t.Parallel()
+	if err := ownProjectOnly("devopsy-shop", "shop"); err != nil {
+		t.Errorf("its own project refused: %v", err)
+	}
+	if err := ownProjectOnly("deploy", "shop"); err != nil {
+		t.Errorf("a login named for no project refused: %v", err)
+	}
+	for _, other := range []string{"blog", "shop-eu"} {
+		err := ownProjectOnly("devopsy-shop", other)
+		if err == nil {
+			t.Fatalf("%s's environment let through", other)
+		}
+		f, ok := err.(*report.Failure)
+		if !ok {
+			t.Fatalf("not a failure with its fixes: %v", err)
+		}
+		lines := f.Msg
+		for _, r := range f.Remedies {
+			lines += "\n" + r.Text
+		}
+		for _, want := range []string{"devopsy-shop can only work with environments of project shop, not " + other + "'s", "project: shop", "devopsy-" + other} {
+			if !strings.Contains(lines, want) {
+				t.Errorf("no %q in:\n%s", want, lines)
+			}
+		}
 	}
 }

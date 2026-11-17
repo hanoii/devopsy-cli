@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/probe"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -109,6 +110,12 @@ func runReleaseSettings(args []string) int {
 		failErr(err)
 		return remote.SettingsRefusedExit
 	}
+	if len(args) == 2 && asProjectUser() {
+		if err := ownProjectOnly(currentLogin().name, args[0]); err != nil {
+			failErr(err)
+			return remote.SettingsRefusedExit
+		}
+	}
 	r, err := remote.ReleaseSettings()
 	if err != nil {
 		return failErr(err)
@@ -144,4 +151,19 @@ func runReleaseSettings(args []string) int {
 	fmt.Printf("root=%s\nimages=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nfeatures=%s\n", r.Root, images, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
 		remote.FeaturesList())
 	return 0
+}
+
+// ownProjectOnly refuses a project user (its login, me) an environment of a project other
+// than its own, by its name (door.ProjectOfUser), before the script uploads or changes
+// anything: the door would refuse it only once the release is uploaded into the user's home.
+func ownProjectOnly(me, project string) error {
+	own := door.ProjectOfUser(me)
+	if own == "" || own == project {
+		return nil
+	}
+	return &report.Failure{Msg: me + " can only work with environments of project " + own + ", not " + project + "'s",
+		Remedies: []report.Remedy{
+			report.Fix("set project: " + own + " in .devopsy/config.yaml to release this checkout as " + own),
+			report.Fix("release it as " + project + "'s own project user, " + door.UserOf(project) + ", which this server's deploy user adds with --project-users"),
+		}}
 }
