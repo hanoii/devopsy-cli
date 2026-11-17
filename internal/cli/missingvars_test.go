@@ -23,19 +23,21 @@ func fakeCompose(said, vars string) string {
 // --variables lists (a variable an include's env_file sets is listed required, and set);
 // when they do not read, the required variables unset or empty are listed with what
 // compose said, a set one and an optional one left out; when none is, compose's words
-// alone. On a target, the fix names the environment's shared/.env, which --vars set
-// writes, before the other two levels.
+// alone, a line compose said twice once. On a target, the fix names the environment's
+// shared/.env, which --vars set writes, before the other two levels, and sets the
+// variables missing by their names, a command that works when copied.
 func TestMissingVars(t *testing.T) {
 	t.Parallel()
 	vars := `{"TOKEN":{"Required":true},"EMPTY":{"Required":true},"SET":{"Required":true},"OPT":{"Required":false}}`
 	said := "error while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token"
+	warned := `level=warning msg="The TOKEN variable is not set. Defaulting to a blank string."`
 	for _, c := range []struct {
 		name, said, vars string
 		details          []string
 		fix              bool
 	}{
 		{"reads", "", vars, nil, false},
-		{"missing", said, vars, []string{"  EMPTY", "  TOKEN", said}, true},
+		{"missing", warned + "\n" + warned + "\n" + said, vars, []string{"  EMPTY", "  TOKEN", warned, said}, true},
 		{"unreadable", "services.app.ports must be a list", `{"SET":{"Required":true}}`, []string{"services.app.ports must be a list"}, false},
 	} {
 		root := project(t, "tunnel", map[string]string{
@@ -67,7 +69,7 @@ func TestMissingVars(t *testing.T) {
 			}
 			continue
 		}
-		want := report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @vm1:own/prod --vars set <KEY>...")
+		want := report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @vm1:own/prod --vars set EMPTY TOKEN")
 		if len(failure.Remedies) != 1 || failure.Remedies[0].Text != want.Text || len(failure.Remedies[0].Cmds) != 1 || failure.Remedies[0].Cmds[0] != want.Cmds[0] {
 			t.Errorf("%s: fixes %+v\nwant: %+v", c.name, failure.Remedies, want)
 		}
