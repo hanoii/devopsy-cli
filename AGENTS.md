@@ -150,6 +150,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - Help lines fit 80 columns (`TestUsage`).
 - A flag needs an environment, unless `cli.ServerScope` lists it (for example `--shell-host`, `--server-info`, `--upgrade`), which needs only a server (`remote.ServerTarget`): server tasks work before any project is released there.
 - An unknown flag alone is an error naming the nearest flag (`cli.LoneUnknownFlag`, in `Build` and in `runRemote` before connecting); arguments that start with a flag and go on (for example `--profile x up`) go to compose unchecked.
+- A usage error for a word a flag does not take names that word, its usage as a detail (`takesNo`).
 - The bare help is devopsy's own; compose's is `devopsy -- --help` and `devopsy <command> --help`.
 - `@<target> <command> --help` only prints help, resolving the target leniently (`cli.RemoteCommandHelp`, `DescribeTarget`): help never needs a server.
 - A project command says where it runs (`## Run: local|target`, `## Needs: target|server`, `cli.CommandRun`), checked in `Build`, in `runRemote` before connecting and on release steps (`checkStepScopes`).

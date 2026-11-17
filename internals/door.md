@@ -173,5 +173,5 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A sync's rsync daemon has no network, and the door takes only `exec -i` of `DaemonServe` on a container it made; a sync's receive has none either, its rsync over its session (`known.Receive`) into the one entry or volume mounted: no form takes the host's network, so no util container reaches a port of the host's.
 - The door sets its own umask: a caller's comes through sudo.
 - A rendered file goes to compose as an unlinked file (`unlinkedFile`), so nothing of a project's environment stays on disk.
-- What the door refuses goes to `<space>/refused.log`, a vet's refusal too: a real release asks for nothing refused, and `image prune`, the admin's, logs nothing here.
+- What the door refuses goes to `<space>/refused.log`, one line each starting with its time in UTC (`doorRecord`), a vet's refusal too: a real release asks for nothing refused, and `image prune`, the admin's, logs nothing here.
 - Labels under a `door: vets:` prefix go to the admin's program, the rendered file on stdin and the project in `DEVOPSY_DOOR_PROJECT`, and exit 0 allows: devopsy knows no URL (Principles).
