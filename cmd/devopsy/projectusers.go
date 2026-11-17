@@ -547,8 +547,8 @@ func leftGroupID(group, who string) (gid int, left bool, err error) {
 // sayAdded says on l that add made project's user who, its entry at entry, or that it was there
 // already (had: its entry and its Unix user), with the ways to its keys while it has none
 // (keys), on ref as typed when there is one: adding a key in words, its file being the
-// operator's to name, and a pair made for it (--ssh-keys-generate) as a command, in words too
-// with no address known.
+// operator's to name, then a pair made for it (--ssh-keys-generate) and a restricted one for
+// CI (<who>-ci) as commands, in words too with no address known.
 func sayAdded(l *report.Logger, who, project, entry, ref string, had, keys bool) {
 	msg := "project user " + who + " for " + project + ", its entry in " + entry
 	if had {
@@ -557,13 +557,18 @@ func sayAdded(l *report.Logger, who, project, entry, ref string, had, keys bool)
 	var remedies []report.Remedy
 	if !keys {
 		way := "add its keys with --ssh-keys --for " + project + " add and each public key's file"
-		pair := "or make a pair for it, its public half added"
-		generate := report.Hint(pair + ", with --ssh-keys-generate --for " + project + " " + vocab.Operator.From + ", by this server's address")
-		if ref != "" {
-			way += ", on @" + ref
-			generate = report.Hint(pair+":", "devopsy @"+ref+" --ssh-keys-generate --for "+project)
+		pair, ci := "or make a pair for it, its public half added", "or a restricted one, for CI"
+		generate := "--ssh-keys-generate --for " + project
+		restricted := "--ssh-keys-generate " + who + "-ci --for " + project + " --restricted"
+		if ref == "" {
+			remedies = append(remedies, report.Hint(way),
+				report.Hint(pair+", with "+generate+" "+vocab.Operator.From+", by this server's address"),
+				report.Hint(ci+", with "+restricted+", the same way"))
+		} else {
+			remedies = append(remedies, report.Hint(way+", on @"+ref),
+				report.Hint(pair+":", "devopsy @"+ref+" "+generate),
+				report.Hint(ci+":", "devopsy @"+ref+" "+restricted))
 		}
-		remedies = append(remedies, report.Hint(way), generate)
 	}
 	l.Say(report.InfoLevel, msg, nil, remedies...)
 }

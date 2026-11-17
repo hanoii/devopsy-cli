@@ -474,11 +474,13 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 // already, a second add being no failure (it finishes a cut add, brings back a removed user);
 // while the user has no key, the ways to its keys: adding one in words, a key's file being the
 // operator's to name, on the server as typed when the session named it, and a pair made for it
-// (--ssh-keys-generate --for) as a command by that address, in words with no address known.
+// (--ssh-keys-generate --for) and a restricted one for CI as commands by that address, in words
+// with no address known.
 func TestProjectUsersAddSaysTheWayToKeys(t *testing.T) {
 	t.Parallel()
 	way := "devopsy: | add its keys with --ssh-keys --for shop add and each public key's file"
-	generate := "devopsy: | or make a pair for it, its public half added:\ndevopsy: | $ devopsy @devopsy@one: --ssh-keys-generate --for shop\n"
+	generate := "devopsy: | or make a pair for it, its public half added:\ndevopsy: | $ devopsy @devopsy@one: --ssh-keys-generate --for shop\n" +
+		"devopsy: | or a restricted one, for CI:\ndevopsy: | $ devopsy @devopsy@one: --ssh-keys-generate devopsy-shop-ci --for shop --restricted\n"
 	for _, c := range []struct {
 		ref       string
 		had, keys bool
@@ -486,7 +488,8 @@ func TestProjectUsersAddSaysTheWayToKeys(t *testing.T) {
 	}{
 		{"devopsy@one:", false, false, "devopsy: project user devopsy-shop for shop, its entry in /e\n" + way + ", on @devopsy@one:\n" + generate},
 		{"", false, false, "devopsy: project user devopsy-shop for shop, its entry in /e\n" + way + "\n" +
-			"devopsy: | or make a pair for it, its public half added, with --ssh-keys-generate --for shop from the operator's machine, by this server's address\n"},
+			"devopsy: | or make a pair for it, its public half added, with --ssh-keys-generate --for shop from the operator's machine, by this server's address\n" +
+			"devopsy: | or a restricted one, for CI, with --ssh-keys-generate devopsy-shop-ci --for shop --restricted, the same way\n"},
 		{"devopsy@one:", true, false, "devopsy: project user devopsy-shop for shop is there already, its entry in /e\n" + way + ", on @devopsy@one:\n" + generate},
 		{"devopsy@one:", true, true, "devopsy: project user devopsy-shop for shop is there already, its entry in /e\n"},
 	} {
