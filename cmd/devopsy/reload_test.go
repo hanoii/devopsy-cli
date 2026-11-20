@@ -220,7 +220,7 @@ func TestVarsApply(t *testing.T) {
 		}
 		return out
 	}
-	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: set SITE_NAME in environment @devopsy@one:prod\n") || !strings.Contains(out, "to apply it now:\ndevopsy: | $ devopsy @devopsy@one:prod --reload") || strings.Contains(out, s.root) {
+	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: SITE_NAME saved on @devopsy@one:prod\n") || !strings.Contains(out, "to apply it now:\ndevopsy: | $ devopsy @devopsy@one:prod --reload") || strings.Contains(out, s.root) {
 		t.Errorf("a plain value:\n%s", out)
 	}
 	if out := vars([]string{"FAKE_DB_IMAGE=mariadb:12"}, "@prod", "--vars", "set", "FAKE_DB_IMAGE"); !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release") || strings.Contains(out, "--reload") {
@@ -231,12 +231,12 @@ func TestVarsApply(t *testing.T) {
 	write(t, filepath.Join(code, "compose.yaml"), "services:\n  app:\n    image: x\n    environment: [\"KEY=${REQUIRED:?}\", \"AUTH=${AU:?set A, or run secrets}\"]\n  db:\n    image: y\n", 0o644)
 	write(t, filepath.Join(code, "capabilities", "env", "compute"), "#!/bin/sh\n[ -z \"${A:-}\" ] || echo \"AU=u-$A\"\n", 0o755)
 	vars([]string{"REQUIRED=1", "A=1"}, "@prod", "--vars", "set", "REQUIRED", "A")
-	if out := vars(nil, "@prod", "--vars", "unset", "REQUIRED"); !strings.Contains(out, "warning: unset REQUIRED in environment @devopsy@one:prod, and its next reload or release refuses\ndevopsy: | compose requires REQUIRED\n") || !strings.Contains(out, "set REQUIRED again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set REQUIRED\n") {
+	if out := vars(nil, "@prod", "--vars", "unset", "REQUIRED"); !strings.Contains(out, "warning: REQUIRED removed from @devopsy@one:prod, so its next reload or release will fail\ndevopsy: | compose needs REQUIRED\n") || !strings.Contains(out, "set REQUIRED again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set REQUIRED\n") {
 		t.Errorf("a required variable unset:\n%s", out)
 	}
 	vars([]string{"REQUIRED=1"}, "@prod", "--vars", "set", "REQUIRED")
 	out := vars(nil, "@prod", "--vars", "unset", "A")
-	if !strings.Contains(out, "warning: unset A in environment @devopsy@one:prod, and its next reload or release refuses\ndevopsy: | compose requires AU, which the project's env capability computed before this change and no longer does\n") ||
+	if !strings.Contains(out, "warning: A removed from @devopsy@one:prod, so its next reload or release will fail\ndevopsy: | compose needs AU, which the project's env capability computes, and without A it computes nothing\n") ||
 		!strings.Contains(out, "required variable AU is missing a value: set A, or run secrets") ||
 		!strings.Contains(out, "set A again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set A\n") || strings.Contains(out, "--vars set AU") {
 		t.Errorf("a key the env capability computed from unset:\n%s", out)
@@ -245,7 +245,7 @@ func TestVarsApply(t *testing.T) {
 
 	// The project's file: prod and dev, each checked.
 	vars(nil, "@dev", "--release")
-	if out := vars([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); !strings.Contains(out, "devopsy: set X in project shop on devopsy@one\ndevopsy: | dev and prod: running containers keep their old values until a reload recreates them\n") {
+	if out := vars([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); !strings.Contains(out, "devopsy: X saved in project shop on devopsy@one\ndevopsy: | dev and prod: running containers keep their old values until a reload recreates them\n") {
 		t.Errorf("the project's file:\n%s", out)
 	}
 	// dev's lock held (the loop's first try fails): not checked, never waited for.
@@ -257,8 +257,8 @@ func TestVarsApply(t *testing.T) {
 	vars([]string{"A=1"}, "@prod", "--vars-project", "set", "A")
 	vars(nil, "@prod", "--vars", "unset", "A")
 	out = vars(nil, "@prod", "--vars-project", "unset", "A")
-	if !strings.Contains(out, "warning: unset A in project shop on devopsy@one, and the next reload or release of prod refuses\n") ||
-		!strings.Contains(out, "devopsy: | dev: running containers keep their old values until a reload recreates them\ndevopsy: | prod: compose requires AU, which the project's env capability computed before this change and no longer does\n") ||
+	if !strings.Contains(out, "warning: A removed from project shop on devopsy@one, so prod's next reload or release will fail\n") ||
+		!strings.Contains(out, "devopsy: | dev: running containers keep their old values until a reload recreates them\ndevopsy: | prod: compose needs AU, which the project's env capability computes, and without A it computes nothing\n") ||
 		!strings.Contains(out, "set A again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars-project set A\n") {
 		t.Errorf("a project's key prod's capability computed from:\n%s", out)
 	}
@@ -419,8 +419,8 @@ func TestVarsHintImportUnset(t *testing.T) {
 	if got := readString(filepath.Join(rel, "devopsy-target.env")); !strings.Contains(got, "BASE='vm1.example.com'") {
 		t.Errorf("the reload did not import BASE:\n%s\n%s", got, reload)
 	}
-	if strings.Contains(out, "refuses until") {
-		t.Errorf("--vars unset says the next reload refuses until BASE is set, though the reload imports it and goes through:\n%s", out)
+	if strings.Contains(out, "will fail") {
+		t.Errorf("--vars unset says the next reload fails until BASE is set, though the reload imports it and goes through:\n%s", out)
 	}
 }
 
@@ -639,7 +639,7 @@ func TestVarsHintMarkedWayOut(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--inherit (%d):\n%s", code, out)
 	}
-	if strings.Contains(out, "--reload") || !strings.Contains(out, "did not complete") || !strings.Contains(out, "devopsy: inherited into environment @devopsy@one:dev\n") {
+	if strings.Contains(out, "--reload") || !strings.Contains(out, "did not complete") || !strings.Contains(out, "devopsy: inherited into @devopsy@one:dev\n") {
 		t.Errorf("--inherit into a marked child names --reload, which refuses there, or names no scope:\n%s", out)
 	}
 }
@@ -737,7 +737,7 @@ func TestLevelFixOffersEachCommandOnce(t *testing.T) {
 	before := func(set bool) []string {
 		return (&cli.Missing{Names: []string{"X"}, Before: &cli.MissingBefore{Set: map[string]bool{"X": set}, Computed: map[string]bool{}, Changed: map[string]string{"X": "removed"}}}).Lines()
 	}
-	sayApplied(tg, level, "unset X in "+varsScope(tg, level), []string{"X"}, []remote.Applied{
+	sayApplied(tg, level, "X removed from "+varsScope(tg, level), []string{"X"}, []remote.Applied{
 		{Dir: "dev", Word: "4", Lines: before(true)},
 		{Dir: "prod", Word: "4", Lines: before(false)},
 	})

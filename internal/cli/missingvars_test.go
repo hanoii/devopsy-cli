@@ -74,7 +74,7 @@ func TestMissingVars(t *testing.T) {
 			}
 			continue
 		}
-		if failure.Msg != "compose requires EMPTY and TOKEN, which are not set" {
+		if failure.Msg != "compose needs EMPTY and TOKEN, which are not set" {
 			t.Errorf("%s: message %q", c.name, failure.Msg)
 		}
 		want := report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @vm1:own/prod --vars set EMPTY TOKEN")

@@ -227,8 +227,8 @@ from one. Its fix sets those keys again, never the computed value itself,
 and compose's own message for the variable follows:
 
 ```
-devopsy: warning: unset ADMIN_AUTH in environment @vm1:prod, and its next reload or release refuses
-devopsy: | compose requires ADMIN_AUTH_USERS, which the project's env capability computed before this change and no longer does
+devopsy: warning: ADMIN_AUTH removed from @vm1:prod, so its next reload or release will fail
+devopsy: | compose needs ADMIN_AUTH_USERS, which the project's env capability computes, and without ADMIN_AUTH it computes nothing
 devopsy: | compose says: required variable ADMIN_AUTH_USERS is missing a value: set ADMIN_AUTH
 devopsy: | to fix it:
 devopsy: | set ADMIN_AUTH again:

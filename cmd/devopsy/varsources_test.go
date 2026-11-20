@@ -69,8 +69,8 @@ func TestVarsSources(t *testing.T) {
 	// The environment's own over the inherited: the info line, then the
 	// warning and its unset.
 	out := set("hello-dev\n", "@dev", "--vars", "set", "GREETING")
-	if !strings.Contains(out, "devopsy: set GREETING in") || !strings.Contains(out, "devopsy: warning: GREETING overrides the value inherited from prod (shared/inherit.env)\ndevopsy: | to use that value again:\ndevopsy: | $ devopsy @devopsy@one:dev --vars unset GREETING") ||
-		strings.Index(out, "devopsy: set GREETING") > strings.Index(out, "warning:") {
+	if !strings.Contains(out, "devopsy: GREETING saved on @devopsy@one:dev\n") || !strings.Contains(out, "devopsy: warning: GREETING overrides the value inherited from prod (shared/inherit.env)\ndevopsy: | to use that value again:\ndevopsy: | $ devopsy @devopsy@one:dev --vars unset GREETING") ||
+		strings.Index(out, "devopsy: GREETING saved") > strings.Index(out, "warning:") {
 		t.Errorf("set over an inherited value:\n%s", out)
 	}
 	if out, says := get("dev", "GREETING"); out != "hello-dev\n" || !strings.Contains(says, "the value from shared/.env") {

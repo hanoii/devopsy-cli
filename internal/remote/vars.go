@@ -297,7 +297,13 @@ func varsApply(t *Target, level *Level, before bool) string {
 		check = append(check, "--before", was)
 		feed = `printf '%s\n' "$va_old" | `
 	}
-	call := func(args ...string) string { return devopsyCall("", args, false) }
+	// The environment's own edit runs under its compose name, as every command of it; a
+	// level's environments each read theirs from their release (devopsy-target.env).
+	name := t.ComposeName()
+	if level != nil {
+		name = ""
+	}
+	call := func(args ...string) string { return devopsyCall(name, args, false) }
 	fn := `# va_apply <base> <dir> [now]: the environment's VarsApplied and its lines; with now,
 # its lock taken without waiting, else held by the edit.
 va_apply() (

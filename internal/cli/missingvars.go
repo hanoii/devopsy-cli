@@ -465,20 +465,27 @@ func (m *Missing) Explain(unset []string) Explained {
 	}
 	join := func(ns []string) string { return report.JoinAnd(ns) }
 	if len(computed) > 0 {
-		e.Details = append(e.Details, "compose requires "+join(computed)+", which the project's env capability computed before this change and no longer does")
+		// What the check saw: computed with the file as it was, not with it as it is.
+		without := "this change"
+		if len(m.Before.Changed) == 1 {
+			for k := range m.Before.Changed {
+				without = k
+			}
+		}
+		e.Details = append(e.Details, "compose needs "+join(computed)+", which the project's env capability computes, and without "+without+" it computes nothing")
 	}
 	if len(derived) > 0 {
-		e.Details = append(e.Details, "compose requires "+join(derived)+", which "+were(derived)+" set before this change and "+are(derived)+" no longer")
+		e.Details = append(e.Details, "compose needs "+join(derived)+", which "+were(derived)+" set before this change and "+are(derived)+" empty now")
 	}
 	if len(own) > 0 {
-		e.Details = append(e.Details, "compose requires "+join(own))
+		e.Details = append(e.Details, "compose needs "+join(own))
 	}
 	if len(never) > 0 {
 		why := "which " + are(never) + " not set"
 		if m.Before != nil {
 			why = "which " + were(never) + " not set before this change either"
 		}
-		e.Details = append(e.Details, "compose requires "+join(never)+", "+why)
+		e.Details = append(e.Details, "compose needs "+join(never)+", "+why)
 	}
 	files := make([]string, 0, len(emptied))
 	for f := range emptied {
@@ -486,7 +493,7 @@ func (m *Missing) Explain(unset []string) Explained {
 	}
 	sort.Strings(files)
 	for _, f := range files {
-		e.Details = append(e.Details, "compose requires "+join(emptied[f])+", which "+fileSays(f)+" sets empty: its line wins over a value anywhere else, so set "+join(emptied[f])+" there, or remove that line")
+		e.Details = append(e.Details, "compose needs "+join(emptied[f])+", which "+fileSays(f)+" sets empty: its line wins over a value anywhere else, so set "+join(emptied[f])+" there, or remove that line")
 	}
 	if m.Unknown != "" {
 		e.Details = append(e.Details, strings.Split(m.Unknown, "\n")...)

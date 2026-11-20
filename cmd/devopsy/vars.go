@@ -230,7 +230,15 @@ func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string,
 	if verb == "unset" {
 		unset = keys
 	}
-	sayApplied(t, level, fmt.Sprintf("%s %s in %s", verb, strings.Join(keys, ", "), varsScope(t, level)), unset, applied)
+	// What was done, never a verb a reader takes for one to do ("unset X").
+	done := " saved on "
+	if level != nil {
+		done = " saved in "
+	}
+	if verb == "unset" {
+		done = " removed from "
+	}
+	sayApplied(t, level, strings.Join(keys, ", ")+done+varsScope(t, level), unset, applied)
 	sayLevels(t, level, verb, keys, ownFile(file), remote.ParseVarsTraces(out.String()))
 	return 0
 }
@@ -241,7 +249,7 @@ func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string,
 func varsScope(t *remote.Target, level *remote.Level) string {
 	switch {
 	case level == nil:
-		return "environment @" + targetRef(t)
+		return "@" + targetRef(t)
 	case level.Name == "instance":
 		return "instance " + filepath.Base(level.Dir) + " on " + t.Host
 	}
@@ -263,11 +271,7 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 			report.Say(report.InfoLevel, said, o.details, o.hints...)
 			return
 		}
-		head := said + ", and its next reload or release refuses"
-		if o.missing.AsBefore {
-			head += " as before"
-		}
-		report.Say(report.WarnLevel, head, o.details, varsFix(t, nil, *o.missing)...)
+		report.Say(report.WarnLevel, said+willFail("its next reload or release", o.missing.AsBefore), o.details, varsFix(t, nil, *o.missing)...)
 		return
 	}
 	if len(applied) == 0 {
@@ -306,11 +310,20 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 		report.Info(said, details...)
 		return
 	}
-	head := said + ", and the next reload or release of " + report.JoinAnd(refusing) + " refuses"
-	if asBefore {
-		head += " as before"
+	whose := refusing[0] + "'s next reload or release"
+	if len(refusing) > 1 {
+		whose = "the next reload or release of " + report.JoinAnd(refusing)
 	}
-	report.Say(report.WarnLevel, head, details, varsFix(t, level, fix)...)
+	report.Say(report.WarnLevel, said+willFail(whose, asBefore), details, varsFix(t, level, fix)...)
+}
+
+// willFail ends a change's first line with what it leaves failing: whose next reload
+// or release, as before when the change is not why.
+func willFail(whose string, asBefore bool) string {
+	if asBefore {
+		return ", but " + whose + " will still fail, as before"
+	}
+	return ", so " + whose + " will fail"
 }
 
 // outcome is what the check found in one environment, worded: what applies the change,
