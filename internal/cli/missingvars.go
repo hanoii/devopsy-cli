@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -139,11 +141,70 @@ func lookPathIn(name string, env []string) string {
 	return name
 }
 
-// MissingVarsIn is MissingVars for the project at cwd, its variables
-// loaded from environ and its files and computed by its env capability,
-// as --missing-vars has them: each name missing, and compose's words
-// when its files read for another reason.
-func MissingVarsIn(cwd string, environ []string) ([]string, error) {
+// Missing is what compose requires that a project's variables leave unset or empty: the
+// --vars follow-up's (CheckMissing) and --missing-vars'.
+type Missing struct {
+	Names []string
+	// Said are compose's lines naming one of them, masked: compose stops at the first, and
+	// interpolates a :? message, values included.
+	Said []string
+	// Before is how the variables were before an edit, nil when unknown.
+	Before *MissingBefore
+	// Unknown says, in words, why Before is nil when it was asked for.
+	Unknown string
+}
+
+// MissingBefore is how the variables Missing names were before an edit.
+type MissingBefore struct {
+	// Computed are the ones the env capability computed then, Set the ones set then
+	// (computed or from a file's interpolation).
+	Computed, Set map[string]bool
+	// Changed are the keys the edit changed in its file: removed, added or changed.
+	Changed map[string]string
+}
+
+// ComposeUnreadable is compose failing on a project's files for another reason than a
+// missing variable, its words masked.
+type ComposeUnreadable struct{ Said []string }
+
+func (u *ComposeUnreadable) Error() string {
+	return "docker compose config: " + strings.Join(u.Said, "; ")
+}
+
+// missingOf is the Missing of p's environment as loaded, its capability run: nil when
+// compose requires nothing unset, an error when its files fail for another reason, its
+// words masked.
+func missingOf(p *loadedProject) (*Missing, error) {
+	names, said, err := MissingVars(p)
+	if err != nil {
+		return nil, err
+	}
+	secrets := p.newSecrets()
+	if len(names) == 0 && len(said) > 0 {
+		u := &ComposeUnreadable{}
+		for _, l := range said {
+			u.Said = append(u.Said, secrets.Mask(l))
+		}
+		return nil, u
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	m := &Missing{Names: names}
+	for _, line := range said {
+		if slices.ContainsFunc(names, func(n string) bool { return strings.Contains(line, "required variable "+n+" ") }) {
+			m.Said = append(m.Said, secrets.Mask(line))
+		}
+	}
+	return m, nil
+}
+
+// CheckMissing is the --vars follow-up's check for the project at cwd, its variables
+// loaded from environ and its files and computed by its env capability: what compose
+// requires that they leave unset, nil for nothing. With before, what its file held before
+// the edit, the project is loaded again with it standing in, only when something is
+// missing, to tell what the edit changed and how each was set before.
+func CheckMissing(cwd string, environ []string, before *Before) (*Missing, error) {
 	p, err := loadProject(cwd, environ)
 	if err != nil {
 		return nil, err
@@ -151,36 +212,100 @@ func MissingVarsIn(cwd string, environ []string) ([]string, error) {
 	if err := p.computeEnv(); err != nil {
 		return nil, err
 	}
-	missing, said, err := MissingVars(p)
-	if err == nil && len(missing) == 0 && len(said) > 0 {
-		err = errors.New("docker compose config: " + strings.Join(said, "; "))
+	m, err := missingOf(p)
+	if err != nil || m == nil || before == nil {
+		return m, err
 	}
-	return missing, err
+	was, err := loadProjectBefore(cwd, environ, before)
+	if err != nil {
+		// A parser's words quote the line, value included, and nothing masks an old one.
+		m.Unknown = "devopsy could not load the variables as they were before this change"
+		if _, ok := err.(*beforeError); ok {
+			m.Unknown = "the file before this change does not parse"
+		}
+		return m, nil
+	}
+	if err := was.computeEnv(); err != nil {
+		// The capability's stderr may print an old value the current secrets lack.
+		m.Unknown = "devopsy could not tell whether the env capability computed them: " + was.newSecrets().Mask(p.newSecrets().Mask(err.Error()))
+		return m, nil
+	}
+	b := &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: changedKeys(before.Content, filepath.Join(p.dir, before.File))}
+	capability := capabilityFile(was.dir)
+	for _, n := range m.Names {
+		if v, _ := was.env.Lookup(n); v != "" {
+			b.Set[n] = true
+			b.Computed[n] = was.env.origin[n] == capability
+		}
+	}
+	m.Before = b
+	return m, nil
+}
+
+// changedKeys are the keys whose values differ between old and file as it is now, as
+// written, never as interpolated (X=${B} is not changed by B's removal): removed, added or
+// changed.
+func changedKeys(old []byte, file string) map[string]string {
+	now, _ := os.ReadFile(file)
+	parse := func(b []byte) map[string]string {
+		// No $ left, nothing is interpolated; both sides alike, so equal stays equal.
+		b = bytes.ReplaceAll(b, []byte("$"), []byte("\x01"))
+		vars, err := dotenv.UnmarshalBytesWithLookup(b, func(string) (string, bool) { return "", false })
+		if err != nil {
+			return map[string]string{}
+		}
+		return vars
+	}
+	was, is := parse(old), parse(now)
+	changed := map[string]string{}
+	for k, v := range was {
+		if w, ok := is[k]; !ok {
+			changed[k] = "removed"
+		} else if w != v {
+			changed[k] = "changed"
+		}
+	}
+	for k := range is {
+		if _, ok := was[k]; !ok {
+			changed[k] = "added"
+		}
+	}
+	return changed
 }
 
 // missingVars is the hidden `devopsy --missing-vars`: nothing when every
 // required variable is set, else the list and how to set them, failing.
 func missingVars(p *loadedProject) error {
-	missing, said, err := MissingVars(p)
+	m, err := missingOf(p)
+	var u *ComposeUnreadable
+	if errors.As(err, &u) {
+		return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose cannot read the project's files:", Details: u.Said}}
+	}
 	if err != nil {
 		return &ExitError{Code: 1, Msg: "--missing-vars: " + err.Error()}
 	}
-	if len(missing) == 0 && len(said) == 0 {
+	if m == nil {
 		return &Output{}
 	}
-	if len(missing) == 0 {
-		return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose cannot read the project's files:", Details: said}}
-	}
 	var lines []string
-	for _, m := range missing {
-		lines = append(lines, "  "+m)
+	for _, n := range m.Names {
+		lines = append(lines, "  "+n)
 	}
-	lines = append(lines, said...)
+	lines = append(lines, m.SaidLines()...)
 	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
-	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On(VarsSet(missing)); cmd != "" {
+	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On(VarsSet(m.Names)); cmd != "" {
 		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmd)
 	}
 	return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose requires variables that are not set:", Details: lines, Remedies: []report.Remedy{fix}}}
+}
+
+// SaidLines are compose's words on m, as a detail says them.
+func (m *Missing) SaidLines() []string {
+	var out []string
+	for _, l := range m.Said {
+		out = append(out, "compose says: "+l)
+	}
+	return out
 }
