@@ -739,8 +739,8 @@ func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (st
 	// What applies them, as --vars set says it.
 	var out bytes.Buffer
 	if code, err := remote.SSH(t, remote.VarsHintScript(t), bytes.NewReader(nil), &out, false); err == nil && code == 0 {
-		_, applied, lines := remote.ParseVarsApplied(out.String())
-		sayApplied(t, fmt.Sprintf("inherited into %s (%s:%s)", t.Address, t.Host, t.Path), applied, lines)
+		_, applied := remote.ParseVarsApplied(out.String())
+		sayApplied(t, nil, "inherited into "+varsScope(t, nil), nil, applied)
 	}
 	return 0
 }

@@ -309,3 +309,161 @@ func (m *Missing) SaidLines() []string {
 	}
 	return out
 }
+
+// Lines are m as --check-images --hint prints it for --vars' follow-up (ParseMissing):
+// "missing <name>" and compose's "said <line>"; with the variables before the edit known,
+// "set <name>" for one set then, "computed <name>" for one the env capability computed
+// then, and "changed <key> <removed|added|changed>"; else "unknown <why>" when asked for.
+func (m *Missing) Lines() []string {
+	var out []string
+	for _, n := range m.Names {
+		out = append(out, "missing "+n)
+	}
+	for _, l := range m.Said {
+		out = append(out, "said "+l)
+	}
+	if m.Unknown != "" {
+		out = append(out, "unknown "+m.Unknown)
+	}
+	if m.Before == nil {
+		return out
+	}
+	for _, n := range m.Names {
+		if m.Before.Set[n] {
+			out = append(out, "set "+n)
+		}
+		if m.Before.Computed[n] {
+			out = append(out, "computed "+n)
+		}
+	}
+	keys := make([]string, 0, len(m.Before.Changed))
+	for k := range m.Before.Changed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out = append(out, "changed "+k+" "+m.Before.Changed[k])
+	}
+	return out
+}
+
+// ParseMissing reads Lines back, nil with no "missing" line; Before is known when a
+// "changed" line or a "set" line came.
+func ParseMissing(lines []string) *Missing {
+	m := &Missing{}
+	b := &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: map[string]string{}}
+	known := false
+	for _, l := range lines {
+		word, rest, _ := strings.Cut(l, " ")
+		switch word {
+		case "missing":
+			m.Names = append(m.Names, rest)
+		case "said":
+			m.Said = append(m.Said, rest)
+		case "unknown":
+			m.Unknown = rest
+		case "set":
+			b.Set[rest], known = true, true
+		case "computed":
+			b.Computed[rest], known = true, true
+		case "changed":
+			k, kind, _ := strings.Cut(rest, " ")
+			b.Changed[k], known = kind, true
+		}
+	}
+	if len(m.Names) == 0 {
+		return nil
+	}
+	if known {
+		m.Before = b
+	}
+	return m
+}
+
+// Explained is what --vars' follow-up says of a Missing: why each is missing, compose's
+// words, and the keys its one fix sets again, unsets again or sets, every one needed.
+type Explained struct {
+	Details                       []string
+	SetAgain, UnsetAgain, SetThem []string
+	// AsBefore: none of them was set before the edit either, so the edit is not why.
+	AsBefore bool
+}
+
+// Explain words m. unset are the keys the operator unset, set again when the variables
+// before the edit are unknown. No fix sets what the env capability or a file's
+// interpolation set before: that bypasses them; the keys the edit changed bring it back.
+func (m *Missing) Explain(unset []string) Explained {
+	var e Explained
+	var computed, derived, own, never []string
+	for _, n := range m.Names {
+		switch {
+		case m.Before == nil:
+			if slices.Contains(unset, n) {
+				own = append(own, n)
+			} else {
+				never = append(never, n)
+			}
+		case m.Before.Changed[n] != "" && m.Before.Changed[n] != "added":
+			own = append(own, n)
+		case m.Before.Set[n] && m.Before.Computed[n]:
+			computed = append(computed, n)
+		case m.Before.Set[n]:
+			derived = append(derived, n)
+		default:
+			never = append(never, n)
+		}
+	}
+	join := func(ns []string) string { return report.JoinAnd(ns) }
+	if len(computed) > 0 {
+		e.Details = append(e.Details, "compose requires "+join(computed)+", which the project's env capability computed before this change and no longer does")
+	}
+	if len(derived) > 0 {
+		e.Details = append(e.Details, "compose requires "+join(derived)+", which "+were(derived)+" set before this change and "+are(derived)+" no longer")
+	}
+	if len(own) > 0 {
+		e.Details = append(e.Details, "compose requires "+join(own))
+	}
+	if len(never) > 0 {
+		why := "which " + are(never) + " not set"
+		if m.Before != nil {
+			why = "which " + were(never) + " not set before this change either"
+		}
+		e.Details = append(e.Details, "compose requires "+join(never)+", "+why)
+	}
+	if m.Unknown != "" {
+		e.Details = append(e.Details, m.Unknown)
+	}
+	e.Details = append(e.Details, m.SaidLines()...)
+	e.SetAgain = append(e.SetAgain, own...)
+	if len(computed)+len(derived) > 0 {
+		keys := make([]string, 0, len(m.Before.Changed))
+		for k := range m.Before.Changed {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if m.Before.Changed[k] == "added" {
+				e.UnsetAgain = append(e.UnsetAgain, k)
+			} else if !slices.Contains(e.SetAgain, k) {
+				e.SetAgain = append(e.SetAgain, k)
+			}
+		}
+	}
+	e.SetThem = never
+	e.AsBefore = m.Before != nil && len(never) == len(m.Names)
+	return e
+}
+
+func were(ns []string) string {
+	if len(ns) == 1 {
+		return "was"
+	}
+	return "were"
+}
+
+func are(ns []string) string {
+	if len(ns) == 1 {
+		return "is"
+	}
+	return "are"
+}

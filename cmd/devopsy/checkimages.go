@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
@@ -38,7 +37,7 @@ const (
 // ran), and with --with-env the fixes the full restore, or the restore
 // without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
 // says nothing and prints on stdout, for the operator to word the
-// follow-up: printMissing's lines, exit 4, when compose requires a
+// follow-up: cli.Missing.Lines, exit 4, when compose requires a
 // variable that is not set (with --before <level>, the edited file as it
 // was on stdin, telling how each was set before: cli.CheckMissing); else
 // "image <what>" lines, exit 3, when a release applies the change; else
@@ -91,7 +90,9 @@ func runCheckImages(cwd string, args []string) int {
 			return failErr(err)
 		}
 		if m != nil {
-			printMissing(m)
+			for _, l := range m.Lines() {
+				fmt.Println(l)
+			}
 			return checkImagesMissing
 		}
 	}
@@ -156,39 +157,4 @@ func runCheckImages(cwd string, args []string) int {
 		Remedies: fixes,
 	})
 	return checkImagesExit
-}
-
-// printMissing prints m for --vars' follow-up (remote.ParseVarsApplied): "missing
-// <name>" and compose's "said <line>"; with the variables before the edit known, "set
-// <name>" for one set then, "computed <name>" for one the env capability computed then,
-// and "changed <key> <removed|added|changed>"; else "unknown <why>" when asked for.
-func printMissing(m *cli.Missing) {
-	for _, n := range m.Names {
-		fmt.Println("missing " + n)
-	}
-	for _, l := range m.Said {
-		fmt.Println("said " + l)
-	}
-	if m.Unknown != "" {
-		fmt.Println("unknown " + m.Unknown)
-	}
-	if m.Before == nil {
-		return
-	}
-	for _, n := range m.Names {
-		if m.Before.Set[n] {
-			fmt.Println("set " + n)
-		}
-		if m.Before.Computed[n] {
-			fmt.Println("computed " + n)
-		}
-	}
-	keys := make([]string, 0, len(m.Before.Changed))
-	for k := range m.Before.Changed {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fmt.Println("changed " + k + " " + m.Before.Changed[k])
-	}
 }

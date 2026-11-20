@@ -46,6 +46,7 @@ History, not rules: `internals/releases.md` wins where they differ.
 - `--vars get` is the environment's value (decided 2026-10-27): a child's `get` said "not set" of a value `--env` showed, inherited. `--vars-instance get` and `--vars-project get` stay their file's because it reaches several environments and has no one value.
 - A `set` warns with no list of unsets (decided with the maintainer): the list was confusing and rarely what is wanted; only the `--vars set` on the environment and how an inherited value goes are named.
 - The trace comes from `--env-trace` rather than a second reading of the files: a second reading was what `--debug env` already showed, done again and drifting from it.
+- `gated_read` held what the operator sent in `shared/.env.vars` and `shared/.devopsy-parent-vars.<pid>` until 2026-11-20, and a cut session left them, secrets included, where every later release linked them; it holds them in memory since, and a release's prelude sweeps devopsy's own `.tmp` names there, never `*.tmp`, which the project may use.
 
 ## Locks
 

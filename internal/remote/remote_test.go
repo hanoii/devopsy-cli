@@ -525,6 +525,24 @@ func TestProjectUsersSetupFeature(t *testing.T) {
 	}
 }
 
+// A --vars edit, at every level, gives its follow-up the file as it was (--before), which
+// an older server's check refuses as usage after the edit: it needs its named feature, so
+// the edit refuses first. --inherit's follow-up passes none.
+func TestVarsBeforeFeature(t *testing.T) {
+	t.Parallel()
+	tg := &Target{Name: "prod", Host: "vm1", Path: "app/prod"}
+	for _, level := range []*Level{nil, {Name: "project", Dir: "app", Link: "project.env"}} {
+		for _, s := range []string{VarsSetScript(tg, level, []string{"A"}), VarsUnsetScript(tg, level, []string{"A"})} {
+			if got := Needs(s); !slices.Contains(got, VarsBeforeFeature) {
+				t.Errorf("level %v: needs %v", level, got)
+			}
+		}
+	}
+	if got := Needs(VarsHintScript(tg)); slices.Contains(got, VarsBeforeFeature) {
+		t.Errorf("--inherit's follow-up needs %v", got)
+	}
+}
+
 // A script saying a time needs --since from the server's devopsy, and
 // one saying fixes or hints --fix and --hint: an older --say would print
 // "--since" as the line, and "--fix" and what follows as details.
@@ -935,10 +953,19 @@ exit 0
 		return l
 	}
 
-	// go, on a first release.
+	// go, on a first release. A cut edit of the variables left its temporary in shared/,
+	// which is never linked; the project's own .tmp there is.
 	root := t.TempDir()
+	write(t, filepath.Join(root, tg.Path, "shared", ".env.tmp"), "A='secret'\n")
+	write(t, filepath.Join(root, tg.Path, "shared", "x.tmp"), "mine\n")
 	out, errOut, err := run(root, "1", "go\n")
 	base := filepath.Join(root, tg.Path)
+	if _, err := os.Lstat(filepath.Join(base, "releases", "1", CodeDir, ".devopsy", ".env.tmp")); err == nil {
+		t.Errorf("devopsy's own temporary in shared/ linked into the release")
+	}
+	if got := readFile(filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "x.tmp")); got != "mine\n" {
+		t.Errorf("the project's x.tmp in shared/ not linked: %q", got)
+	}
 	// The marker on stderr, which is all the operator reads for it:
 	// nothing on stdout.
 	if err != nil || out != "" || !strings.Contains(errOut, SyncMarker+base+"\t") || current(root) != "releases/1/code" {
@@ -2604,7 +2631,7 @@ func TestScriptsLockAndLinks(t *testing.T) {
 		t.Errorf("hint without the alias:\n%s", s)
 	}
 	// A release is pending until its switch, and cut uploads go.
-	if s := UploadScript(tg, false); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
+	if s := UploadScript(tg, false); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) || !strings.Contains(s, `for st in .env.tmp inherit.env.tmp parent.env.tmp; do rm -f "$base/shared/$st"; done`) {
 		t.Errorf("upload without its pending marker or the stale uploads' cleanup:\n%s", s)
 	}
 	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})

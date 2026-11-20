@@ -620,7 +620,7 @@ func TestRemoteVars(t *testing.T) {
 	}
 
 	// From the project's .env, then from stdin.
-	if out, code := run("", "@prod", "--vars", "set", "REG_USER", "REG_PASSWORD"); code != 0 || !strings.Contains(out, "devopsy: set REG_USER, REG_PASSWORD in devopsy@server:"+server+"/shared/.env") {
+	if out, code := run("", "@prod", "--vars", "set", "REG_USER", "REG_PASSWORD"); code != 0 || !strings.Contains(out, "devopsy: set REG_USER, REG_PASSWORD in environment @devopsy@server:prod\n") || strings.Contains(out, server) {
 		t.Fatalf("set (%d):\n%s", code, out)
 	}
 	if out, code := run("from-stdin\n", "@prod", "--vars", "set", "TOKEN"); code != 0 {
@@ -1252,11 +1252,11 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatalf("instance required (%d):\n%s", code, out)
 	}
 	// A shared value for the whole project on that server, before any release.
-	if out, code := run([]string{"SHARED=yes"}, "@b/prod", "--vars-project", "set", "SHARED"); code != 0 || !strings.Contains(out, filepath.Join(root, "shop", ".env")) {
+	if out, code := run([]string{"SHARED=yes"}, "@b/prod", "--vars-project", "set", "SHARED"); code != 0 || !strings.Contains(out, "set SHARED in project shop on devopsy@server\n") {
 		t.Fatalf("--vars-project (%d):\n%s", code, out)
 	}
 	// On a server named alone: the checkout's project.
-	if out, code := run([]string{"OTHER=1"}, "@devopsy@server", "--vars-project", "set", "OTHER"); code != 0 || !strings.Contains(out, filepath.Join(root, "shop", ".env")) {
+	if out, code := run([]string{"OTHER=1"}, "@devopsy@server", "--vars-project", "set", "OTHER"); code != 0 || !strings.Contains(out, "set OTHER in project shop on devopsy@server\n") {
 		t.Fatalf("@server --vars-project (%d):\n%s", code, out)
 	}
 	if out, code := run(nil, "@devopsy@server", "--vars-instance"); code == 0 || !strings.Contains(out, "for a server, --vars-instance needs an environment:\n") || !strings.Contains(out, "$ devopsy @devopsy@server:<environment> --vars-instance\n") {
@@ -1376,7 +1376,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out := stdin("inst\n", "@b/prod", "--vars-instance", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the instance's .env overrides, on @devopsy@server:b/prod, the value from the project's .env\ndevopsy: | to use that value again:\ndevopsy: | $ devopsy @devopsy@server:b/prod --vars-instance unset SHARED") || strings.Contains(out, "pr-12") {
 		t.Errorf("--vars-instance set over the project's:\n%s", out)
 	}
-	if out := stdin("yes\n", "@b/prod", "--vars-project", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the project's .env has no effect on @devopsy@server:b/prod: the value from the instance's .env overrides it\n") || strings.Contains(warned(out), "devopsy: |") || strings.Contains(out, "pr-12") {
+	if out := stdin("yes\n", "@b/prod", "--vars-project", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the project's .env has no effect on @devopsy@server:b/prod: the value from the instance's .env overrides it\n") || strings.Contains(warned(out), "devopsy: |") || strings.Contains(warned(out), "pr-12") || !strings.Contains(out, "devopsy: | b/prod and c/pr-12: a reload applies it\n") {
 		t.Errorf("--vars-project set under an instance's:\n%s", out)
 	}
 	stdin("", "@b/prod", "--vars-instance", "unset", "SHARED")

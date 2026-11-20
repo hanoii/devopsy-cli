@@ -210,14 +210,34 @@ for the project's.
 ## Applying changes
 
 Values travel over SSH's stdin, never as arguments. Running containers see
-a change only once they are recreated. `--vars set` and `--vars unset` on
-an environment always make the change, and say what applies it:
+a change only once they are recreated. `--vars set` and `--vars unset`
+always make the change, and say what applies it in the environment, or in
+each environment with a release under the instance or the project:
 
 - `--reload` ([Reloads](releases.md#reloads));
 - a release, when the variables now give a service another image than
   the release fetched;
 - nothing yet, while a variable compose requires is unset, or while data
   a sync, an import or a restore did not complete is not settled.
+
+When a variable compose requires is missing after the change, the warning
+says how it was set before: a key you unset, a value the project's env
+capability computed from a key you changed, or a line that took its value
+from one. Its fix sets those keys again, never the computed value itself,
+and compose's own message for the variable follows:
+
+```
+devopsy: warning: unset ADMIN_AUTH in environment @vm1:prod, and its next reload or release refuses
+devopsy: | compose requires ADMIN_AUTH_USERS, which the project's env capability computed before this change and no longer does
+devopsy: | compose says: required variable ADMIN_AUTH_USERS is missing a value: set ADMIN_AUTH
+devopsy: | to fix it:
+devopsy: | set ADMIN_AUTH again:
+devopsy: | $ devopsy @vm1:prod --vars set ADMIN_AUTH
+```
+
+An environment whose lock something holds (a release, a reload, a sync)
+is not waited for: the instance's or the project's change names it as not
+checked, and its next reload checks it.
 
 ## Release settings
 

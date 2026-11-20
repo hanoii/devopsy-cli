@@ -497,8 +497,20 @@ func lockWaitOr(fd int, shared bool, what, timeout string) string {
 	if shared {
 		opt = "-s "
 	}
-	return fmt.Sprintf(`flock -n %s%d || { %sdevopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; %s; }; %s}`, opt, fd, timerStart("lw_t"), what, opt, fd, what, timeout, sayTook("lw_t", `"done waiting for `+what+`"`))
+	return fmt.Sprintf(`%s || { %sdevopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; %s; }; %s}`, lockNow(fd, opt), timerStart("lw_t"), what, opt, fd, what, timeout, sayTook("lw_t", `"done waiting for `+what+`"`))
 }
+
+// lockNow takes the lock on fd without waiting, opt its flock options (-s, shared, with
+// its space), failing when something holds it: lockWait's first try, image_lock's, and
+// a check that never waits (varsApply's in each environment under a level). Each caller
+// opens its own fd, image_lock creating its file, a check opening an existing one.
+func lockNow(fd int, opt string) string { return fmt.Sprintf("flock -n %s%d", opt, fd) }
+
+// staleHolders removes what an import or a sync's holder killed outright (a reboot) left,
+// once the release lock is held: no holder runs then, and their files would read as
+// running whenever anything holds the lock (SyncRunning).
+const staleHolders = `if [ -e "$base/` + SyncImportingFile + `" ] || [ -e "$base/` + SyncHoldingFile + `" ]; then rm -f "$base/` + SyncImportingFile + `" "$base/` + SyncHoldingFile + `"; fi
+`
 
 // releaseLock takes the environment's release lock on fd 9 (lockWait,
 // shared or exclusive), creating $base first with create; without it, a
@@ -512,10 +524,7 @@ func releaseLock(shared, create bool) string {
 	}
 	// /dev/fd names the open file on Linux, not on macOS (where -ef is
 	// always false): checked on the file just opened, compared after the
-	// wait only where it can, so the loop never spins. Holding the lock,
-	// no import or sync's holder runs: their holding files are a shell
-	// killed outright's (a reboot), which would read as running whenever
-	// anything holds the lock.
+	// wait only where it can, so the loop never spins. Then staleHolders.
 	return `while :; do
   ` + mk + `
   exec 9>"$base/.lock"
@@ -523,8 +532,7 @@ func releaseLock(shared, create bool) string {
   ` + lockWait(9, shared, "the release running on $base") + `
   if [ -z "$rl_check" ] || [ /dev/fd/9 -ef "$base/.lock" ]; then break; fi
 done
-if [ -e "$base/` + SyncImportingFile + `" ] || [ -e "$base/` + SyncHoldingFile + `" ]; then rm -f "$base/` + SyncImportingFile + `" "$base/` + SyncHoldingFile + `"; fi
-`
+` + staleHolders
 }
 
 // removeBase removes $base under its release lock (releaseLock): moved
@@ -715,10 +723,12 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
 fi
 ` + releaseLock(false, create) + closeProject(strings.SplitN(t.Path, "/", 2)[0]) + `mkdir -p "$base/releases" "$base/shared"
 devopsy ` + MntReadyFlag + ` "$base"
-# An upload cut off leaves its .tmp, none running while the lock is held.
+# An upload cut off leaves its .tmp, none running while the lock is held,
+# and so does an edit of the variables (sharedTemporaries).
 # A watcher's file, and with_tty's fifo, go with their script: a sync's
 # holder arms its own before it waits for this lock.
 rm -rf "$base"/releases/*.tmp
+for st in ` + strings.Join(sharedTemporaries, " ") + `; do rm -f "$base/shared/$st"; done
 for ws_f in "$base"/.devopsy-watch.* "$base"/.devopsy-tty.*; do
   ws_p=${ws_f##*/.devopsy-}
   ws_p=${ws_p#*.}
@@ -1264,7 +1274,7 @@ image_lock() {
   il_opt=
   [ "$1" = shared ] && il_opt=-s
   exec 8>"$images_dir/` + ImagesLock + `"
-  if ! flock -n $il_opt 8; then
+  if ! ` + lockNow(8, "$il_opt ") + `; then
     if [ "${3:-}" = now ]; then
       il_busy="the server's images are in use by $(image_holders)"
       exec 8>&-
@@ -1950,21 +1960,22 @@ func GatedInput(data string) string {
 	return data + InputEnd + "\n"
 }
 
-// gatedRead defines gated_read <file>: prints LockedMarker (the lock
-// held), then reads stdin into file through --stdin-guard's bound,
-// requiring GatedInput's end line, which it takes off; without it (the
-// session gone while the script waited) it fails having written
-// nothing.
+// gatedRead defines gated_read: prints LockedMarker (the lock held), then
+// reads stdin through --stdin-guard's bound and prints it, requiring
+// GatedInput's end line, which it takes off; without it (the session gone
+// while the script waited) it fails having printed nothing. Its caller
+// holds what it prints in a shell variable (v=$(gated_read), a plain
+// assignment, whose status set -e sees), never in a file: one beside the
+// environment's files, left by a cut session, would be linked into every
+// later release (activation.links).
 const gatedRead = `gated_read() {
   printf '%s\n' "` + LockedMarker + `" >&2
-  if devopsy ` + StdinGuardFlag + ` >"$1.in" && [ "$(tail -n 1 "$1.in")" = ` + InputEnd + ` ]; then
-    sed '$d' "$1.in" >"$1"
-    rm -f "$1.in"
-  else
-    rm -f "$1.in"
+  gr_in=$(devopsy ` + StdinGuardFlag + `) || gr_in=
+  if [ "$(printf '%s\n' "$gr_in" | tail -n 1)" != ` + InputEnd + ` ]; then
     devopsy --say error "the session ended while this waited for the release lock: nothing changed"
     exit 1
   fi
+  printf '%s\n' "$gr_in" | sed '$d'
 }
 `
 

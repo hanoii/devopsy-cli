@@ -134,7 +134,14 @@ var namedFeatures = []struct {
 	{ImagesDirFeature, regexp.MustCompile(`\$images_dir/`)},
 	// --project-users setup: an older server's step would read the word as a usage error.
 	{ProjectUsersSetupFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + ProjectUsersFlag + `[ '\\]{1,8}setup\b`)},
+	// --vars' follow-up given the edited file as it was (--check-images --hint --before):
+	// an older server's check would refuse it as usage after the edit, its outcome then
+	// unknown.
+	{VarsBeforeFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-images[ '\\]{1,8}--hint[ '\\]{1,8}--before\b`)},
 }
+
+// VarsBeforeFeature is the named feature of --check-images --hint --before.
+const VarsBeforeFeature = "vars-before"
 
 // ProjectUserDestroyFeature is --project-users remove <project> --destroy's named feature.
 const ProjectUserDestroyFeature = "project-user-destroy"
