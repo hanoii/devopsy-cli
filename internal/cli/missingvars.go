@@ -85,6 +85,9 @@ func MissingVars(p *loadedProject) (missing []string, said []string, err error) 
 	} else if stderr == "" {
 		return nil, nil, fmt.Errorf("docker compose config: %v", err)
 	} else {
+		// Masked whole before its lines: a secret of several lines (a key) matches no
+		// single one, and compose interpolates a :? message, its other errors quoting values.
+		stderr = p.newSecrets().Mask(stderr)
 		// Compose says a variable's warning once per reading of the files.
 		for _, line := range strings.Split(stderr, "\n") {
 			if !slices.Contains(said, line) {
@@ -100,12 +103,24 @@ func MissingVars(p *loadedProject) (missing []string, said []string, err error) 
 	if json.Unmarshal([]byte(out), &vars) != nil {
 		return nil, said, nil
 	}
+	var unset []string
 	for name, v := range vars {
 		if value, _ := p.env.Lookup(name); v.Required && value == "" {
-			missing = append(missing, name)
+			unset = append(unset, name)
 		}
 	}
-	sort.Strings(missing)
+	sort.Strings(unset)
+	// Compose's lines are the verdict: one it reads from elsewhere (an include's env_file)
+	// is unset here and set there, and compose names only what it misses. Lines it words
+	// otherwise name none: then every one unset here.
+	for _, n := range unset {
+		if slices.ContainsFunc(said, func(l string) bool { return strings.Contains(l, "required variable "+n+" ") }) {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) == 0 {
+		missing = unset
+	}
 	return missing, said, nil
 }
 
@@ -156,6 +171,9 @@ type Missing struct {
 	// Unknown says, in words, why Before is nil when it was asked for, a capability's
 	// stderr on the lines after.
 	Unknown string
+	// Empty are the ones a file other than the edited one sets empty (by name, the file's
+	// in .devopsy/): its line wins, so no key of the edited file brings them back.
+	Empty map[string]string
 }
 
 // MissingBefore is how the variables Missing names were before an edit.
@@ -183,13 +201,8 @@ func missingOf(p *loadedProject) (*Missing, error) {
 	if err != nil {
 		return nil, err
 	}
-	secrets := p.newSecrets()
 	if len(names) == 0 && len(said) > 0 {
-		u := &ComposeUnreadable{}
-		for _, l := range said {
-			u.Said = append(u.Said, secrets.Mask(l))
-		}
-		return nil, u
+		return nil, &ComposeUnreadable{Said: said}
 	}
 	if len(names) == 0 {
 		return nil, nil
@@ -198,7 +211,16 @@ func missingOf(p *loadedProject) (*Missing, error) {
 	for _, line := range said {
 		// From its "required variable": where compose found it is no help to set it.
 		if i := strings.Index(line, "required variable "); i >= 0 && slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(line[i:], "required variable "+n+" ") }) {
-			m.Said = append(m.Said, secrets.Mask(line[i:]))
+			m.Said = append(m.Said, line[i:])
+		}
+	}
+	// One a file sets empty: that file's line wins over any value below it.
+	for _, n := range names {
+		if v, ok := p.env.Lookup(n); ok && v == "" && p.env.origin[n] != "" {
+			if m.Empty == nil {
+				m.Empty = map[string]string{}
+			}
+			m.Empty[n] = filepath.Base(p.env.origin[n])
 		}
 	}
 	return m, nil
@@ -220,6 +242,11 @@ func CheckMissing(cwd string, environ []string, before *Before) (*Missing, error
 	m, err := missingOf(p)
 	if err != nil || m == nil || before == nil {
 		return m, err
+	}
+	for n, f := range m.Empty {
+		if f == before.File {
+			delete(m.Empty, n)
+		}
 	}
 	was, err := loadProjectBefore(cwd, environ, before)
 	if err != nil {
@@ -316,7 +343,8 @@ func (m *Missing) SaidLines() []string {
 // "missing <name>" and compose's "said <line>"; with the variables before the edit known,
 // "before", then "set <name>" for one set then, "computed <name>" for one the env
 // capability computed then, and "changed <key> <removed|added|changed>"; else "unknown
-// <why>" when asked for, one per line of it, so none of a capability's is read as another.
+// <why>" when asked for, one per line of it, so none of a capability's is read as another;
+// and "empty <name> <file>" for one another file sets empty.
 func (m *Missing) Lines() []string {
 	var out []string
 	for _, n := range m.Names {
@@ -328,6 +356,11 @@ func (m *Missing) Lines() []string {
 	if m.Unknown != "" {
 		for _, l := range strings.Split(m.Unknown, "\n") {
 			out = append(out, "unknown "+l)
+		}
+	}
+	for _, n := range m.Names {
+		if f := m.Empty[n]; f != "" {
+			out = append(out, "empty "+n+" "+f)
 		}
 	}
 	if m.Before == nil {
@@ -370,6 +403,12 @@ func ParseMissing(lines []string) *Missing {
 			m.Unknown = strings.TrimPrefix(m.Unknown+"\n"+rest, "\n")
 		case "before":
 			known = true
+		case "empty":
+			n, f, _ := strings.Cut(rest, " ")
+			if m.Empty == nil {
+				m.Empty = map[string]string{}
+			}
+			m.Empty[n] = f
 		case "set":
 			b.Set[rest] = true
 		case "computed":
@@ -403,8 +442,11 @@ type Explained struct {
 func (m *Missing) Explain(unset []string) Explained {
 	var e Explained
 	var computed, derived, own, never []string
+	emptied := map[string][]string{}
 	for _, n := range m.Names {
 		switch {
+		case m.Empty[n] != "":
+			emptied[m.Empty[n]] = append(emptied[m.Empty[n]], n)
 		case m.Before == nil:
 			if slices.Contains(unset, n) {
 				own = append(own, n)
@@ -438,6 +480,14 @@ func (m *Missing) Explain(unset []string) Explained {
 		}
 		e.Details = append(e.Details, "compose requires "+join(never)+", "+why)
 	}
+	files := make([]string, 0, len(emptied))
+	for f := range emptied {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
+		e.Details = append(e.Details, "compose requires "+join(emptied[f])+", which "+fileSays(f)+" sets empty: its line wins over a value anywhere else, so set "+join(emptied[f])+" there, or remove that line")
+	}
 	if m.Unknown != "" {
 		e.Details = append(e.Details, strings.Split(m.Unknown, "\n")...)
 	}
@@ -462,8 +512,26 @@ func (m *Missing) Explain(unset []string) Explained {
 		}
 	}
 	e.SetThem = never
-	e.AsBefore = m.Before != nil && len(never) == len(m.Names)
+	// A nearer file's empty line was there before too: the edit is not why.
+	e.AsBefore = m.Before != nil && len(never)+len(m.Empty) == len(m.Names)
 	return e
+}
+
+// fileSays names a variables file of a release's .devopsy/ in words.
+func fileSays(f string) string {
+	switch f {
+	case ".env":
+		return "the environment's .env"
+	case "instance.env":
+		return "the instance's .env"
+	case "project.env":
+		return "the project's .env"
+	case remote.InheritFile:
+		return "what the environment inherits from its parent"
+	case remote.ParentEnvFile:
+		return "its copy of the parent's server's .env"
+	}
+	return f
 }
 
 func were(ns []string) string {

@@ -295,6 +295,8 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 			groups = append(groups, &group{envs: []string{a.Dir}, details: o.details})
 		}
 	}
+	// One environment's set again is another's set: one command.
+	fix.SetThem = slices.DeleteFunc(fix.SetThem, func(k string) bool { return slices.Contains(fix.SetAgain, k) })
 	var details []string
 	for _, g := range groups {
 		details = append(details, report.JoinAnd(g.envs)+": "+g.details[0])

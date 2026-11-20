@@ -171,10 +171,14 @@ func TestVarsScripts(t *testing.T) {
 		t.Fatalf("own .env printed %q", out)
 	}
 
-	// Reading a level brings the configs of every release under it, for
+	// Reading a level brings the configs of every current release under it, for
 	// their secrets: (with and without instances).
-	write(t, filepath.Join(root, "app", "prod", "current", ".devopsy", "config.yaml"), "secrets: [A]\n")
-	write(t, filepath.Join(root, "app", "site", "dev", "current", ".devopsy", "config.yaml"), "secrets: [B]\n")
+	for env, config := range map[string]string{"prod": "secrets: [A]\n", "site/dev": "secrets: [B]\n"} {
+		write(t, filepath.Join(root, "app", env, "releases", "1", CodeDir, ".devopsy", "config.yaml"), config)
+		if err := os.Symlink(filepath.Join("releases", "1", CodeDir), filepath.Join(root, "app", env, "current")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	read, err = ReadVarsOutput(runVarsScript(t, root, VarsReadScript(tl, level), ""))
 	if err != nil || read.Content != "SHARED='1'\n" || strings.Join(read.Configs, "") != "secrets: [A]\nsecrets: [B]\n" {
 		t.Fatalf("level read: %+v (%v)", read, err)
@@ -377,5 +381,37 @@ printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"
 	}
 	if got := readFile(filepath.Join(base, ".env")); got != old+"NEW='1'\n" {
 		t.Errorf("the project's .env after the edit: %d bytes", len(got))
+	}
+}
+
+// A level's listing reads the configs (their secrets:) of the environments each_env
+// lists, no other directory's.: never what a cut removal left (.rm.) nor a directory inside an
+// environment (its shared/current), whose secrets: would mask the listing.
+func TestVarsReadLevelListsEachEnv(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	base := filepath.Join(root, "app")
+	config := func(dir, name string) {
+		write(t, filepath.Join(dir, "releases", "1", CodeDir, ".devopsy", "config.yaml"), "project: app\nsecrets: ["+name+"]\n")
+		if err := os.Symlink(filepath.Join("releases", "1", CodeDir), filepath.Join(dir, "current")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config(filepath.Join(base, "prod"), "OF_PROD")
+	config(filepath.Join(base, "qa.rm.12"), "OF_A_CUT_REMOVAL")
+	write(t, filepath.Join(base, "prod", "shared", "current", ".devopsy", "config.yaml"), "project: app\nsecrets: [OF_SHARED]\n")
+	write(t, filepath.Join(base, ".env"), "A='1'\n")
+	level := &Level{Name: "project", Dir: "app", Link: "project.env"}
+	out, err := runVarsRaw(t, root, VarsReadScript(&Target{Name: "prod", Host: "h", Path: "app/prod"}, level), "")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "OF_PROD") {
+		t.Fatalf("prod's config not read:\n%s", out)
+	}
+	for _, name := range []string{"OF_A_CUT_REMOVAL", "OF_SHARED"} {
+		if strings.Contains(out, name) {
+			t.Errorf("the config of what is no environment read (%s):\n%s", name, out)
+		}
 	}
 }

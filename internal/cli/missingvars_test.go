@@ -32,7 +32,7 @@ func fakeCompose(said, vars string) string {
 func TestMissingVars(t *testing.T) {
 	t.Parallel()
 	vars := `{"TOKEN":{"Required":true},"EMPTY":{"Required":true},"SET":{"Required":true},"OPT":{"Required":false}}`
-	said := "error while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for hunter2secret"
+	said := "error while interpolating services.app.environment.EMPTY: required variable EMPTY is missing a value\nerror while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for hunter2secret"
 	masked := "compose says: required variable TOKEN is missing a value: the token for ***"
 	warned := `level=warning msg="The TOKEN variable is not set. Defaulting to a blank string."`
 	for _, c := range []struct {
@@ -41,7 +41,7 @@ func TestMissingVars(t *testing.T) {
 		fix              bool
 	}{
 		{"reads", "", vars, nil, false},
-		{"missing", warned + "\n" + warned + "\n" + said, vars, []string{masked}, true},
+		{"missing", warned + "\n" + warned + "\n" + said, vars, []string{"compose says: required variable EMPTY is missing a value", masked}, true},
 		{"unreadable", "services.app.ports must be a list, not hunter2secret", `{"SET":{"Required":true}}`, []string{"services.app.ports must be a list, not ***"}, false},
 	} {
 		root := project(t, "tunnel", map[string]string{
@@ -136,7 +136,7 @@ func TestReadsUIDs(t *testing.T) {
 func TestCheckMissingBefore(t *testing.T) {
 	t.Parallel()
 	compute := "#!/bin/sh\n[ -z \"${FAIL:-}\" ] || { echo \"failing on $FAIL\" >&2; exit 1; }\n[ -z \"${A:-}\" ] || [ -n \"${OFF:-}\" ] || echo \"AU=u-$A\"\n"
-	said := "error while interpolating services.app.environment.AU: required variable AU is missing a value: set A"
+	said := "error while interpolating services.app.environment.AU: required variable AU is missing a value: set A\nerror while interpolating services.app.environment.X: required variable X is missing a value"
 	for _, c := range []struct {
 		name, level, env, instance, old string
 		missing                         []string
@@ -167,7 +167,7 @@ func TestCheckMissingBefore(t *testing.T) {
 		if err != nil || m == nil {
 			t.Fatalf("%s: %+v %v", c.name, m, err)
 		}
-		if !slices.Equal(m.Names, c.missing) || len(m.Said) != 1 {
+		if !slices.Equal(m.Names, c.missing) || len(m.Said) != len(c.missing) {
 			t.Errorf("%s: missing %q, said %q", c.name, m.Names, m.Said)
 		}
 		if c.unknown != "" {
@@ -236,7 +236,8 @@ func TestMissingLines(t *testing.T) {
 // capability answering otherwise) it says so in words and offers nothing; and a key the
 // edit removed that was empty before too is no key of the edit's, compose having missed
 // it already (an environment's empty line winning over the project's value the edit
-// unset), so it is "as before", never set again where the nearer line still wins.
+// unset), so it is "as before", and its fix names the file that empties it, never one at
+// the edited level, where the nearer line still wins.
 func TestExplainOffersOnlyWhatBringsItBack(t *testing.T) {
 	t.Parallel()
 	m := &Missing{Names: []string{"X"}, Before: &MissingBefore{Computed: map[string]bool{"X": true}, Set: map[string]bool{"X": true}, Changed: map[string]string{}}}
@@ -255,7 +256,71 @@ func TestExplainOffersOnlyWhatBringsItBack(t *testing.T) {
 	if err != nil || m == nil || m.Before == nil {
 		t.Fatalf("%+v %v", m, err)
 	}
-	if e := m.Explain([]string{"REQUIRED"}); !e.AsBefore || slices.Contains(e.SetAgain, "REQUIRED") {
+	if e := m.Explain([]string{"REQUIRED"}); !e.AsBefore || slices.Contains(e.SetAgain, "REQUIRED") || slices.Contains(e.SetThem, "REQUIRED") || !strings.Contains(e.Details[0], "the environment's .env sets empty") {
 		t.Errorf("a key removed that was empty before too: %+v", e)
+	}
+}
+
+// Compose's words never carry a secret of several lines (a key in PEM, a JSON
+// credential), on either path: compose's stderr is masked whole before it is split into
+// lines, since Secrets.Mask replaces a value whole and compose interpolates a :? message.
+func TestComposeWordsMaskSecretsOfSeveralLines(t *testing.T) {
+	t.Parallel()
+	key := "first-line-of-the-key\nsecond-line-of-the-key"
+	for _, c := range []struct{ name, said, vars string }{
+		{"missing", "error while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: sign it with " + key, `{"TOKEN":{"Required":true}}`},
+		{"unreadable", "services.app.configs: invalid content " + key, `{}`},
+	} {
+		root := project(t, "shop", map[string]string{
+			"compose.yaml": minimalCompose,
+			"config.yaml":  "project: shop\nsecrets: [KEY]\n",
+			"bin/docker*":  fakeCompose(c.said, c.vars),
+		})
+		p, err := loadProject(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin", "KEY=" + key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var failure *report.Failure
+		if err := missingVars(p); !errors.As(err, &failure) {
+			t.Fatalf("%s: %v, want a failure", c.name, err)
+		}
+		said := failure.Msg + "\n" + strings.Join(failure.Details, "\n")
+		if strings.Contains(said, "of-the-key") {
+			t.Errorf("%s: a line of the secret said:\n%s", c.name, said)
+		}
+		// The follow-up's lines, what --check-images --hint prints for the operator.
+		if m, err := missingOf(p); m != nil {
+			if lines := strings.Join(m.Lines(), "\n"); strings.Contains(lines, "of-the-key") {
+				t.Errorf("%s: a line of the secret in the check's lines:\n%s", c.name, lines)
+			}
+		} else if err != nil && strings.Contains(err.Error(), "of-the-key") {
+			t.Errorf("%s: a line of the secret in the check's error: %v", c.name, err)
+		}
+	}
+}
+
+// What is missing is what compose names: a variable an include's env_file sets is unset in
+// devopsy's environment and set for compose, which reads that file, so it is never listed
+// (nor set by the --vars follow-up's fix in shared/.env, over the include's value).
+func TestMissingVarsTakesComposesVerdict(t *testing.T) {
+	t.Parallel()
+	said := "error while interpolating services.side.environment.[]: required variable INC_NAME is missing a value: the name"
+	root := project(t, "inclvars", map[string]string{
+		"compose.yaml": "include:\n  - path: sub/inc.yaml\n    env_file: sub/inc.env\nservices:\n  app:\n    image: busybox\n",
+		"sub/inc.yaml": "services:\n  side:\n    image: busybox\n    environment: [\"NAME=${INC_NAME:?the name}\", \"SET=${INC_SET:?}\"]\n",
+		"sub/inc.env":  "INC_SET=1\n",
+		"config.yaml":  "project: inclvars\n",
+		"bin/docker*":  fakeCompose(said, `{"INC_NAME":{"Required":true},"INC_SET":{"Required":true}}`),
+	})
+	p, err := loadProject(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := missingOf(p)
+	if err != nil || m == nil {
+		t.Fatalf("%+v %v", m, err)
+	}
+	if !slices.Equal(m.Names, []string{"INC_NAME"}) {
+		t.Errorf("missing %q, want INC_NAME alone: the include's env_file sets INC_SET", m.Names)
 	}
 }

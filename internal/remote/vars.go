@@ -60,23 +60,23 @@ const eachEnv = `each_env() {
 // --vars get gives and the listing counts. A trace that fails is left
 // out (the env capability failing): get falls back to the files.
 func VarsReadScript(t *Target, level *Level) string {
-	configs := `"$base"/current/.devopsy/config*.yaml "$base"/.devopsy/config*.yaml`
-	if level != nil {
-		configs = `"$base"/*/current/.devopsy/config*.yaml`
-		if level.Name == "project" {
-			configs += ` "$base"/*/*/current/.devopsy/config*.yaml`
-		}
-	}
 	s := varsPrelude(t, level) + `printf '%s\n' "$file"
 emit() { printf '%s %s\n' "$1" "$(wc -c < "$2" | tr -d ' ')"; cat "$2"; }
 if [ -f "$file" ]; then emit env "$file"; fi
-for c in ` + configs + `; do
+`
+	if level != nil {
+		return s + `vr_configs() {
+  for c in "$base/$1"/current/.devopsy/config*.yaml; do
+    if [ -f "$c" ]; then emit config "$c"; fi
+  done
+}
+each_env vr_configs
+`
+	}
+	s += `for c in "$base"/current/.devopsy/config*.yaml "$base"/.devopsy/config*.yaml; do
   if [ -f "$c" ]; then emit config "$c"; fi
 done
 `
-	if level != nil {
-		return s
-	}
 	s += `if [ -z "$plain" ] && [ -f "$base/shared/` + InheritFile + `" ]; then emit ` + LevelInherit + ` "$base/shared/` + InheritFile + `"; fi
 `
 	for _, l := range t.Levels {
