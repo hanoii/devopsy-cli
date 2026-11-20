@@ -399,7 +399,9 @@ esac
 
 // --vars unset of a variable the environment set over an import warns of
 // nothing: its release imported nothing for it, but a reload reads the
-// imports again and imports it, so the next reload goes through.
+// imports again and imports it, so the next reload goes through, and the
+// follow-up offers that reload, said as info: its check's outcome, which a
+// warning's words would not prove absent once reworded.
 func TestVarsHintImportUnset(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -419,8 +421,8 @@ func TestVarsHintImportUnset(t *testing.T) {
 	if got := readString(filepath.Join(rel, "devopsy-target.env")); !strings.Contains(got, "BASE='vm1.example.com'") {
 		t.Errorf("the reload did not import BASE:\n%s\n%s", got, reload)
 	}
-	if strings.Contains(out, "will fail") {
-		t.Errorf("--vars unset says the next reload fails until BASE is set, though the reload imports it and goes through:\n%s", out)
+	if !strings.Contains(out, "devopsy: | $ devopsy @devopsy@one:prod --reload\n") || strings.Contains(out, report.Head(report.WarnLevel)) {
+		t.Errorf("--vars unset does not offer the reload that imports BASE and goes through, or warns:\n%s", out)
 	}
 }
 
