@@ -111,8 +111,11 @@ func MissingVars(p *loadedProject) (missing []string, said []string, err error) 
 
 // VarsSet is the --vars set of keys, each by its name: a fix that works
 // when copied, asking each value.
-func VarsSet(keys []string) string {
-	return "--vars set " + strings.Join(keys, " ")
+func VarsSet(keys []string) string { return VarsEdit("--vars", "set", keys) }
+
+// VarsEdit is flag's (--vars, --vars-instance, --vars-project) verb of keys, by their names.
+func VarsEdit(flag, verb string, keys []string) string {
+	return flag + " " + verb + " " + strings.Join(keys, " ")
 }
 
 // composeOut runs compose as p's commands do, its files and environment, the docker of
@@ -150,7 +153,8 @@ type Missing struct {
 	Said []string
 	// Before is how the variables were before an edit, nil when unknown.
 	Before *MissingBefore
-	// Unknown says, in words, why Before is nil when it was asked for.
+	// Unknown says, in words, why Before is nil when it was asked for, a capability's
+	// stderr on the lines after.
 	Unknown string
 }
 
@@ -192,8 +196,9 @@ func missingOf(p *loadedProject) (*Missing, error) {
 	}
 	m := &Missing{Names: names}
 	for _, line := range said {
-		if slices.ContainsFunc(names, func(n string) bool { return strings.Contains(line, "required variable "+n+" ") }) {
-			m.Said = append(m.Said, secrets.Mask(line))
+		// From its "required variable": where compose found it is no help to set it.
+		if i := strings.Index(line, "required variable "); i >= 0 && slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(line[i:], "required variable "+n+" ") }) {
+			m.Said = append(m.Said, secrets.Mask(line[i:]))
 		}
 	}
 	return m, nil
@@ -227,7 +232,7 @@ func CheckMissing(cwd string, environ []string, before *Before) (*Missing, error
 	}
 	if err := was.computeEnv(); err != nil {
 		// The capability's stderr may print an old value the current secrets lack.
-		m.Unknown = "devopsy could not tell whether the env capability computed them: " + was.newSecrets().Mask(p.newSecrets().Mask(err.Error()))
+		m.Unknown = "devopsy could not tell whether the env capability computed what is missing: " + was.newSecrets().Mask(p.newSecrets().Mask(err.Error()))
 		return m, nil
 	}
 	b := &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: changedKeys(before.Content, filepath.Join(p.dir, before.File))}
@@ -287,18 +292,15 @@ func missingVars(p *loadedProject) error {
 	if m == nil {
 		return &Output{}
 	}
-	var lines []string
-	for _, n := range m.Names {
-		lines = append(lines, "  "+n)
-	}
-	lines = append(lines, m.SaidLines()...)
+	// As --vars' follow-up words it, with nothing known of before.
+	e := m.Explain(nil)
 	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
 	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On(VarsSet(m.Names)); cmd != "" {
 		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmd)
 	}
-	return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose requires variables that are not set:", Details: lines, Remedies: []report.Remedy{fix}}}
+	return &ExitError{Code: 1, Err: &report.Failure{Msg: e.Details[0], Details: e.Details[1:], Remedies: []report.Remedy{fix}}}
 }
 
 // SaidLines are compose's words on m, as a detail says them.
@@ -312,8 +314,9 @@ func (m *Missing) SaidLines() []string {
 
 // Lines are m as --check-images --hint prints it for --vars' follow-up (ParseMissing):
 // "missing <name>" and compose's "said <line>"; with the variables before the edit known,
-// "set <name>" for one set then, "computed <name>" for one the env capability computed
-// then, and "changed <key> <removed|added|changed>"; else "unknown <why>" when asked for.
+// "before", then "set <name>" for one set then, "computed <name>" for one the env
+// capability computed then, and "changed <key> <removed|added|changed>"; else "unknown
+// <why>" when asked for, one per line of it, so none of a capability's is read as another.
 func (m *Missing) Lines() []string {
 	var out []string
 	for _, n := range m.Names {
@@ -323,11 +326,14 @@ func (m *Missing) Lines() []string {
 		out = append(out, "said "+l)
 	}
 	if m.Unknown != "" {
-		out = append(out, "unknown "+m.Unknown)
+		for _, l := range strings.Split(m.Unknown, "\n") {
+			out = append(out, "unknown "+l)
+		}
 	}
 	if m.Before == nil {
 		return out
 	}
+	out = append(out, "before")
 	for _, n := range m.Names {
 		if m.Before.Set[n] {
 			out = append(out, "set "+n)
@@ -347,8 +353,8 @@ func (m *Missing) Lines() []string {
 	return out
 }
 
-// ParseMissing reads Lines back, nil with no "missing" line; Before is known when a
-// "changed" line or a "set" line came.
+// ParseMissing reads Lines back, nil with no "missing" line; Before is known after a
+// "before" line.
 func ParseMissing(lines []string) *Missing {
 	m := &Missing{}
 	b := &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: map[string]string{}}
@@ -361,14 +367,16 @@ func ParseMissing(lines []string) *Missing {
 		case "said":
 			m.Said = append(m.Said, rest)
 		case "unknown":
-			m.Unknown = rest
+			m.Unknown = strings.TrimPrefix(m.Unknown+"\n"+rest, "\n")
+		case "before":
+			known = true
 		case "set":
-			b.Set[rest], known = true, true
+			b.Set[rest] = true
 		case "computed":
-			b.Computed[rest], known = true, true
+			b.Computed[rest] = true
 		case "changed":
 			k, kind, _ := strings.Cut(rest, " ")
-			b.Changed[k], known = kind, true
+			b.Changed[k] = kind
 		}
 	}
 	if len(m.Names) == 0 {
@@ -403,7 +411,7 @@ func (m *Missing) Explain(unset []string) Explained {
 			} else {
 				never = append(never, n)
 			}
-		case m.Before.Changed[n] != "" && m.Before.Changed[n] != "added":
+		case m.Before.Set[n] && m.Before.Changed[n] != "" && m.Before.Changed[n] != "added":
 			own = append(own, n)
 		case m.Before.Set[n] && m.Before.Computed[n]:
 			computed = append(computed, n)
@@ -431,10 +439,14 @@ func (m *Missing) Explain(unset []string) Explained {
 		e.Details = append(e.Details, "compose requires "+join(never)+", "+why)
 	}
 	if m.Unknown != "" {
-		e.Details = append(e.Details, m.Unknown)
+		e.Details = append(e.Details, strings.Split(m.Unknown, "\n")...)
 	}
 	e.Details = append(e.Details, m.SaidLines()...)
 	e.SetAgain = append(e.SetAgain, own...)
+	if len(computed)+len(derived) > 0 && len(m.Before.Changed) == 0 {
+		// Nothing to set back: the edit left its file as it was (a key set to the value it had).
+		e.Details = append(e.Details, "this change left its file as it was, so no key of it brings "+join(append(slices.Clone(computed), derived...))+" back")
+	}
 	if len(computed)+len(derived) > 0 {
 		keys := make([]string, 0, len(m.Before.Changed))
 		for k := range m.Before.Changed {

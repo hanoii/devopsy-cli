@@ -306,12 +306,14 @@ func TestVarsRenamesForeignFile(t *testing.T) {
 	}
 }
 
-// An instance's or a project's edit checks each environment under it that has a current
-// release, under that environment's lock taken without waiting: one held is busy, never
-// waited for; one with no .lock (removed meanwhile) and a directory a cut removal left
-// (.rm.) are skipped; the take removes a killed holder's file, as releaseLock does. Each
-// check gets the file as it was on its stdin, whole, however large, and the edit keeps
-// what the operator sent and that file in memory, never beside the environments' files.
+// An instance's or a project's edit traces and checks each environment under it that has
+// a current release (each_env), never a directory a cut removal left (.rm.) nor one inside
+// an environment (its shared/, the project's, holding a current/), each check under that
+// environment's lock taken without waiting: one held is busy, never waited for; one with
+// no .lock (removed meanwhile) is skipped; the take removes a killed holder's file, as
+// releaseLock does. Each check gets the file as it was on its stdin, whole, however large,
+// and the edit keeps what the operator sent and that file in memory, never beside the
+// environments' files.
 func TestVarsApplyLevel(t *testing.T) {
 	t.Parallel()
 	root, bin := t.TempDir(), t.TempDir()
@@ -326,6 +328,8 @@ func TestVarsApplyLevel(t *testing.T) {
 		}
 	}
 	write(t, filepath.Join(base, "qa", SyncHoldingFile), "")
+	write(t, filepath.Join(base, "prod", "shared", "current", ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(base, "prod", "shared", ".lock"), "")
 	old := strings.Repeat("BIG='"+strings.Repeat("x", 1000)+"'\n", 100)
 	write(t, filepath.Join(base, ".env"), old)
 	during := filepath.Join(root, "during")
@@ -334,7 +338,8 @@ func TestVarsApplyLevel(t *testing.T) {
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nif [ \"$*\" = '-n 7' ] && [ ! -e \""+root+"/tried\" ]; then : > \""+root+"/tried\"; exit 1; fi\nexit 0\n")
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+`case "$1" in
   --stdin-guard) cat; ls -A "$FAKE_ROOT/app" "$FAKE_ROOT/app/qa" > "$FAKE_ROOT/during"; exit 0 ;;
-  --env-trace|--prepare-release) exit 0 ;;
+  --env-trace) echo traced; exit 0 ;;
+  --prepare-release) exit 0 ;;
   --check-images) env=$(pwd); env=${env%/current}; cat > "$FAKE_ROOT/stdin.${env##*/}"; echo "missing X"; exit 4 ;;
 esac
 printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"
@@ -357,6 +362,9 @@ printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"
 	want := []Applied{{Dir: "prod", Word: "busy"}, {Dir: "qa", Word: "4", Lines: []string{"missing X"}}}
 	if file != filepath.Join(base, ".env") || fmt.Sprint(applied) != fmt.Sprint(want) {
 		t.Errorf("file %q, applied %+v, want %+v\n%s", file, applied, want, stdout.String())
+	}
+	if traces := ParseVarsTraces(stdout.String()); fmt.Sprint(traces) != fmt.Sprint(map[string]string{"old": "traced", "prod": "traced", "qa": "traced"}) {
+		t.Errorf("traced %v", traces)
 	}
 	if got := readFile(filepath.Join(root, "stdin.qa")); got != old {
 		t.Errorf("qa's check got %d bytes of the old file, want %d", len(got), len(old))

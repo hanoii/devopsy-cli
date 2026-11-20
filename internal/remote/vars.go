@@ -21,7 +21,7 @@ func varsPrelude(t *Target, level *Level) string {
 		return s + `base="$root"/` + Quote(level.Dir) + `
 file="$base/.env"
 plain=
-`
+` + eachEnv
 	}
 	return s + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   file="$base/.devopsy/.env"
@@ -32,6 +32,23 @@ else
 fi
 `
 }
+
+// eachEnv defines each_env <command>...: runs it with each environment under the level at
+// $base that has a current release, its directory under $base, with or without
+// instances: a directory with releases/ beside its current link, never what a cut
+// removal left (removeBase's .rm.) nor a directory inside an environment (its shared/,
+// the project's, holding a current/).
+const eachEnv = `each_env() {
+  for ee_d in "$base"/*/current "$base"/*/*/current; do
+    { [ -L "$ee_d" ] && [ -d "$ee_d/.devopsy" ]; } || continue
+    ee_e=${ee_d%/current}
+    [ -d "$ee_e/releases" ] || continue
+    ee_e=${ee_e#"$base"/}
+    case "$ee_e" in *.rm.*) continue ;; esac
+    "$@" "$ee_e"
+  done
+}
+`
 
 // VarsReadScript prints the variables file's path, then sections (see
 // ReadVarsOutput): the file's content, if any, and the configs of the
@@ -239,13 +256,11 @@ fi
 	// directories or, with instances, theirs: each with its own compose
 	// name, from its release.
 	call := devopsyCall("", args, false)
-	return `for d in "$base"/*/current "$base"/*/*/current; do
-  [ -d "$d/.devopsy" ] || continue
-  e=${d%/current}
-  e=${e#"$base"/}
-  vt=$(cd "$d" && ` + call + ` 2>/dev/null) || continue
-  printf '` + VarsTrace + `%s\t%s\n' "$e" "$vt"
-done
+	return `vt_one() {
+  vt=$(cd "$base/$1/current" && ` + call + ` 2>/dev/null) || return 0
+  printf '` + VarsTrace + `%s\t%s\n' "$1" "$vt"
+}
+each_env vt_one
 `
 }
 
@@ -267,10 +282,10 @@ const VarsApplied = "apply\t"
 const VarsAppliedLine = "applied\t"
 
 // varsApply checks what the edit does: in the environment, or with a level in each of
-// its environments that has a current release, each under its own release lock taken
-// without waiting (the edit holds the level's). With before, the edited file as it was
-// ($va_old, varsEdit's) goes to each check, its stdin only: --prepare-release runs the
-// project's code. A directory a cut removal left (removeBase's .rm.) is skipped.
+// its environments that has a current release (each_env), each under its own release lock
+// taken without waiting (the edit holds the level's). With before, the edited file as it
+// was ($va_old, varsEdit's) goes to each check, its stdin only: --prepare-release runs the
+// project's code.
 func varsApply(t *Target, level *Level, before bool) string {
 	check := []string{"--check-images", "--hint"}
 	feed := ""
@@ -288,7 +303,8 @@ func varsApply(t *Target, level *Level, before bool) string {
 va_apply() (
   base=$1
   if [ -n "${3:-}" ]; then
-    [ -e "$base/.lock" ] || exit 0
+    # Removed meanwhile: no environment to check.
+    [ -e "$base/.lock" ] || exit 3
     exec 7<"$base/.lock"
     ` + lockNow(7, "") + ` 2>/dev/null || { printf '` + VarsApplied + `%s\tbusy\n' "$2"; exit 0; }
     ` + staleHolders + `  fi
@@ -324,14 +340,8 @@ fi
 `
 	}
 	return fn + timerStart("va_t") + `va_n=0
-for d in "$base"/*/current "$base"/*/*/current; do
-  [ -d "$d/.devopsy" ] || continue
-  e=${d%/current}
-  e=${e#"$base"/}
-  case "$e" in *.rm.*) continue ;; esac
-  va_apply "$base/$e" "$e" now || true
-  va_n=$((va_n + 1))
-done
+va_one() { if va_apply "$base/$1" "$1" now; then va_n=$((va_n + 1)); fi; }
+each_env va_one
 if [ "$va_n" -gt 0 ]; then
   ` + sayTook("va_t", `"checked the change in each environment"`) + `fi
 `

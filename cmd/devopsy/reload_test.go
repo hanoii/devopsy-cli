@@ -218,7 +218,7 @@ func TestVarsApply(t *testing.T) {
 		}
 		return out
 	}
-	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: set SITE_NAME in environment @devopsy@one:prod\n") || !strings.Contains(out, "to apply it now,\ndevopsy: | $ devopsy @devopsy@one:prod --reload") || strings.Contains(out, s.root) {
+	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: set SITE_NAME in environment @devopsy@one:prod\n") || !strings.Contains(out, "to apply it now:\ndevopsy: | $ devopsy @devopsy@one:prod --reload") || strings.Contains(out, s.root) {
 		t.Errorf("a plain value:\n%s", out)
 	}
 	if out := vars([]string{"FAKE_DB_IMAGE=mariadb:12"}, "@prod", "--vars", "set", "FAKE_DB_IMAGE"); !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release") || strings.Contains(out, "--reload") {
@@ -243,12 +243,12 @@ func TestVarsApply(t *testing.T) {
 
 	// The project's file: prod and dev, each checked.
 	vars(nil, "@dev", "--release")
-	if out := vars([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); !strings.Contains(out, "devopsy: set X in project shop on devopsy@one\ndevopsy: | dev and prod: a reload applies it\n") {
+	if out := vars([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); !strings.Contains(out, "devopsy: set X in project shop on devopsy@one\ndevopsy: | dev and prod: running containers keep their old values until a reload recreates them\n") {
 		t.Errorf("the project's file:\n%s", out)
 	}
 	// dev's lock held (the loop's first try fails): not checked, never waited for.
 	s.fake("flock", "#!/bin/sh\nif [ \"$*\" = '-n 7' ] && [ ! -e \""+filepath.Join(filepath.Dir(s.root), "tried")+"\" ]; then : > \""+filepath.Join(filepath.Dir(s.root), "tried")+"\"; exit 1; fi\nexit 0\n")
-	if out := vars(nil, "@prod", "--vars-project", "unset", "X"); !strings.Contains(out, "devopsy: | dev: not checked, its lock is held now\ndevopsy: | prod: a reload applies it\n") {
+	if out := vars(nil, "@prod", "--vars-project", "unset", "X"); !strings.Contains(out, "devopsy: | dev: not checked, its lock is held now\ndevopsy: | prod: running containers keep their old values until a reload recreates them\n") {
 		t.Errorf("an environment busy:\n%s", out)
 	}
 	// A key prod's capability computed from, unset in the project's file: its fix there.
@@ -256,7 +256,7 @@ func TestVarsApply(t *testing.T) {
 	vars(nil, "@prod", "--vars", "unset", "A")
 	out = vars(nil, "@prod", "--vars-project", "unset", "A")
 	if !strings.Contains(out, "warning: unset A in project shop on devopsy@one, and the next reload or release of prod refuses\n") ||
-		!strings.Contains(out, "devopsy: | dev: a reload applies it\ndevopsy: | prod: compose requires AU, which the project's env capability computed before this change and no longer does\n") ||
+		!strings.Contains(out, "devopsy: | dev: running containers keep their old values until a reload recreates them\ndevopsy: | prod: compose requires AU, which the project's env capability computed before this change and no longer does\n") ||
 		!strings.Contains(out, "set A again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars-project set A\n") {
 		t.Errorf("a project's key prod's capability computed from:\n%s", out)
 	}

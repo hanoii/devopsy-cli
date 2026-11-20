@@ -891,7 +891,7 @@ func TestReleaseSteps(t *testing.T) {
 
 	// prepare generates SECRET; NEEDED is missing: listed with compose's words, nothing live.
 	out, code := run(nil, "@prod", "--release")
-	if code == 0 || !strings.Contains(out, "|   NEEDED\n") || !strings.Contains(out, "required variable NEEDED is missing a value: set it per environment\n") || strings.Contains(out, "SECRET ") || !strings.Contains(out, "devopsy @devopsy@server:prod --vars set") || current() != "" || strings.Contains(out, "deploy --fast") {
+	if code == 0 || !strings.Contains(out, "error: compose requires NEEDED, which is not set\n") || !strings.Contains(out, "| compose says: required variable NEEDED is missing a value: set it per environment\n") || strings.Contains(out, "SECRET ") || !strings.Contains(out, "devopsy @devopsy@server:prod --vars set") || current() != "" || strings.Contains(out, "deploy --fast") {
 		t.Fatalf("missing variable (%d), current %q:\n%s", code, current(), out)
 	}
 	if !strings.Contains(out, "remote before steps skipped") {
@@ -1376,7 +1376,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out := stdin("inst\n", "@b/prod", "--vars-instance", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the instance's .env overrides, on @devopsy@server:b/prod, the value from the project's .env\ndevopsy: | to use that value again:\ndevopsy: | $ devopsy @devopsy@server:b/prod --vars-instance unset SHARED") || strings.Contains(out, "pr-12") {
 		t.Errorf("--vars-instance set over the project's:\n%s", out)
 	}
-	if out := stdin("yes\n", "@b/prod", "--vars-project", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the project's .env has no effect on @devopsy@server:b/prod: the value from the instance's .env overrides it\n") || strings.Contains(warned(out), "devopsy: |") || strings.Contains(warned(out), "pr-12") || !strings.Contains(out, "devopsy: | b/prod and c/pr-12: a reload applies it\n") {
+	if out := stdin("yes\n", "@b/prod", "--vars-project", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the project's .env has no effect on @devopsy@server:b/prod: the value from the instance's .env overrides it\n") || strings.Contains(warned(out), "devopsy: |") || strings.Contains(warned(out), "pr-12") || !strings.Contains(out, "devopsy: | b/prod and c/pr-12: running containers keep their old values until a reload recreates them\n") {
 		t.Errorf("--vars-project set under an instance's:\n%s", out)
 	}
 	stdin("", "@b/prod", "--vars-instance", "unset", "SHARED")

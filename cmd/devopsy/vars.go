@@ -250,62 +250,49 @@ func varsScope(t *remote.Target, level *remote.Level) string {
 
 // sayApplied says said, and what applies a change of t's variables, from what the
 // server's check found in each environment (remote.ParseVarsApplied): the environment's
-// own, or with level each one under it. unset are the keys the change unset.
+// own, or with level each one under it, environments with the same outcome on one
+// detail. unset are the keys the change unset.
 func sayApplied(t *remote.Target, level *remote.Level, said string, unset []string, applied []remote.Applied) {
 	if level == nil {
-		if len(applied) == 0 {
-			applied = []remote.Applied{{}}
+		a := remote.Applied{}
+		if len(applied) > 0 {
+			a = applied[0]
 		}
-		sayAppliedHere(t, said, unset, applied[0])
+		o := outcomeOf(t, a, unset)
+		if o.missing == nil {
+			report.Say(report.InfoLevel, said, o.details, o.hints...)
+			return
+		}
+		head := said + ", and its next reload or release refuses"
+		if o.missing.AsBefore {
+			head += " as before"
+		}
+		report.Say(report.WarnLevel, head, o.details, varsFix(t, nil, *o.missing)...)
 		return
 	}
 	if len(applied) == 0 {
 		report.Info(said, "no environment there is released yet: each one's first release applies it")
 		return
 	}
-	// Environments with the same outcome on one detail, in order.
 	type group struct {
 		envs    []string
 		details []string
 	}
 	var groups []*group
-	add := func(env string, details ...string) {
-		for _, g := range groups {
-			if slices.Equal(g.details, details) {
-				g.envs = append(g.envs, env)
-				return
-			}
-		}
-		groups = append(groups, &group{envs: []string{env}, details: details})
-	}
 	var refusing []string
 	fix, asBefore := cli.Explained{}, true
 	for _, a := range applied {
-		switch a.Word {
-		case "busy":
-			add(a.Dir, "not checked, its lock is held now")
-		case "marked":
-			add(a.Dir, "its data is from a sync, an import or a restore that did not complete: a reload or a release applies it once that is settled")
-		case "cut":
-			add(a.Dir, "its release was cut off past its switch: a reload applies it once that is finished")
-		case "0":
-			add(a.Dir, "a reload applies it")
-		case "3":
-			add(a.Dir, append([]string{"it needs another image than the release runs, which only a release fetches:"}, imageLines(a.Lines)...)...)
-		case "4":
-			m := cli.ParseMissing(a.Lines)
-			if m == nil {
-				add(a.Dir, "devopsy could not tell what applies it: its reload checks it")
-				continue
-			}
-			e := m.Explain(unset)
-			refusing, asBefore = append(refusing, a.Dir), asBefore && e.AsBefore
-			add(a.Dir, e.Details...)
-			fix.SetAgain = appendNew(fix.SetAgain, e.SetAgain...)
-			fix.UnsetAgain = appendNew(fix.UnsetAgain, e.UnsetAgain...)
-			fix.SetThem = appendNew(fix.SetThem, e.SetThem...)
-		default:
-			add(a.Dir, "devopsy could not tell what applies it: its reload checks it")
+		o := outcomeOf(t, a, unset)
+		if o.missing != nil {
+			refusing, asBefore = append(refusing, a.Dir), asBefore && o.missing.AsBefore
+			fix.SetAgain = appendNew(fix.SetAgain, o.missing.SetAgain...)
+			fix.UnsetAgain = appendNew(fix.UnsetAgain, o.missing.UnsetAgain...)
+			fix.SetThem = appendNew(fix.SetThem, o.missing.SetThem...)
+		}
+		if i := slices.IndexFunc(groups, func(g *group) bool { return slices.Equal(g.details, o.details) }); i >= 0 {
+			groups[i].envs = append(groups[i].envs, a.Dir)
+		} else {
+			groups = append(groups, &group{envs: []string{a.Dir}, details: o.details})
 		}
 	}
 	var details []string
@@ -321,66 +308,66 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 	if asBefore {
 		head += " as before"
 	}
-	report.Say(report.WarnLevel, head, details, varsFix(t, level, fix))
+	report.Say(report.WarnLevel, head, details, varsFix(t, level, fix)...)
 }
 
-// sayAppliedHere says said and what applies the change in t, a, its own check.
-func sayAppliedHere(t *remote.Target, said string, unset []string, a remote.Applied) {
+// outcome is what the check found in one environment, worded: what applies the change,
+// with the commands that do when the environment's own edit says it (hints), or what
+// compose misses (missing), its details then the explanation's.
+type outcome struct {
+	details []string
+	hints   []report.Remedy
+	missing *cli.Explained
+}
+
+// outcomeOf words a, the check in one environment of t; unset are the keys unset.
+func outcomeOf(t *remote.Target, a remote.Applied, unset []string) outcome {
+	status := report.Hint("as --status shows:", "devopsy @"+targetRef(t)+" --status")
+	reload := report.Hint("to apply it now:", "devopsy @"+targetRef(t)+" --reload")
 	switch a.Word {
 	case "plain":
-		report.Info(said, "running containers keep their old values until they are recreated")
+		return outcome{details: []string{"running containers keep their old values until they are recreated"}}
 	case "first":
-		report.Info(said, "nothing is released there yet: its first release applies it")
+		return outcome{details: []string{"nothing is released there yet: its first release applies it"}}
+	case "busy":
+		return outcome{details: []string{"not checked, its lock is held now"}}
 	case "marked":
-		report.Say(report.InfoLevel, said, nil, report.Hint(markedSays, "devopsy @"+targetRef(t)+" --status"))
+		return outcome{details: []string{"its data is from a sync, an import or a restore that did not complete: a reload or a release applies it once that is settled"}, hints: []report.Remedy{status}}
 	case "cut":
-		report.Say(report.InfoLevel, said, nil, report.Hint("its release was cut off past its switch: a reload applies it once that is finished, as --status shows:", "devopsy @"+targetRef(t)+" --status"))
+		return outcome{details: []string{"its release was cut off past its switch: a reload applies it once that is finished"}, hints: []report.Remedy{status}}
 	case "0":
-		report.Say(report.InfoLevel, said, nil, report.Hint("running containers keep their old values until they are recreated: to apply it now,", "devopsy @"+targetRef(t)+" --reload"))
+		return outcome{details: []string{"running containers keep their old values until a reload recreates them"}, hints: []report.Remedy{reload}}
 	case "3":
-		report.Say(report.InfoLevel, said, append([]string{"it needs another image than the release runs, which only a release fetches:"}, imageLines(a.Lines)...), report.Hint("to apply it:", "devopsy @"+remote.HintAddress(t)+" --release"))
+		var what []string
+		for _, l := range a.Lines {
+			if v, ok := strings.CutPrefix(l, "image "); ok {
+				what = append(what, v)
+			}
+		}
+		return outcome{details: append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), hints: []report.Remedy{report.Hint("to apply it:", "devopsy @"+remote.HintAddress(t)+" --release")}}
 	case "4":
 		if m := cli.ParseMissing(a.Lines); m != nil {
 			e := m.Explain(unset)
-			head := said + ", and its next reload or release refuses"
-			if e.AsBefore {
-				head += " as before"
-			}
-			report.Say(report.WarnLevel, head, e.Details, varsFix(t, nil, e))
-			return
-		}
-		fallthrough
-	default:
-		// The check could not tell (compose's configuration unreadable):
-		// a reload says why.
-		report.Say(report.InfoLevel, said, nil, report.Hint("running containers keep their old values until they are recreated: a reload applies it once its checks pass", "devopsy @"+targetRef(t)+" --reload"))
-	}
-}
-
-// imageLines are a check's "image <what>" lines' whats.
-func imageLines(lines []string) []string {
-	var what []string
-	for _, l := range lines {
-		if v, ok := strings.CutPrefix(l, "image "); ok {
-			what = append(what, v)
+			return outcome{details: e.Details, missing: &e}
 		}
 	}
-	return what
+	// The check could not tell (compose's configuration unreadable): a reload says why.
+	return outcome{details: []string{"devopsy could not tell what applies it: a reload applies it once its checks pass"}, hints: []report.Remedy{reload}}
 }
 
 // varsFix is the one fix of what compose misses after a change (cli.Explained), at the
 // level it was made: the keys to set again, to unset again and to set, every command
-// needed.
-func varsFix(t *remote.Target, level *remote.Level, e cli.Explained) report.Remedy {
+// needed; none when no key brings it back, which the details say.
+func varsFix(t *remote.Target, level *remote.Level, e cli.Explained) []report.Remedy {
 	flag := "--vars"
 	if level != nil {
 		flag = "--vars-" + level.Name
 	}
 	var parts, cmds []string
-	add := func(what, word string, keys []string) {
+	add := func(what, verb string, keys []string) {
 		if len(keys) > 0 {
 			parts = append(parts, what)
-			cmds = append(cmds, "devopsy @"+targetRef(t)+" "+flag+" "+word+" "+strings.Join(keys, " "))
+			cmds = append(cmds, "devopsy @"+targetRef(t)+" "+cli.VarsEdit(flag, verb, keys))
 		}
 	}
 	add("set "+report.JoinAnd(e.SetAgain)+" again", "set", e.SetAgain)
@@ -390,7 +377,10 @@ func varsFix(t *remote.Target, level *remote.Level, e cli.Explained) report.Reme
 		them = "set " + report.JoinAnd(e.SetThem)
 	}
 	add(them, "set", e.SetThem)
-	return report.Fix(strings.Join(parts, ", then ")+":", cmds...)
+	if len(cmds) == 0 {
+		return nil
+	}
+	return []report.Remedy{report.Fix(strings.Join(parts, ", then ")+":", cmds...)}
 }
 
 // appendNew appends what list lacks of vs.
@@ -459,8 +449,3 @@ func localSecrets(projectDir string) []string {
 	}
 	return p.Secrets
 }
-
-// markedSays is what a change of variables says on an environment whose
-// data a sync, an import or a restore did not complete: a reload and a
-// release refuse there until that is settled, as --status shows.
-const markedSays = "its data is from a sync, an import or a restore that did not complete: a reload or a release applies it once that is settled, as --status shows:"

@@ -23,8 +23,9 @@ func fakeCompose(said, vars string) string {
 // --variables lists (a variable an include's env_file sets is listed required, and set);
 // when they do not read, the required variables unset or empty are listed with what
 // compose said, a set one and an optional one left out; when none is, compose's words
-// alone, a line compose said twice once. Compose's words are kept only where they name a
-// missing variable, after "compose says:", and masked, on either path: compose
+// alone, a line compose said twice once, its message the variables missing as --vars'
+// follow-up words them. Compose's words are kept only where they name a missing variable,
+// from its "required variable", after "compose says:", and masked, on either path: compose
 // interpolates a :? message, and its other errors quote values. On a target, the fix names the environment's
 // shared/.env, which --vars set writes, before the other two levels, and sets the
 // variables missing by their names, a command that works when copied.
@@ -32,7 +33,7 @@ func TestMissingVars(t *testing.T) {
 	t.Parallel()
 	vars := `{"TOKEN":{"Required":true},"EMPTY":{"Required":true},"SET":{"Required":true},"OPT":{"Required":false}}`
 	said := "error while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for hunter2secret"
-	masked := "compose says: error while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for ***"
+	masked := "compose says: required variable TOKEN is missing a value: the token for ***"
 	warned := `level=warning msg="The TOKEN variable is not set. Defaulting to a blank string."`
 	for _, c := range []struct {
 		name, said, vars string
@@ -40,7 +41,7 @@ func TestMissingVars(t *testing.T) {
 		fix              bool
 	}{
 		{"reads", "", vars, nil, false},
-		{"missing", warned + "\n" + warned + "\n" + said, vars, []string{"  EMPTY", "  TOKEN", masked}, true},
+		{"missing", warned + "\n" + warned + "\n" + said, vars, []string{masked}, true},
 		{"unreadable", "services.app.ports must be a list, not hunter2secret", `{"SET":{"Required":true}}`, []string{"services.app.ports must be a list, not ***"}, false},
 	} {
 		root := project(t, "tunnel", map[string]string{
@@ -72,6 +73,9 @@ func TestMissingVars(t *testing.T) {
 				t.Errorf("%s: %q %+v, want compose's words and no fix", c.name, failure.Msg, failure.Remedies)
 			}
 			continue
+		}
+		if failure.Msg != "compose requires EMPTY and TOKEN, which are not set" {
+			t.Errorf("%s: message %q", c.name, failure.Msg)
 		}
 		want := report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @vm1:own/prod --vars set EMPTY TOKEN")
 		if len(failure.Remedies) != 1 || failure.Remedies[0].Text != want.Text || len(failure.Remedies[0].Cmds) != 1 || failure.Remedies[0].Cmds[0] != want.Cmds[0] {
@@ -199,5 +203,59 @@ func TestCheckMissingBefore(t *testing.T) {
 				t.Errorf("%s: changed %v, want %v", c.name, m.Before.Changed, c.changed)
 			}
 		}
+	}
+}
+
+// The check's lines read back as they were written: the variables before the edit known
+// whatever the edit changed, none included (an unset of a key the file lacks still says
+// "as before" of a variable compose missed then too), and a capability's stderr of
+// several lines kept whole as the reason they are unknown, none of its lines taken for
+// one of the protocol's (a "set A ..." line making them known).
+func TestMissingLines(t *testing.T) {
+	t.Parallel()
+	known := &Missing{Names: []string{"REQUIRED"}, Before: &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: map[string]string{}}}
+	got := ParseMissing(known.Lines())
+	if got == nil || got.Before == nil {
+		t.Fatalf("the variables before the edit lost: %q -> %+v", known.Lines(), got)
+	}
+	if e := got.Explain([]string{"REQUIRED"}); !e.AsBefore || len(e.SetAgain) != 0 {
+		t.Errorf("an edit that changed nothing: %+v", e)
+	}
+	unknown := &Missing{Names: []string{"X"}, Unknown: "devopsy could not tell whether the env capability computed what is missing: compute: exit status 1\nset A (user:password) first"}
+	got = ParseMissing(strings.Split(strings.Join(unknown.Lines(), "\n"), "\n"))
+	if got == nil || got.Before != nil || got.Unknown != unknown.Unknown {
+		t.Fatalf("a capability's stderr: %+v", got)
+	}
+	if e := got.Explain(nil); e.AsBefore || !slices.Contains(e.Details, "set A (user:password) first") {
+		t.Errorf("a capability's stderr explained: %+v", e)
+	}
+}
+
+// Explain never offers a key the edit did not change: a variable set before is brought
+// back by the keys the edit changed, so with none (a key set to the value it had, the
+// capability answering otherwise) it says so in words and offers nothing; and a key the
+// edit removed that was empty before too is no key of the edit's, compose having missed
+// it already (an environment's empty line winning over the project's value the edit
+// unset), so it is "as before", never set again where the nearer line still wins.
+func TestExplainOffersOnlyWhatBringsItBack(t *testing.T) {
+	t.Parallel()
+	m := &Missing{Names: []string{"X"}, Before: &MissingBefore{Computed: map[string]bool{"X": true}, Set: map[string]bool{"X": true}, Changed: map[string]string{}}}
+	if e := m.Explain(nil); len(e.SetAgain)+len(e.UnsetAgain)+len(e.SetThem) != 0 || !slices.ContainsFunc(e.Details, func(d string) bool { return strings.Contains(d, "left its file as it was") }) {
+		t.Errorf("no key changed: %+v", e)
+	}
+	said := "error while interpolating services.app.environment.REQUIRED: required variable REQUIRED is missing a value"
+	root := project(t, "shop", map[string]string{
+		"compose.yaml": minimalCompose,
+		"config.yaml":  "project: shop\n",
+		"bin/docker*":  fakeCompose(said, `{"REQUIRED":{"Required":true}}`),
+		".env":         "REQUIRED=\n",
+		"project.env":  "",
+	})
+	m, err := CheckMissing(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin"}, &Before{File: BeforeFiles["project"], Content: []byte("REQUIRED='1'\n")})
+	if err != nil || m == nil || m.Before == nil {
+		t.Fatalf("%+v %v", m, err)
+	}
+	if e := m.Explain([]string{"REQUIRED"}); !e.AsBefore || slices.Contains(e.SetAgain, "REQUIRED") {
+		t.Errorf("a key removed that was empty before too: %+v", e)
 	}
 }
