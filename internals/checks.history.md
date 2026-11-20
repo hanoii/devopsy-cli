@@ -1,6 +1,7 @@
 History, not rules: the root's Checks section, Workflow's "Tests and checks" and `internals/e2e.md` win where they differ.
 
 - "Every change carries its test" came from the reviews of October 2026, which found bugs in code that worked when written and broke under a later change nobody re-tested; the accepted cost is that the fakes grow with the code.
+- "A test checks a behavior by what it does or returns" came on 2026-11-20: a rewording of `--vars`' follow-up left a test that checked "refuses until" was absent passing whatever was said, and a regression it guarded (an import read as missing) went unseen until the next rewording; its check is the reload hint offered and no warning since.
 - Running the checks in Docker on Linux measured about three times faster than on macOS (50 s against 150 s): macOS checks each new executable on its first run, and the tests write thousands of fake scripts.
 - The 26 `sleep 1.1` between releases in the tests went on 2026-10-24, once the server picked release ids; no sleep is needed for ids, locks or files since.
 - Unit tests went parallel on 2026-10-24: on Linux with 4 CPUs, as CI's runners, 200 s serial became 50 s with all CPUs busy; on macOS (10 CPUs) 410 s became 145 s, most of what is left being the first exec of each new script (macOS checks every new executable), so the next lever there is fewer new scripts, the setups' fakes written once and copied only for a test that changes them.
