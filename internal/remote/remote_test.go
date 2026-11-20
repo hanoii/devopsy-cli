@@ -1779,7 +1779,7 @@ exit 0
 	if exists("app/b/prod/releases/1") || exists("app/b/prod/releases/2") {
 		t.Errorf("b's releases 1 and 2 not pruned:\n%s", out)
 	}
-	if fakeImage(root, "registry/app:abc") != "" || !strings.Contains(out, "removed registry/app:abc: only 1 used them") {
+	if fakeImage(root, "registry/app:abc") != "" || !strings.Contains(out, "removed registry/app:abc: no other release used it") {
 		t.Errorf("registry/app:abc stays with no release holding it:\n%s", out)
 	}
 	if fakeImage(root, "mariadb:11") != "Y" || fakeImage(root, "registry/app:def") != "Y" {

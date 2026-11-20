@@ -383,12 +383,14 @@ func runImages(args []string, color bool) int {
 		// Docker failing midway: the release stays (exit 1), so the next
 		// removal finds its listing again.
 		code := 0
+		rm := s.Removal()
 		for _, r := range rest {
-			if err := s.Remove(r); err != nil {
+			if err := rm.Remove(r); err != nil {
 				report.Error("the images of " + filepath.Base(r) + " could not all be removed (" + err.Error() + "): the release stays for the next removal")
 				code = 1
 			}
 		}
+		rm.Done()
 		return code
 	case "prune":
 		s.Prune()

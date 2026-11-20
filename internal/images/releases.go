@@ -126,13 +126,15 @@ func (s *Set) RemoveReleases(base string, ids []string, quiet, goneOK bool) erro
 		}
 	}
 	var failed []string
+	rm := s.Removal()
+	defer rm.Done()
 	for _, id := range ids {
 		if _, ok := rs[id]; !ok {
 			s.say(report.InfoLevel, "release %s is gone already", id)
 			continue
 		}
 		dir := filepath.Join(base, "releases", id)
-		if err := s.Remove(dir); err != nil {
+		if err := rm.Remove(dir); err != nil {
 			s.say(report.ErrorLevel, "the images of %s could not all be removed (%v): the release stays for the next removal", id, err)
 			failed = append(failed, id)
 			continue

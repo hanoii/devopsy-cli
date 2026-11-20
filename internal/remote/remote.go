@@ -2187,11 +2187,13 @@ else
   devopsy --say info "no release: nothing to take down"
 fi
 d_fail=
-img remove "$base"/releases/* || d_fail=1
-# Its snapshots' bookmarks too, wherever the snapshot root puts them.
+# Its snapshots' bookmarks too, wherever the snapshot root puts them, in
+# the same call: it says once what all of them kept and removed.
+set -- "$base"/releases/*
 for d in "$snaps"/*; do
-  [ ! -d "$d" ] || img remove "$d" || d_fail=1
+  [ ! -d "$d" ] || set -- "$@" "$d"
 done
+img remove "$@" || d_fail=1
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then

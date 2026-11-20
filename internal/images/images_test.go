@@ -1019,6 +1019,49 @@ func TestRemoveOtherRepository(t *testing.T) {
 	}
 }
 
+// A removal of several releases says once what they kept and removed: a
+// name kept for a later release that the later one removed shows only as
+// removed, and a single release's removal names it.
+func TestRemovalSaysOnce(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	e := newEnv(t, d, "app-prod", left, &out)
+	other := newEnv(t, d, "app-other", left, &out)
+	d.pull("caddy:2", "sha256:1")
+	d.pull("mariadb:11.8", "sha256:2")
+	d.pull("redis:8", "sha256:3")
+	var ids []string
+	for range 3 {
+		id := e.newRelease("caddy:2", "mariadb:11.8", "redis:8")
+		e.set.Bookmark(e.rel(id))
+		ids = append(ids, id)
+	}
+	held := other.newRelease("mariadb:11.8")
+	other.set.Bookmark(other.rel(held))
+	rm := e.set.Removal()
+	for _, id := range ids {
+		if err := rm.Remove(e.rel(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rm.Done()
+	if want := "devopsy: kept mariadb:11.8: other releases use it\ndevopsy: removed caddy:2, redis:8: no other release used them\n"; out.String() != want {
+		t.Errorf("said:\n%s\nwant:\n%s", out.String(), want)
+	}
+	if d.names["mariadb:11.8"] != "sha256:2" || d.names["caddy:2"] != "" {
+		t.Errorf("names left: %v", d.names)
+	}
+	out.Reset()
+	if err := other.set.Remove(other.rel(held)); err != nil {
+		t.Fatal(err)
+	}
+	if want := "devopsy: removed mariadb:11.8: only " + held + " used it\n"; out.String() != want {
+		t.Errorf("one release said:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
 // A release whose digest's image is gone gets it again before the
 // switch, never from the run step's up after: pulled by its digest, and
 // refused when the registry no longer has it.

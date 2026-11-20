@@ -1055,13 +1055,75 @@ func (s *Set) BookmarkFrom(dir, rel string) error {
 // Docker other than a missing image stops it: the release must stay, so
 // the next removal finds its listing again.
 func (s *Set) Remove(rel string) error {
+	r := s.Removal()
+	err := r.Remove(rel)
+	r.Done()
+	return err
+}
+
+// Removal removes several releases' images (Remove each) and says what
+// they kept and removed once, at Done: a release listing the images of a
+// later one in the same removal would say each time that the later one
+// keeps them.
+type Removal struct {
+	s          *Set
+	ids        []string
+	stay, gone []string
+}
+
+// Removal starts a removal of releases' images.
+func (s *Set) Removal() *Removal { return &Removal{s: s} }
+
+// Remove takes rel's images, as Set.Remove does, saying nothing yet.
+func (r *Removal) Remove(rel string) error {
+	stay, gone, err := r.s.remove(rel)
+	r.ids = append(r.ids, r.s.idOf(rel))
+	for _, n := range stay {
+		r.stay = appendNew(r.stay, n)
+	}
+	for _, n := range gone {
+		r.gone = appendNew(r.gone, n)
+	}
+	return err
+}
+
+// Done says what the removal kept, only names still kept once every
+// release went, and what it removed.
+func (r *Removal) Done() {
+	stay := slices.DeleteFunc(slices.Clone(r.stay), func(n string) bool { return slices.Contains(r.gone, n) })
+	pronoun := func(names []string) string {
+		if len(names) == 1 {
+			return "it"
+		}
+		return "them"
+	}
+	one := len(r.ids) == 1
+	if len(stay) > 0 {
+		why := "other releases use " + pronoun(stay)
+		if one {
+			why += " too"
+		}
+		r.s.say(report.InfoLevel, "kept %s: %s", strings.Join(stay, ", "), why)
+	}
+	if len(r.gone) > 0 {
+		why := "no other release used " + pronoun(r.gone)
+		if one {
+			why = "only " + r.ids[0] + " used " + pronoun(r.gone)
+		}
+		r.s.say(report.InfoLevel, "removed %s: %s", strings.Join(r.gone, ", "), why)
+	}
+}
+
+// remove is Remove's work, returning the names it kept for other
+// releases and the names it removed.
+func (s *Set) remove(rel string) (stay, gone []string, err error) {
 	// What a fetch of it left (a rollback's fetch killed outright, which no
 	// img recover finds): its tags are names no listing has.
 	s.dropFetch(rel)
 	id := s.idOf(rel)
 	es, names := s.releaseEntries(rel)
 	if len(es) == 0 {
-		return nil
+		return nil, nil, nil
 	}
 	mine := map[string]bool{}
 	imgs := make([]string, len(es))
@@ -1077,7 +1139,7 @@ func (s *Set) Remove(rel string) error {
 			continue
 		}
 		if err != nil {
-			return err
+			return stay, gone, err
 		}
 		if imgs[i] == "" { // a v0.38 listing, without ids
 			imgs[i] = bm
@@ -1110,14 +1172,13 @@ func (s *Set) Remove(rel string) error {
 			continue
 		}
 		if err != nil {
-			return err
+			return stay, gone, err
 		}
 		if _, ok := refs[cur]; !ok {
 			order = append(order, cur)
 		}
 		refs[cur] = appendNew(refs[cur], e.Ref)
 	}
-	var stay, gone []string
 	dead := s.leftBookmarks()
 	skip := s.notHolding(mine, dead)
 	tools := s.toolTags()
@@ -1127,7 +1188,7 @@ func (s *Set) Remove(rel string) error {
 			continue // gone with its bookmark
 		}
 		if err != nil {
-			return err
+			return stay, gone, err
 		}
 		// Its names in the release's repositories: the ones it listed that
 		// still point to the image, and the image's other names there (one
@@ -1157,7 +1218,7 @@ func (s *Set) Remove(rel string) error {
 		for _, r := range rm {
 			named, err := tools.names(r, skip)
 			if err != nil {
-				return err
+				return stay, gone, err
 			}
 			if named {
 				toolRepos[repoKey(r)] = true
@@ -1193,7 +1254,7 @@ func (s *Set) Remove(rel string) error {
 		// all but the last would only cost whoever runs them a pull.
 		users, err := s.Docker.Users(img)
 		if err != nil {
-			return err
+			return stay, gone, err
 		}
 		if len(users) > 0 {
 			why := "a container of " + strings.Join(describe(users), ", ") + " uses its image"
@@ -1212,13 +1273,7 @@ func (s *Set) Remove(rel string) error {
 			}
 		}
 	}
-	if len(stay) > 0 {
-		s.say(report.InfoLevel, "kept %s: other releases use them too", strings.Join(stay, ", "))
-	}
-	if len(gone) > 0 {
-		s.say(report.InfoLevel, "removed %s: only %s used them", strings.Join(gone, ", "), id)
-	}
-	return nil
+	return stay, gone, nil
 }
 
 // toolTagOf matches a release's tool tag (toolTag), its cksum after -t: never a snapshot's
