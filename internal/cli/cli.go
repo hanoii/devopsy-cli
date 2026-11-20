@@ -329,6 +329,20 @@ func LoadDotenv(env *Env, file string) error {
 	if err != nil {
 		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: %v", file, err)}
 	}
+	return setDotenv(env, file, vars)
+}
+
+// loadDotenvFrom is LoadDotenv of content standing in for file, defined as file's.
+func loadDotenvFrom(env *Env, file string, content []byte) error {
+	vars, err := dotenv.UnmarshalBytesWithLookup(content, env.Lookup)
+	if err != nil {
+		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: %v", file, err)}
+	}
+	return setDotenv(env, file, vars)
+}
+
+// setDotenv sets what file defined, below what env has.
+func setDotenv(env *Env, file string, vars map[string]string) error {
 	// A release's devopsy-target.env ends with what it imported.
 	imported := map[string]string{}
 	if b := filepath.Base(file); b == remote.TargetEnvFile || b == remote.TargetReloadFile {
@@ -1524,6 +1538,68 @@ func (p *loadedProject) newSecrets() *Secrets { return NewSecrets(p.env, p.secre
 // loadProject finds the project from cwd and loads its environment over the
 // caller's.
 func loadProject(cwd string, environ []string) (*loadedProject, error) {
+	return loadProjectBefore(cwd, environ, nil)
+}
+
+// envFiles are the files a project's environment loads, nearest first, each read where
+// it is, or where its stand-in's variable names when that file exists:
+//   - .env: a --no-code restore --with-env checks against the snapshot's
+//     (DotenvPendingEnv), which compose is then told to read (envFile);
+//   - on servers, a child's inherited variables (shared/inherit.env, below its own .env),
+//     during a re-sync its pending ones (InheritPendingEnv: the labels the sync reads
+//     come from them, when the sync wrote any);
+//   - the instance's and the project's .env, shared by their environments: links
+//     releases get;
+//   - a child's copy of its parent's server's instance and project .env
+//     (remote.ParentEnvFile), below what its own server says, during a re-sync its
+//     pending copy;
+//   - per-target settings, written into each release by `devopsy @target --release` from
+//     config.yaml, below .env so a server can override them; during a reload's checks,
+//     its imports read again (TargetPendingEnv, PrepareRelease's reload).
+var envFiles = []struct {
+	name    string
+	path    func(projectDir string) string
+	pending func(env *Env) string
+}{
+	{".env", inProject(".env"), lookupOf(remote.DotenvPendingEnv)},
+	{remote.InheritFile, inProject(remote.InheritFile), lookupOf(remote.InheritPendingEnv)},
+	{"instance.env", inProject("instance.env"), nil},
+	{"project.env", inProject("project.env"), nil},
+	{remote.ParentEnvFile, inProject(remote.ParentEnvFile), func(env *Env) string {
+		if p, _ := env.Lookup(remote.InheritPendingEnv); p != "" {
+			return remote.ParentPendingOf(p)
+		}
+		return ""
+	}},
+	{remote.TargetEnvFile, func(dir string) string { return remote.ReleaseFile(dir, remote.TargetEnvFile) }, lookupOf(remote.TargetPendingEnv)},
+}
+
+func inProject(name string) func(string) string {
+	return func(dir string) string { return filepath.Join(dir, name) }
+}
+
+func lookupOf(name string) func(*Env) string {
+	return func(env *Env) string { v, _ := env.Lookup(name); return v }
+}
+
+// Before is what one of a project's variables files held before an edit, standing in for
+// it (BeforeFiles names which): the --vars follow-up's second load.
+type Before struct {
+	File    string
+	Content []byte
+}
+
+// BeforeFiles are the files Before stands in for, by the level --vars edited.
+var BeforeFiles = map[string]string{"env": ".env", "instance": "instance.env", "project": "project.env"}
+
+// beforeError is Before's content failing to parse: its words quote the line, value
+// included, so the follow-up says it in its own.
+type beforeError struct{ err error }
+
+func (e *beforeError) Error() string { return e.err.Error() }
+
+// loadProjectBefore is loadProject with before standing in for its file.
+func loadProjectBefore(cwd string, environ []string, before *Before) (*loadedProject, error) {
 	projectDir, err := FindProjectDir(cwd)
 	if err != nil {
 		return nil, err
@@ -1543,68 +1619,37 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	env.Set("DEVOPSY_PROJECT_DIR", projectDir)
 	env.first["DEVOPSY_PROJECT_DIR"] = []EnvDef{{Kind: EnvDevopsy, Source: "where it found " + ProjectDirName + "/", Value: projectDir}}
 	verbose := []string{"project " + projectDir}
-	load := func(file string) error {
+	dotenvFile := filepath.Join(projectDir, ".env")
+	envFile := ""
+	for _, f := range envFiles {
+		file := f.path(projectDir)
+		if file == "" {
+			continue
+		}
+		if before != nil && before.File == f.name {
+			// What the file held before an edit (--vars' follow-up): read in its
+			// place, never a file compose is told to read.
+			if err := loadDotenvFrom(env, file, before.Content); err != nil {
+				return nil, &beforeError{err}
+			}
+			continue
+		}
+		if f.pending != nil {
+			if p := f.pending(env); p != "" {
+				if _, err := os.Stat(p); err == nil {
+					file = p
+					if f.name == ".env" {
+						envFile = p
+					}
+				}
+			}
+		}
 		if err := LoadDotenv(env, file); err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := os.Stat(file); err == nil {
 			verbose = append(verbose, "loaded "+file)
 		}
-		return nil
-	}
-	dotenvFile := filepath.Join(projectDir, ".env")
-	loaded := dotenvFile
-	// A --no-code restore --with-env checks against the snapshot's.
-	if p, _ := env.Lookup(remote.DotenvPendingEnv); p != "" {
-		if _, err := os.Stat(p); err == nil {
-			loaded = p
-		}
-	}
-	envFile := ""
-	if loaded != dotenvFile {
-		envFile = loaded
-	}
-	if err := load(loaded); err != nil {
-		return nil, err
-	}
-	// On servers, a child's inherited variables (shared/inherit.env, below
-	// its own .env), then the instance's and the project's .env, shared by
-	// their environments: links releases get, nearest first.
-	// Then a child's copy of its parent's server's instance and project
-	// .env (remote.ParentEnvFile), below what its own server says.
-	for _, shared := range []string{remote.InheritFile, "instance.env", "project.env", remote.ParentEnvFile} {
-		file := filepath.Join(projectDir, shared)
-		// During a re-sync on the child, its pending inherited variables
-		// stand in for inherit.env (the labels the sync reads come from
-		// them), when the sync wrote any.
-		if p, _ := env.Lookup(remote.InheritPendingEnv); shared == remote.InheritFile && p != "" {
-			if _, err := os.Stat(p); err == nil {
-				file = p
-			}
-		}
-		// Its pending copy of the parent's server's levels likewise.
-		if p, _ := env.Lookup(remote.InheritPendingEnv); shared == remote.ParentEnvFile && p != "" {
-			pp := remote.ParentPendingOf(p)
-			if _, err := os.Stat(pp); err == nil {
-				file = pp
-			}
-		}
-		if err := load(file); err != nil {
-			return nil, err
-		}
-	}
-	// Per-target settings, written into each release by `devopsy @target
-	// --release` from config.yaml. Below .env, so a server can override them.
-	targetEnv := remote.ReleaseFile(projectDir, remote.TargetEnvFile)
-	// During a reload's checks, its imports read again stand in for the
-	// release's (PrepareRelease's reload).
-	if p, _ := env.Lookup(remote.TargetPendingEnv); p != "" && targetEnv != "" {
-		if _, err := os.Stat(p); err == nil {
-			targetEnv = p
-		}
-	}
-	if err := load(targetEnv); err != nil {
-		return nil, err
 	}
 	// COMPOSE_PROJECT_NAME is always set, so commands and compose agree on
 	// it: releases write it into devopsy-target.env (<project>[-<instance>]-<environment>);
