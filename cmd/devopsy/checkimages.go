@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -36,15 +37,21 @@ const (
 // ran), and with --with-env the fixes the full restore, or the restore
 // without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
 // says nothing and prints on stdout, for the operator to word the
-// follow-up: "missing <name>" lines, exit 4, when compose requires a
-// variable that is not set; else "image <what>" lines, exit 3, when a
-// release applies the change; else nothing, exit 0: a reload does.
+// follow-up: cli.Missing.Lines, exit 4, when compose requires a
+// variable that is not set (with --before <level>, the edited file as it
+// was on stdin, telling how each was set before: cli.CheckMissing); else
+// "image <what>" lines, exit 3, when a release applies the change; else
+// nothing, exit 0: a reload does.
 func runCheckImages(cwd string, args []string) int {
-	hint, sync, snapshot, again := false, false, "", ""
+	hint, sync, snapshot, again, before := false, false, "", "", ""
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "--hint":
 			hint = true
+		case a == "--before" && i+1 < len(args) && cli.BeforeFiles[args[i+1]] != "":
+			// The edited file as it was, on stdin.
+			before = args[i+1]
+			i++
 		case a == "--sync":
 			sync = true
 		case a == "--restore" && i+1 < len(args):
@@ -55,9 +62,19 @@ func runCheckImages(cwd string, args []string) int {
 			again = args[i+1]
 			i++
 		default:
-			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot>] [--again <args>]")
+			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint [--before env|instance|project]] [--sync | --restore <snapshot>] [--again <args>]")
 			return 2
 		}
+	}
+	var old *cli.Before
+	if before != "" {
+		// Read to its end first: a file over the pipe's buffer would fail the
+		// script's printf, and a child given this stdin could read the rest.
+		content, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return failErr(err)
+		}
+		old = &cli.Before{File: cli.BeforeFiles[before], Content: content}
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
@@ -68,14 +85,14 @@ func runCheckImages(cwd string, args []string) int {
 		return failErr(errors.New(cli.CheckImagesFlag + " only runs in a release"))
 	}
 	if hint {
-		missing, err := cli.MissingVarsIn(cwd, os.Environ())
+		m, err := cli.CheckMissing(cwd, os.Environ(), old)
 		if err != nil {
 			return failErr(err)
 		}
-		for _, m := range missing {
-			fmt.Println("missing " + m)
-		}
-		if len(missing) > 0 {
+		if m != nil {
+			for _, l := range m.Lines() {
+				fmt.Println(l)
+			}
 			return checkImagesMissing
 		}
 	}

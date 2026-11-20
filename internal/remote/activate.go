@@ -311,6 +311,8 @@ func (a *activation) links() string {
 touch "$base/shared/.env"
 for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   [ -e "$f" ] || [ -L "$f" ] || continue
+  # devopsy's own temporaries, a cut edit's: never the project's.
+  case "${f##*/}" in ` + strings.Join(sharedTemporaries, "|") + `) continue ;; esac
   rm -rf "$code/.devopsy/${f##*/}"
   ln -s "` + toBase + `shared/${f##*/}" "$code/.devopsy/${f##*/}"
 done

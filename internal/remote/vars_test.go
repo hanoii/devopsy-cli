@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +67,7 @@ func TestVarsScripts(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "app's prod"}
 	file := filepath.Join(base, "shared", ".env")
 	// Its path, then what applies it: nothing is released there yet.
-	if out := runVarsScript(t, root, VarsSetScript(tg, nil, nil), "A='1'\n"); out != file+"\n"+VarsApplied+"first\n" {
+	if out := runVarsScript(t, root, VarsSetScript(tg, nil, nil), "A='1'\n"); out != file+"\n"+VarsApplied+"\tfirst\n" {
 		t.Fatalf("set printed %q", out)
 	}
 	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
@@ -166,14 +167,18 @@ func TestVarsScripts(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(root, "app", ".env")); string(got) != "SHARED='1'\n" {
 		t.Fatalf("level .env %q", got)
 	}
-	if out := runVarsScript(t, root, VarsSetScript(tl, nil, nil), "OWN='1'\n"); out != filepath.Join(root, "app", "prod", "shared", ".env")+"\n"+VarsApplied+"first\n" {
+	if out := runVarsScript(t, root, VarsSetScript(tl, nil, nil), "OWN='1'\n"); out != filepath.Join(root, "app", "prod", "shared", ".env")+"\n"+VarsApplied+"\tfirst\n" {
 		t.Fatalf("own .env printed %q", out)
 	}
 
-	// Reading a level brings the configs of every release under it, for
+	// Reading a level brings the configs of every current release under it, for
 	// their secrets: (with and without instances).
-	write(t, filepath.Join(root, "app", "prod", "current", ".devopsy", "config.yaml"), "secrets: [A]\n")
-	write(t, filepath.Join(root, "app", "site", "dev", "current", ".devopsy", "config.yaml"), "secrets: [B]\n")
+	for env, config := range map[string]string{"prod": "secrets: [A]\n", "site/dev": "secrets: [B]\n"} {
+		write(t, filepath.Join(root, "app", env, "releases", "1", CodeDir, ".devopsy", "config.yaml"), config)
+		if err := os.Symlink(filepath.Join("releases", "1", CodeDir), filepath.Join(root, "app", env, "current")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	read, err = ReadVarsOutput(runVarsScript(t, root, VarsReadScript(tl, level), ""))
 	if err != nil || read.Content != "SHARED='1'\n" || strings.Join(read.Configs, "") != "secrets: [A]\nsecrets: [B]\n" {
 		t.Fatalf("level read: %+v (%v)", read, err)
@@ -187,19 +192,19 @@ func TestVarsScripts(t *testing.T) {
 	}
 }
 
-// The inherited variables (the parent's secrets) are never readable by
-// others on their way into place: before, they sat 644 in the
-// temporary files until the chmod.
+// The inherited variables (the parent's secrets) are never in a file on their way into
+// place, and their file is the deploy user's alone: a spool beside them, left by a cut
+// session, would be linked into every later release (activation.links), and before it
+// sat 644 until the chmod.
 func TestInheritWriteMode(t *testing.T) {
 	t.Parallel()
 	root, bin := t.TempDir(), t.TempDir()
 	tg := &Target{Name: "dev", Host: "h", Path: "app/dev"}
-	// The one write's spool, whatever its pid (ParentVarsWriteScript).
-	in := filepath.Join(root, "app", "dev", "shared") + "/.devopsy-parent-vars.*.in"
-	modes := filepath.Join(root, "modes")
+	shared := filepath.Join(root, "app", "dev", "shared")
+	during := filepath.Join(root, "during")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
-	// The guard copies stdin, then says what mode its output has.
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --stdin-guard ]; then cat; ls -ln "+in+" | cut -c1-10 >\""+modes+"\"; exit; fi\nprintf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\n' \""+root+"\" \""+root+"\"\n")
+	// The guard copies stdin, then lists what the environment holds meanwhile.
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --stdin-guard ]; then cat; ls -A "+shared+" >\""+during+"\"; exit; fi\nprintf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\n' \""+root+"\" \""+root+"\"\n")
 	for _, f := range []string{"flock", "devopsy"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
 			t.Fatal(err)
@@ -211,8 +216,15 @@ func TestInheritWriteMode(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.TrimSpace(readFile(modes)); got != "-rw-------" {
-		t.Errorf("the inherited values on their way: %q", got)
+	if got := strings.TrimSpace(readFile(during)); got != "" {
+		t.Errorf("files in shared/ while the values were read: %q", got)
+	}
+	entries, _ := os.ReadDir(shared)
+	if len(entries) != 1 || entries[0].Name() != InheritFile {
+		t.Errorf("shared/ after the write: %v", entries)
+	}
+	if fi, err := os.Stat(filepath.Join(shared, InheritFile)); err != nil || fi.Mode().Perm() != 0o600 || readFile(filepath.Join(shared, InheritFile)) != "A='secret'\n" {
+		t.Errorf("the inherited values' file: %v %v %q", fi, err, readFile(filepath.Join(shared, InheritFile)))
 	}
 }
 
@@ -295,5 +307,111 @@ func TestVarsRenamesForeignFile(t *testing.T) {
 	}
 	if os.SameFile(before, after) {
 		t.Errorf("written over in place, not renamed")
+	}
+}
+
+// An instance's or a project's edit traces and checks each environment under it that has
+// a current release (each_env), never a directory a cut removal left (.rm.) nor one inside
+// an environment (its shared/, the project's, holding a current/), each check under that
+// environment's lock taken without waiting: one held is busy, never waited for; one with
+// no .lock (removed meanwhile) is skipped; the take removes a killed holder's file, as
+// releaseLock does. Each check gets the file as it was on its stdin, whole, however large,
+// and the edit keeps what the operator sent and that file in memory, never beside the
+// environments' files.
+func TestVarsApplyLevel(t *testing.T) {
+	t.Parallel()
+	root, bin := t.TempDir(), t.TempDir()
+	base := filepath.Join(root, "app")
+	for _, env := range []string{"old", "prod", "qa", "qa.rm.12"} {
+		write(t, filepath.Join(base, env, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		if err := os.Symlink(filepath.Join("releases", "1", CodeDir), filepath.Join(base, env, "current")); err != nil {
+			t.Fatal(err)
+		}
+		if env != "old" {
+			write(t, filepath.Join(base, env, ".lock"), "")
+		}
+	}
+	write(t, filepath.Join(base, "qa", SyncHoldingFile), "")
+	write(t, filepath.Join(base, "prod", "shared", "current", ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(base, "prod", "shared", ".lock"), "")
+	old := strings.Repeat("BIG='"+strings.Repeat("x", 1000)+"'\n", 100)
+	write(t, filepath.Join(base, ".env"), old)
+	during := filepath.Join(root, "during")
+	// The first try of an environment's lock fails (prod's: the glob's order); each
+	// check saves its stdin, finds X missing.
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nif [ \"$*\" = '-n 7' ] && [ ! -e \""+root+"/tried\" ]; then : > \""+root+"/tried\"; exit 1; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+`case "$1" in
+  --stdin-guard) cat; ls -A "$FAKE_ROOT/app" "$FAKE_ROOT/app/qa" > "$FAKE_ROOT/during"; exit 0 ;;
+  --env-trace) echo traced; exit 0 ;;
+  --prepare-release) exit 0 ;;
+  --check-images) env=$(pwd); env=${env%/current}; cat > "$FAKE_ROOT/stdin.${env##*/}"; echo "missing X"; exit 4 ;;
+esac
+printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"
+`)
+	for _, f := range []string{"flock", "devopsy"} {
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	level := &Level{Name: "project", Dir: "app", Link: "project.env"}
+	cmd := exec.Command("sh", "-c", VarsSetScript(&Target{Name: "prod", Path: "app/prod"}, level, []string{"NEW"}))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	cmd.Stdin = strings.NewReader(GatedInput("NEW='1'\n"))
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stdout.String())
+	}
+	file, applied := ParseVarsApplied(stdout.String())
+	want := []Applied{{Dir: "prod", Word: "busy"}, {Dir: "qa", Word: "4", Lines: []string{"missing X"}}}
+	if file != filepath.Join(base, ".env") || fmt.Sprint(applied) != fmt.Sprint(want) {
+		t.Errorf("file %q, applied %+v, want %+v\n%s", file, applied, want, stdout.String())
+	}
+	if traces := ParseVarsTraces(stdout.String()); fmt.Sprint(traces) != fmt.Sprint(map[string]string{"old": "traced", "prod": "traced", "qa": "traced"}) {
+		t.Errorf("traced %v", traces)
+	}
+	if got := readFile(filepath.Join(root, "stdin.qa")); got != old {
+		t.Errorf("qa's check got %d bytes of the old file, want %d", len(got), len(old))
+	}
+	if fileExists(filepath.Join(base, "qa", SyncHoldingFile)) {
+		t.Errorf("a killed holder's file stays once the check took the lock")
+	}
+	if got := readFile(during); strings.Contains(got, ".vars") || strings.Contains(got, ".in") {
+		t.Errorf("files beside the environments' while the values were read:\n%s", got)
+	}
+	if got := readFile(filepath.Join(base, ".env")); got != old+"NEW='1'\n" {
+		t.Errorf("the project's .env after the edit: %d bytes", len(got))
+	}
+}
+
+// A level's listing reads the configs (their secrets:) of the environments each_env
+// lists, no other directory's.: never what a cut removal left (.rm.) nor a directory inside an
+// environment (its shared/current), whose secrets: would mask the listing.
+func TestVarsReadLevelListsEachEnv(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	base := filepath.Join(root, "app")
+	config := func(dir, name string) {
+		write(t, filepath.Join(dir, "releases", "1", CodeDir, ".devopsy", "config.yaml"), "project: app\nsecrets: ["+name+"]\n")
+		if err := os.Symlink(filepath.Join("releases", "1", CodeDir), filepath.Join(dir, "current")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config(filepath.Join(base, "prod"), "OF_PROD")
+	config(filepath.Join(base, "qa.rm.12"), "OF_A_CUT_REMOVAL")
+	write(t, filepath.Join(base, "prod", "shared", "current", ".devopsy", "config.yaml"), "project: app\nsecrets: [OF_SHARED]\n")
+	write(t, filepath.Join(base, ".env"), "A='1'\n")
+	level := &Level{Name: "project", Dir: "app", Link: "project.env"}
+	out, err := runVarsRaw(t, root, VarsReadScript(&Target{Name: "prod", Host: "h", Path: "app/prod"}, level), "")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "OF_PROD") {
+		t.Fatalf("prod's config not read:\n%s", out)
+	}
+	for _, name := range []string{"OF_A_CUT_REMOVAL", "OF_SHARED"} {
+		if strings.Contains(out, name) {
+			t.Errorf("the config of what is no environment read (%s):\n%s", name, out)
+		}
 	}
 }

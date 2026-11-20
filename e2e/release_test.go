@@ -54,7 +54,7 @@ func TestReleaseIncludedVariables(t *testing.T) {
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts\nexec devopsy up -d --wait\n",
 	})
 	out, code := op(t, dir, "devopsy @prod --release")
-	if cur, _ := srv(t, "readlink inclvars/prod/current"); code == 0 || cur != "" || !strings.Contains(out, "compose requires variables that are not set") || !strings.Contains(out, "INC_NAME") || !strings.Contains(out, "required variable INC_NAME is missing a value: the site's name") || !strings.Contains(out, "not made current") {
+	if cur, _ := srv(t, "readlink inclvars/prod/current"); code == 0 || cur != "" || !strings.Contains(out, "compose requires INC_NAME, which is not set") || !strings.Contains(out, "required variable INC_NAME is missing a value: the site's name") || !strings.Contains(out, "not made current") {
 		t.Fatalf("a release missing an included file's variable (%d), current %q:\n%s", code, cur, out)
 	}
 	if out, code := op(t, dir, "INC_NAME=shop devopsy @prod --vars set INC_NAME && devopsy @prod --release"); code != 0 {

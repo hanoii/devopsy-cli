@@ -88,7 +88,9 @@ A release uploads the project as a new directory, then one activation session sw
 
 ## Variables on the server
 
-- Values reach the server's files over SSH's stdin, never as arguments: `--vars`, `--vars-instance` and `--vars-project` edit one file each, in place under the release lock, since a deploy's steps write secrets into them too.
+- Values reach the server's files over SSH's stdin, never as arguments: `--vars`, `--vars-instance` and `--vars-project` edit one file each, in place, an environment's under its release lock, since a deploy's steps write secrets into them too, an instance's or a project's under that level's own lock.
+- On the server, what the operator sends stays in a shell variable until it reaches its file (`gated_read`), never a spool beside it: `activation.links` links every file in `shared/`, and a cut session would leave one.
+- devopsy's own temporaries in `shared/` (`sharedTemporaries`: `.env.tmp`, `inherit.env.tmp`, `parent.env.tmp`) are removed by a release's prelude and never linked; any other `.tmp` there is the project's, kept and linked.
 - A key's lines are all of its value, quoted over several lines, and `KEY: value`, which compose's parser reads as `KEY=value`.
 - The edited file goes into place in one rename beside what a link points to, keeping the file's mode, whoever owned the file: a command reading a file while it is written gets it empty or cut.
 - Inherited values are written under `umask 077`.

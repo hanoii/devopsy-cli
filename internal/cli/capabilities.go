@@ -128,13 +128,16 @@ func ImplementedActions(projectDir string, c Capability) []string {
 // does not run it again.
 const EnvGuard = "DEVOPSY_INTERNAL_ENV_COMPUTE"
 
+// capabilityFile is the env capability of the project at dir.
+func capabilityFile(dir string) string { return filepath.Join(dir, "capabilities", "env", "compute") }
+
 // computeEnv runs the project's env capability, if it has one, and sets
 // the variables it prints that are not set yet.
 func (p *loadedProject) computeEnv() error {
 	if _, ok := p.env.Lookup(EnvGuard); ok {
 		return nil
 	}
-	file := filepath.Join(p.dir, "capabilities", "env", "compute")
+	file := capabilityFile(p.dir)
 	if !isExecutableFile(file) {
 		return nil
 	}

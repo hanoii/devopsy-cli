@@ -21,7 +21,7 @@ func varsPrelude(t *Target, level *Level) string {
 		return s + `base="$root"/` + Quote(level.Dir) + `
 file="$base/.env"
 plain=
-`
+` + eachEnv
 	}
 	return s + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   file="$base/.devopsy/.env"
@@ -33,6 +33,23 @@ fi
 `
 }
 
+// eachEnv defines each_env <command>...: runs it with each environment under the level at
+// $base that has a current release, its directory under $base, with or without
+// instances: a directory with releases/ beside its current link, never what a cut
+// removal left (removeBase's .rm.) nor a directory inside an environment (its shared/,
+// the project's, holding a current/).
+const eachEnv = `each_env() {
+  for ee_d in "$base"/*/current "$base"/*/*/current; do
+    { [ -L "$ee_d" ] && [ -d "$ee_d/.devopsy" ]; } || continue
+    ee_e=${ee_d%/current}
+    [ -d "$ee_e/releases" ] || continue
+    ee_e=${ee_e#"$base"/}
+    case "$ee_e" in *.rm.*) continue ;; esac
+    "$@" "$ee_e"
+  done
+}
+`
+
 // VarsReadScript prints the variables file's path, then sections (see
 // ReadVarsOutput): the file's content, if any, and the configs of the
 // releases that read it, for their secrets: (every environment's current
@@ -43,23 +60,23 @@ fi
 // --vars get gives and the listing counts. A trace that fails is left
 // out (the env capability failing): get falls back to the files.
 func VarsReadScript(t *Target, level *Level) string {
-	configs := `"$base"/current/.devopsy/config*.yaml "$base"/.devopsy/config*.yaml`
-	if level != nil {
-		configs = `"$base"/*/current/.devopsy/config*.yaml`
-		if level.Name == "project" {
-			configs += ` "$base"/*/*/current/.devopsy/config*.yaml`
-		}
-	}
 	s := varsPrelude(t, level) + `printf '%s\n' "$file"
 emit() { printf '%s %s\n' "$1" "$(wc -c < "$2" | tr -d ' ')"; cat "$2"; }
 if [ -f "$file" ]; then emit env "$file"; fi
-for c in ` + configs + `; do
+`
+	if level != nil {
+		return s + `vr_configs() {
+  for c in "$base/$1"/current/.devopsy/config*.yaml; do
+    if [ -f "$c" ]; then emit config "$c"; fi
+  done
+}
+each_env vr_configs
+`
+	}
+	s += `for c in "$base"/current/.devopsy/config*.yaml "$base"/.devopsy/config*.yaml; do
   if [ -f "$c" ]; then emit config "$c"; fi
 done
 `
-	if level != nil {
-		return s
-	}
 	s += `if [ -z "$plain" ] && [ -f "$base/shared/` + InheritFile + `" ]; then emit ` + LevelInherit + ` "$base/shared/` + InheritFile + `"; fi
 `
 	for _, l := range t.Levels {
@@ -143,9 +160,11 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 // dropped, and new keys appended, in order. For unset, stdin has the keys,
 // one per line, and their lines are dropped. A quoted value over several
 // lines (compose's parser reads them) is its key's, all of it. Comments, blank lines and
-// everything else stay as they are. Releases take the release lock, so this
-// never interleaves with a deploy writing its own secrets. stdin is gated
-// (gated_read): devopsy sends it once the lock is held.
+// everything else stay as they are. An environment's edit takes its release lock, so it
+// never interleaves with a deploy writing its own secrets; an instance's or a project's
+// takes that level's own lock, which no release takes. stdin is gated (gated_read):
+// devopsy sends it once the lock is held. What it sends, and the file as it was
+// ($va_old, the follow-up's --before), stay in shell variables, never in a file.
 // mode is set or unset.
 func varsEdit(mode string) string {
 	return gatedRead + `if [ -z "$plain" ]; then
@@ -155,8 +174,9 @@ umask 077
 [ -f "$file" ] || : > "$file"
 # What a link points to: the result goes beside it.
 t=$(readlink -f "$file")
-gated_read "$file.vars"
-awk -v mode=` + mode + ` -v sq="'" '
+ve_in=$(gated_read)
+va_old=$(cat "$t")
+printf '%s\n' "$ve_in" | awk -v mode=` + mode + ` -v sq="'" '
   # closes: s has quote q unescaped, which ends a quoted value.
   function closes(s, q) { gsub(/\\\\/, "", s); gsub("\\\\" q, "", s); return index(s, q) > 0 }
   NR == FNR {
@@ -185,26 +205,31 @@ awk -v mode=` + mode + ` -v sq="'" '
     if ($0 ~ /[=:]/ && (c == "\"" || c == sq) && !closes(substr(v, 2), c)) q = c
   }
   END { for (i = 1; i <= n; i++) if (!(order[i] in done)) print line[order[i]] }
-' "$file.vars" "$file" > "$t.tmp"
+' - "$file" > "$t.tmp"
 # Into place in one rename, with the file's mode, so nothing reads it
 # empty or cut, whoever owned it (nothing makes one another user's).
 chmod "$(stat -c %a "$t" 2>/dev/null || stat -f %Lp "$t")" "$t.tmp"
 mv -f "$t.tmp" "$t"
-rm -f "$file.vars" "$t.tmp"
 printf '%s\n' "$file"
 `
 }
 
+// sharedTemporaries are the files devopsy writes in shared/ on their way into place
+// (varsEdit's .env, the parent's InheritFile and ParentEnvFile): a cut session leaves
+// one, which a release's prelude removes and activation.links never links, shared/ being
+// the project's too, where any other .tmp is its own.
+var sharedTemporaries = []string{".env.tmp", InheritFile + ".tmp", ParentEnvFile + ".tmp"}
+
 // VarsSetScript sets the KEY=value lines given on stdin, keys their
 // names.
 func VarsSetScript(t *Target, level *Level, keys []string) string {
-	return varsPrelude(t, level) + varsEdit("set") + varsTrace(t, level, keys) + varsApply(t, level)
+	return varsPrelude(t, level) + varsEdit("set") + varsTrace(t, level, keys) + varsApply(t, level, true)
 }
 
 // VarsUnsetScript removes the keys given on stdin, one per line, keys
 // their names.
 func VarsUnsetScript(t *Target, level *Level, keys []string) string {
-	return varsPrelude(t, level) + varsEdit("unset") + varsTrace(t, level, keys) + varsApply(t, level)
+	return varsPrelude(t, level) + varsEdit("unset") + varsTrace(t, level, keys) + varsApply(t, level, true)
 }
 
 // VarsTrace starts the lines a --vars set or unset prints after the
@@ -231,54 +256,94 @@ fi
 	// directories or, with instances, theirs: each with its own compose
 	// name, from its release.
 	call := devopsyCall("", args, false)
-	return `for d in "$base"/*/current "$base"/*/*/current; do
-  [ -d "$d/.devopsy" ] || continue
-  e=${d%/current}
-  e=${e#"$base"/}
-  vt=$(cd "$d" && ` + call + ` 2>/dev/null) || continue
-  printf '` + VarsTrace + `%s\t%s\n' "$e" "$vt"
-done
+	return `vt_one() {
+  vt=$(cd "$base/$1/current" && ` + call + ` 2>/dev/null) || return 0
+  printf '` + VarsTrace + `%s\t%s\n' "$1" "$vt"
+}
+each_env vt_one
 `
 }
 
-// VarsApplied starts the line an environment's --vars set or unset
-// prints after the file's path: plain for a plain directory, first with
-// nothing released yet, marked when its data is from a sync, an import
-// or a restore that did not complete (a reload and a release refuse
-// there), cut when its release was cut off past its switch (the lock is
-// held: no activation runs), else its --check-images --hint exit (0: a reload
-// applies the change, 3: only a release, 4: compose requires a variable
-// not set), its output on the lines after (ParseVarsApplied). The check
-// reads the imports again as a reload does (--prepare-release reload,
-// its pending file removed after; with a source down, the release's).
-// Still under the release lock, nothing changed by it.
-const VarsApplied = "apply "
+// VarsApplied starts the line a --vars set or unset prints after the file's path for
+// each environment it checked, then a tab, the environment's directory under the edited
+// level's ("" for the environment's own edit), a tab and its word: plain for a plain
+// directory, first with nothing released yet, marked when its data is from a sync, an
+// import or a restore that did not complete (a reload and a release refuse there), cut
+// when its release was cut off past its switch (the lock is held: no activation runs),
+// busy when something held its lock (an instance's or a project's edit never waits for
+// one), else its --check-images --hint exit (0: a reload applies the change, 3: only a
+// release, 4: compose requires a variable not set). Its check's lines follow, each after
+// VarsAppliedLine and the directory (ParseVarsApplied). The check reads the imports
+// again as a reload does (--prepare-release reload, its pending file removed after; with
+// a source down, the release's). Under the release lock, nothing changed by it.
+const VarsApplied = "apply\t"
 
-func varsApply(t *Target, level *Level) string {
-	if level != nil {
-		return ""
+// VarsAppliedLine starts each line of an environment's check after its VarsApplied.
+const VarsAppliedLine = "applied\t"
+
+// varsApply checks what the edit does: in the environment, or with a level in each of
+// its environments that has a current release (each_env), each under its own release lock
+// taken without waiting (the edit holds the level's). With before, the edited file as it
+// was ($va_old, varsEdit's) goes to each check, its stdin only: --prepare-release runs the
+// project's code.
+func varsApply(t *Target, level *Level, before bool) string {
+	check := []string{"--check-images", "--hint"}
+	feed := ""
+	if before {
+		was := "env"
+		if level != nil {
+			was = level.Name
+		}
+		check = append(check, "--before", was)
+		feed = `printf '%s\n' "$va_old" | `
 	}
-	call := func(args ...string) string { return devopsyCall(t.ComposeName(), args, false) }
-	return `if [ -n "$plain" ]; then
-  printf '` + VarsApplied + `plain\n'
-elif [ ! -L "$base/current" ] || [ ! -d "$base/current/.devopsy" ]; then
-  printf '` + VarsApplied + `first\n'
-elif [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  printf '` + VarsApplied + `marked\n'
-elif [ -f "$base/` + ActivatingFile + `" ]; then
-  printf '` + VarsApplied + `cut\n'
+	call := func(args ...string) string { return devopsyCall("", args, false) }
+	fn := `# va_apply <base> <dir> [now]: the environment's VarsApplied and its lines; with now,
+# its lock taken without waiting, else held by the edit.
+va_apply() (
+  base=$1
+  if [ -n "${3:-}" ]; then
+    # Removed meanwhile: no environment to check.
+    [ -e "$base/.lock" ] || exit 3
+    exec 7<"$base/.lock"
+    ` + lockNow(7, "") + ` 2>/dev/null || { printf '` + VarsApplied + `%s\tbusy\n' "$2"; exit 0; }
+    ` + staleHolders + `  fi
+  if [ ! -L "$base/current" ] || [ ! -d "$base/current/.devopsy" ]; then
+    printf '` + VarsApplied + `%s\tfirst\n' "$2"
+  elif [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+    printf '` + VarsApplied + `%s\tmarked\n' "$2"
+  elif [ -f "$base/` + ActivatingFile + `" ]; then
+    printf '` + VarsApplied + `%s\tcut\n' "$2"
+  else
+    # Never a reason for the edit to fail: what it says is a hint.
+    va_rel=$(readlink "$base/current") || va_rel=
+    va_rel="$base/${va_rel%/` + CodeDir + `}"
+    va_pending="$va_rel/` + TargetReloadFile + `"
+    rm -f "$va_pending"
+    (cd "$base/current" && ` + call("--prepare-release", "reload") + ` >/dev/null 2>&1) || rm -f "$va_pending"
+    va=0
+    va_out=$(cd "$base/current" && ` + feed + TargetPendingEnv + `="$va_pending" ` + call(check...) + ` 2>/dev/null) || va=$?
+    rm -f "$va_pending"
+    printf '` + VarsApplied + `%s\t%s\n' "$2" "$va"
+    printf '%s\n' "$va_out" | while IFS= read -r va_l; do
+      [ -z "$va_l" ] || printf '` + VarsAppliedLine + `%s\t%s\n' "$2" "$va_l"
+    done
+  fi
+)
+`
+	if level == nil {
+		return fn + `if [ -n "$plain" ]; then
+  printf '` + VarsApplied + `\tplain\n'
 else
-  # Never a reason for the edit to fail: what it says is a hint.
-  va_rel=$(readlink "$base/current") || va_rel=
-  va_rel="$base/${va_rel%/` + CodeDir + `}"
-  va_pending="$va_rel/` + TargetReloadFile + `"
-  rm -f "$va_pending"
-  (cd "$base/current" && ` + call("--prepare-release", "reload") + ` >/dev/null 2>&1) || rm -f "$va_pending"
-  va=0
-  va_out=$(cd "$base/current" && ` + TargetPendingEnv + `="$va_pending" ` + call("--check-images", "--hint") + ` 2>/dev/null) || va=$?
-  rm -f "$va_pending"
-  printf '` + VarsApplied + `%s\n%s\n' "$va" "$va_out"
+  va_apply "$base" "" || true
 fi
+`
+	}
+	return fn + timerStart("va_t") + `va_n=0
+va_one() { if va_apply "$base/$1" "$1" now; then va_n=$((va_n + 1)); fi; }
+each_env va_one
+if [ "$va_n" -gt 0 ]; then
+  ` + sayTook("va_t", `"checked the change in each environment"`) + `fi
 `
 }
 
@@ -289,27 +354,32 @@ func VarsHintScript(t *Target) string {
 	return varsPrelude(t, nil) + `if [ -z "$plain" ]; then
   ` + releaseLock(false, false) + `fi
 printf '\n'
-` + varsApply(t, nil)
+` + varsApply(t, nil, false)
 }
 
-// ParseVarsApplied reads what a --vars set or unset printed: the file's
-// path, then VarsApplied's word (plain, first, marked, cut, or the
-// check's exit) and the check's lines; "" without them (an instance's or a project's file).
-func ParseVarsApplied(out string) (file, applied string, lines []string) {
+// Applied is what varsApply found in one environment: its directory under the edited
+// level's ("" for the environment's own edit), its word (VarsApplied), its check's lines.
+type Applied struct {
+	Dir, Word string
+	Lines     []string
+}
+
+// ParseVarsApplied reads what a --vars set or unset printed: the file's path, then each
+// environment's Applied, in order (its traces are ParseVarsTraces').
+func ParseVarsApplied(out string) (file string, applied []Applied) {
 	file, rest, _ := strings.Cut(strings.TrimRight(out, "\n"), "\n")
-	for strings.HasPrefix(rest, VarsTrace) {
-		_, rest, _ = strings.Cut(rest, "\n")
-	}
-	head, more, _ := strings.Cut(rest, "\n")
-	if !strings.HasPrefix(head, VarsApplied) {
-		return file, "", nil
-	}
-	for _, l := range strings.Split(more, "\n") {
-		if l != "" {
-			lines = append(lines, l)
+	for _, l := range strings.Split(rest, "\n") {
+		if head, ok := strings.CutPrefix(l, VarsApplied); ok {
+			dir, word, _ := strings.Cut(head, "\t")
+			applied = append(applied, Applied{Dir: dir, Word: word})
+		} else if line, ok := strings.CutPrefix(l, VarsAppliedLine); ok && len(applied) > 0 {
+			dir, text, _ := strings.Cut(line, "\t")
+			if last := &applied[len(applied)-1]; last.Dir == dir {
+				last.Lines = append(last.Lines, text)
+			}
 		}
 	}
-	return file, strings.TrimPrefix(head, VarsApplied), lines
+	return file, applied
 }
 
 // ParseVarsTraces reads the VarsTrace lines of what a --vars set or
@@ -378,23 +448,23 @@ func ParentVarsWriteScript(t *Target, keys []string, inheritPending, copyPending
   exit 1
 fi
 ` + gatedRead + releaseLock(false, true) + `mkdir -p "$base/shared"
-# The parent's secrets: never readable by others, on their way either.
+# The parent's secrets: never readable by others, on their way either,
+# and in memory until they reach their file.
 umask 077
-all="$base/shared/.devopsy-parent-vars.$$"
-gated_read "$all"
+pv_in=$(gated_read)
+pv_out() { [ -z "$pv_in" ] || printf '%s\n' "$pv_in"; }
 `
 	switch {
 	case inherit && copy:
 		s += `: > ` + inheritTarget + `.tmp
 : > ` + copyTarget + `.tmp
-awk -v s=` + Quote(ParentVarsSeparator) + ` -v a=` + inheritTarget + `.tmp -v b=` + copyTarget + `.tmp '$0 == s { f = 1; next } { print > (f ? b : a) }' "$all"
-rm -f "$all"
+pv_out | awk -v s=` + Quote(ParentVarsSeparator) + ` -v a=` + inheritTarget + `.tmp -v b=` + copyTarget + `.tmp '$0 == s { f = 1; next } { print > (f ? b : a) }'
 `
 	case inherit:
-		s += `mv -f "$all" ` + inheritTarget + `.tmp
+		s += `pv_out > ` + inheritTarget + `.tmp
 `
 	default:
-		s += `mv -f "$all" ` + copyTarget + `.tmp
+		s += `pv_out > ` + copyTarget + `.tmp
 `
 	}
 	if inherit {
