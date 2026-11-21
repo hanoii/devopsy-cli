@@ -29,7 +29,8 @@ func TestDataCapabilityCalledBy(t *testing.T) {
 // several lines of one adding up, whatever its other lines expand to (a value reading a
 // variable the output prints later). A line inside a quoted value is the value's, never
 // read; one devopsy cannot read (a name alone, a variable among its own needs, a secret's
-// value printed by mistake, a line of a cycle through others) is dropped by its line
+// value printed by mistake, the capability's own included, a line of a cycle through
+// others) is dropped by its line
 // number, its text never kept, the capability's other lines read as before.
 func TestReadNeeds(t *testing.T) {
 	t.Parallel()
@@ -49,12 +50,14 @@ end"
 # needs: CX CA
 # needs: CX CB
 # needs: CB CX
+TOKEN='computedsecret'
+# needs: URL computedsecret
 # a comment of the project's own
 OUT
 `
 	root := project(t, "shop", map[string]string{
 		"compose.yaml":              minimalCompose,
-		"config.yaml":               "project: shop\nsecrets: [KEY]\n",
+		"config.yaml":               "project: shop\nsecrets: [KEY, TOKEN]\n",
 		"capabilities/env/compute*": compute,
 	})
 	p, err := loadProject(root, []string{"PATH=/usr/bin:/bin", "KEY=hunter2secret"})
@@ -65,8 +68,8 @@ OUT
 		t.Fatal(err)
 	}
 	want := map[string][]string{"AUTH_USERS": {"AUTH", "SALT"}, "CX": {"CA"}, "URL": {"AUTH_USERS"}}
-	if fmt.Sprint(p.needs) != fmt.Sprint(want) || !slices.Equal(p.needsMalformed, []int{6, 7, 8, 14, 15}) {
-		t.Errorf("needs %v, malformed %v; want %v, [6 7 8 14 15]", p.needs, p.needsMalformed, want)
+	if fmt.Sprint(p.needs) != fmt.Sprint(want) || !slices.Equal(p.needsMalformed, []int{6, 7, 8, 14, 15, 17}) {
+		t.Errorf("needs %v, malformed %v; want %v, [6 7 8 14 15 17]", p.needs, p.needsMalformed, want)
 	}
 	if v, _ := p.env.Lookup("NOTE"); v != "first\n# needs: INSIDE VALUE\nend" {
 		t.Errorf("the quoted value: %q", v)
@@ -75,7 +78,7 @@ OUT
 		t.Errorf("the capability's own variable: %q", v)
 	}
 	verbose := strings.Join(p.verbose, "\n")
-	if strings.Contains(verbose, "hunter2secret") || !strings.Contains(verbose, "line 8 starts # needs:") || !strings.Contains(verbose, "needs AUTH and SALT for AUTH_USERS") {
+	if strings.Contains(verbose, "hunter2secret") || strings.Contains(verbose, "computedsecret") || !strings.Contains(verbose, "lines 6, 7, 8, 14, 15 and 17 of the env capability's output start # needs:") || !strings.Contains(verbose, "needs AUTH and SALT for AUTH_USERS") {
 		t.Errorf("verbose:\n%s", verbose)
 	}
 }

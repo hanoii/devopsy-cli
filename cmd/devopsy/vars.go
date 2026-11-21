@@ -364,8 +364,8 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, edit cli.Edi
 	}
 	var groups []*group
 	var refusing []string
-	// As before is the file's, the same in every environment.
-	fix := cli.Explained{AsBefore: edit.Known && edit.Unchanged}
+	// As before only when every one says it (the file's, the same in each).
+	fix := cli.Explained{AsBefore: true}
 	for _, a := range applied {
 		o := outcomeOf(t, a, edit)
 		if o.missing != nil {

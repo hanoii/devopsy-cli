@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // fakeCompose is a project's bin/docker whose compose config -q says said and fails, or
@@ -131,9 +132,11 @@ func TestReadsUIDs(t *testing.T) {
 // capability said it needs, never more: an input the edit took is set again and the
 // change is why ("so"); a change that changed nothing is "as before"; one whose outcome is
 // unknown (--missing-vars, --inherit) says neither; the edit taking the missing variable
-// itself is why too, but under a nearer file's line. A chain of needs is followed down to
+// itself, or an input it needs others for, is why too, but under a nearer file's line. A
+// chain of needs is followed down to
 // an input with a value, where the capability computed nothing and nothing is offered, or
-// to one a file sets empty, which is unset at the edited file, its own needs then set. A
+// to one a file or an import sets empty, which goes as a missing variable does: one rule
+// for every key, so a key is never unset for one variable and set for another. A
 // file's empty line is said with that file: at the edited file or below it the fix goes
 // there, a nearer one is to remove; a variable the capability computes or needs others
 // for, emptied by a file, is unset at the edited file, never set by hand. A variable or
@@ -190,11 +193,11 @@ func TestExplain(t *testing.T) {
 		{"a plain one the edit emptied", Missing{Names: []string{"X"}, Empty: map[string]string{"X": ".env"}}, took(env, "X"),
 			"compose needs X, which the environment's .env sets empty", "set X again", true, false},
 		{"an input a nearer file empties", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Empty: map[string]string{"A": ".env"}}, took(project, "A"),
-			"the environment's .env sets A empty: its line wins over a value below it, so remove that line there", "", false, false},
+			"A, which the environment's .env sets empty: its line wins over a value below it, so remove that line there", "", false, false},
 		{"an input an import empties", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Imported: map[string]bool{"A": true}}, env,
-			"A is imported, and empty where it comes from", "", false, false},
+			"A, which the project imports, and is empty where it comes from", "", false, false},
 		{"an input devopsy sets", Missing{Names: []string{"X"}, Needs: needs("X", "DEVOPSY_UID")}, env,
-			"DEVOPSY_UID", "", false, false},
+			uids.Reserved("DEVOPSY_UID").Error(), "", false, false},
 		{"one with needs the edit removed", Missing{Names: []string{"X"}, Needs: needs("X", "A")}, took(env, "X"),
 			"compose needs X, which the project's env capability computes from A, not set", "set A", true, false},
 		{"one with needs the edit removed, its input set", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Has: map[string]bool{"A": true}}, took(env, "X"),
@@ -202,7 +205,13 @@ func TestExplain(t *testing.T) {
 		{"one the edit removed over an empty line below", Missing{Names: []string{"X"}, Computed: map[string]bool{"X": true}, Empty: map[string]string{"X": "project.env"}}, took(env, "X"),
 			"compose needs X, which the project's .env sets empty: its line wins over a value below it, so remove that line there", "", true, false},
 		{"an input with needs the edited file empties", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "Z"), Empty: map[string]string{"Y": ".env"}}, env,
-			"the environment's .env sets Y empty, over what the project's env capability computes from Z", "unset Y, then set Z", false, false},
+			"Y, which the environment's .env sets empty, over what the project's env capability computes from Z", "unset Y, then set Z", false, false},
+		{"an input with needs the edit removed", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "A")}, took(env, "Y"),
+			"compose needs X, which the project's env capability computes from A, not set", "set A", true, false},
+		{"an input with needs an import empties", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "B"), Imported: map[string]bool{"Y": true}}, env,
+			"Y, which the project imports, and is empty where it comes from", "", false, false},
+		{"one the capability computes, emptied, and another's input", Missing{Names: []string{"A", "X"}, Needs: needs("X", "A"), Empty: map[string]string{"A": ".env"}, Computed: map[string]bool{"A": true}}, env,
+			"compose needs A, which the environment's .env sets empty, hiding what the project's env capability computes", "unset A", false, false},
 		{"one an import empties", Missing{Names: []string{"X"}, Imported: map[string]bool{"X": true}}, env,
 			"compose needs X, which the project imports, and is empty where it comes from", "", false, false},
 		{"plain ones", Missing{Names: []string{"A", "B"}}, took(env, "A"),
@@ -334,5 +343,35 @@ func TestMissingCarriesNeeds(t *testing.T) {
 		len(got.Has) != 0 || fmt.Sprint(got.Imported) != fmt.Sprint(map[string]bool{"AUTH": true}) || !slices.Equal(got.Malformed, []int{3}) ||
 		fmt.Sprint(got.Empty) != fmt.Sprint(map[string]string{"HIDDEN": ".env", "SALT": ".env"}) || fmt.Sprint(got.Computed) != fmt.Sprint(map[string]bool{"HIDDEN": true}) {
 		t.Errorf("read back from %q:\n%+v", m.Lines(), got)
+	}
+}
+
+// What the env capability computes that a file's empty line hides is recorded for an
+// input too, not only for a missing variable: an input the capability prints a value for,
+// set empty in the edited file, is unset there, never set by hand, which bypasses the
+// capability.
+func TestComputedInputEmptiedIsUnset(t *testing.T) {
+	t.Parallel()
+	root := project(t, "shop", map[string]string{
+		"compose.yaml":              minimalCompose,
+		"config.yaml":               "project: shop\n",
+		"bin/docker*":               fakeCompose("required variable URL is missing a value", `{"URL":{"Required":true}}`),
+		"capabilities/env/compute*": "#!/bin/sh\necho \"HOST='shop.example.com'\"\necho '# needs: URL HOST'\n",
+		".env":                      "HOST=\n",
+	})
+	p, err := loadProject(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.computeEnv(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := missingOf(p)
+	if err != nil || m == nil {
+		t.Fatalf("%+v %v", m, err)
+	}
+	e := ParseMissing(m.Lines()).Explain(Edit{File: ".env"})
+	if fmt.Sprint(e.Unset, e.Set) != "[HOST] []" {
+		t.Errorf("unset %v, set %v, details %q: want HOST unset, never set by hand", e.Unset, e.Set, e.Details)
 	}
 }

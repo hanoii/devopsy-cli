@@ -222,7 +222,7 @@ ve_keys=$(printf '%s\n' "$ve_in" | awk -v mode=` + mode + ` -v sq="'" '
       printf "` + VarsKey + `%s\t%s\n", o, k > "/dev/stderr"
     }
   }
-' - "$file" 2>&1 > "$t.tmp") || { printf '%s\n' "$ve_keys" >&2; exit 1; }
+' - "$file" 2>&1 > "$t.tmp") || { rm -f "$t.tmp"; printf '%s\n' "$ve_keys" >&2; exit 1; }
 # Into place in one rename, with the file's mode, so nothing reads it
 # empty or cut, whoever owned it (nothing makes one another user's).
 chmod "$(stat -c %a "$t" 2>/dev/null || stat -f %Lp "$t")" "$t.tmp"

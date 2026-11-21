@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
@@ -161,9 +162,18 @@ func (p *loadedProject) computeEnv() error {
 	if err != nil {
 		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: its output: %v", file, err)}
 	}
-	// Read as the output was parsed, before its own variables are set: a value reading
-	// one the output prints later would parse otherwise.
-	p.needs, p.needsMalformed = readNeeds(out, vars, p.env.Lookup, p.newSecrets().Mask)
+	// Read as the output was parsed, before its own variables were set (a value reading
+	// one the output prints later would parse otherwise), and masked with its secrets too.
+	before := map[string]bool{}
+	for k := range vars {
+		_, before[k] = p.env.Lookup(k)
+	}
+	parsed := func(k string) (string, bool) {
+		if was, own := before[k]; own && !was {
+			return "", false
+		}
+		return p.env.Lookup(k)
+	}
 	keys := make([]string, 0, len(vars))
 	for k := range vars {
 		keys = append(keys, k)
@@ -178,11 +188,12 @@ func (p *loadedProject) computeEnv() error {
 		p.env.defs[k] = append(p.env.defs[k], EnvDef{Kind: EnvComputed, Source: file, Value: vars[k]})
 	}
 	p.verbose = append(p.verbose, "computed "+file)
+	p.needs, p.needsMalformed = readNeeds(out, vars, parsed, p.newSecrets().Mask)
 	for _, x := range slices.Sorted(maps.Keys(p.needs)) {
 		p.verbose = append(p.verbose, file+" needs "+report.JoinAnd(p.needs[x])+" for "+x)
 	}
-	for _, n := range p.needsMalformed {
-		p.verbose = append(p.verbose, fmt.Sprintf("%s: line %d starts %s but is not %s<variable> <variables it needs>, so devopsy ignores it", file, n, NeedsPrefix, NeedsPrefix))
+	if len(p.needsMalformed) > 0 {
+		p.verbose = append(p.verbose, file+": "+NeedsMalformed(p.needsMalformed))
 	}
 	return nil
 }
@@ -191,6 +202,19 @@ func (p *loadedProject) computeEnv() error {
 // not compute and the variables that would make it, all of them needed: a comment, which
 // no .env parser takes for a variable.
 const NeedsPrefix = "# needs: "
+
+// NeedsMalformed says which lines of the env capability's output start NeedsPrefix and
+// do not read as one, by their numbers, never their text.
+func NeedsMalformed(lines []int) string {
+	ns := make([]string, len(lines))
+	for i, n := range lines {
+		ns[i] = strconv.Itoa(n)
+	}
+	if len(ns) == 1 {
+		return "line " + ns[0] + " of the env capability's output starts " + strings.TrimSpace(NeedsPrefix) + " and does not read, so devopsy ignores it"
+	}
+	return "lines " + report.JoinAnd(ns) + " of the env capability's output start " + strings.TrimSpace(NeedsPrefix) + " and do not read, so devopsy ignores them"
+}
 
 var needsLine = regexp.MustCompile(`^# needs: [A-Za-z_][A-Za-z0-9_]*( [A-Za-z_][A-Za-z0-9_]*)+$`)
 
