@@ -2397,8 +2397,10 @@ func TestDoorRefusesBeforeTheSwitch(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 || started() != before || strings.Contains(out, "restart") {
 		t.Errorf("a missing tag (%d), the live container started at %s:\n%s", code, started(), out)
 	}
-	// A rollback whose hold is gone pulls its image again.
-	if out, code := doorRoot(t, "docker image ls --format '{{.Repository}}:{{.Tag}}' | grep devopsy-doorrefuse-prod | xargs -r docker image rm"); code != 0 {
+	// A rollback whose hold is gone pulls its image again. Untagged with -f: the live
+	// container's image has no other tag unless an earlier test in the lane pulled busybox, and
+	// a plain rm refuses an image's last tag while a container uses it.
+	if out, code := doorRoot(t, "docker image ls --format '{{.Repository}}:{{.Tag}}' | grep devopsy-doorrefuse-prod | xargs -r docker image rm -f"); code != 0 {
 		t.Fatalf("removing the holds: %s", out)
 	}
 	op(t, dir, `printf '%s' `+quote(good)+` >.devopsy/compose.yaml; echo '# v2' >>.devopsy/compose.yaml`)
