@@ -200,7 +200,8 @@ func TestRestoreNoCodeChecksImages(t *testing.T) {
 }
 
 // --vars set and unset say what applies the change, under a first line naming the
-// change and its scope, never the file: a reload, a release when the variables now need
+// change and its scope, never the file, and what it did to each key (a set of the value
+// it had, an unset of a key not there, changed nothing): a reload, a release when the variables now need
 // another image, or nothing until compose's required variables are set, refusing none.
 // A variable missing after the change gets one fix, by what made it go: a required one
 // the change unset, set again; one the env capability computed from a key the change
@@ -223,6 +224,10 @@ func TestVarsApply(t *testing.T) {
 	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: SITE_NAME saved on @devopsy@one:prod\n") || !strings.Contains(out, "to apply it now:\ndevopsy: | $ devopsy @devopsy@one:prod --reload") || strings.Contains(out, s.root) {
 		t.Errorf("a plain value:\n%s", out)
 	}
+	// A value it already had: nothing changed, so nothing applies it.
+	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: SITE_NAME already had that value on @devopsy@one:prod, so nothing changed\n") || strings.Contains(out, "--reload") {
+		t.Errorf("a value it already had:\n%s", out)
+	}
 	if out := vars([]string{"FAKE_DB_IMAGE=mariadb:12"}, "@prod", "--vars", "set", "FAKE_DB_IMAGE"); !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release") || strings.Contains(out, "--reload") {
 		t.Errorf("an image's name:\n%s", out)
 	}
@@ -240,6 +245,10 @@ func TestVarsApply(t *testing.T) {
 		!strings.Contains(out, "required variable AU is missing a value: set A, or run secrets") ||
 		!strings.Contains(out, "set A again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set A\n") || strings.Contains(out, "--vars set AU") {
 		t.Errorf("a key the env capability computed from unset:\n%s", out)
+	}
+	// The same unset again changed nothing, and says so: what fails failed before.
+	if out := vars(nil, "@prod", "--vars", "unset", "A"); !strings.Contains(out, "warning: A was not set on @devopsy@one:prod, so nothing changed, but its next reload or release will still fail, as before\n") {
+		t.Errorf("an unset of a key not set:\n%s", out)
 	}
 	vars([]string{"A=1"}, "@prod", "--vars", "set", "A")
 
@@ -739,7 +748,7 @@ func TestLevelFixOffersEachCommandOnce(t *testing.T) {
 	before := func(set bool) []string {
 		return (&cli.Missing{Names: []string{"X"}, Before: &cli.MissingBefore{Set: map[string]bool{"X": set}, Computed: map[string]bool{}, Changed: map[string]string{"X": "removed"}}}).Lines()
 	}
-	sayApplied(tg, level, "X removed from "+varsScope(tg, level), []string{"X"}, []remote.Applied{
+	sayApplied(tg, level, "X removed from "+varsScope(tg, level), false, []string{"X"}, []remote.Applied{
 		{Dir: "dev", Word: "4", Lines: before(true)},
 		{Dir: "prod", Word: "4", Lines: before(false)},
 	})

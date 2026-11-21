@@ -230,17 +230,70 @@ func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string,
 	if verb == "unset" {
 		unset = keys
 	}
-	// What was done, never a verb a reader takes for one to do ("unset X").
-	done := " saved on "
-	if level != nil {
-		done = " saved in "
-	}
-	if verb == "unset" {
-		done = " removed from "
-	}
-	sayApplied(t, level, strings.Join(keys, ", ")+done+varsScope(t, level), unset, applied)
-	sayLevels(t, level, verb, keys, ownFile(file), remote.ParseVarsTraces(out.String()))
+	outcomes := remote.ParseVarsKeys(out.String())
+	said, unchanged := editSaid(t, level, verb, keys, outcomes)
+	sayApplied(t, level, said, unchanged, unset, applied)
+	// What overrides a value stays said when it was the value already; what an unset
+	// leaves, only where it removed something.
+	sayLevels(t, level, verb, slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return outcomes[k] == "absent" }), ownFile(file), remote.ParseVarsTraces(out.String()))
 	return 0
+}
+
+// editSaid is a --vars edit's first line, from what the server's edit did to each key
+// (remote.ParseVarsKeys): one clause per outcome, in the keys' order, the first naming
+// where (varsScope), and whether the edit changed nothing. Its words say what was done,
+// never a verb a reader takes for one to do ("unset X"). A key the server did not say is
+// the verb's (removed, saved).
+func editSaid(t *remote.Target, level *remote.Level, verb string, keys []string, outcomes map[string]string) (string, bool) {
+	on := " on "
+	if level != nil {
+		on = " in "
+	}
+	type clause struct {
+		one, several, prep string
+		keys               []string
+	}
+	clauses := map[string]*clause{
+		"removed": {one: "removed", several: "removed", prep: " from "},
+		"absent":  {one: "was not set", several: "were not set", prep: on},
+		"saved":   {one: "saved", several: "saved", prep: on},
+		"same":    {one: "already had that value", several: "already had those values", prep: on},
+	}
+	var order []string
+	unchanged := true
+	for _, k := range keys {
+		o := outcomes[k]
+		switch {
+		case o == "added" || o == "changed" || (o == "" && verb == "set"):
+			o = "saved"
+		case o == "":
+			o = "removed"
+		}
+		if o != "absent" && o != "same" {
+			unchanged = false
+		}
+		if len(clauses[o].keys) == 0 {
+			order = append(order, o)
+		}
+		clauses[o].keys = append(clauses[o].keys, k)
+	}
+	parts := make([]string, len(order))
+	for i, o := range order {
+		c := clauses[o]
+		words := c.one
+		if len(c.keys) > 1 {
+			words = c.several
+		}
+		parts[i] = strings.Join(c.keys, ", ") + " " + words
+		if i == 0 {
+			parts[i] += c.prep + varsScope(t, level)
+		}
+	}
+	said := strings.Join(parts, ", ")
+	if unchanged {
+		said += ", so nothing changed"
+	}
+	return said, unchanged
 }
 
 // varsScope is where a --vars edit was made, as its first line names it: the
@@ -259,19 +312,28 @@ func varsScope(t *remote.Target, level *remote.Level) string {
 // sayApplied says said, and what applies a change of t's variables, from what the
 // server's check found in each environment (remote.ParseVarsApplied): the environment's
 // own, or with level each one under it, environments with the same outcome on one
-// detail. unset are the keys the change unset.
-func sayApplied(t *remote.Target, level *remote.Level, said string, unset []string, applied []remote.Applied) {
+// detail. unset are the keys the change unset; unchanged, that it changed nothing, which
+// nothing applies: only what compose misses is said then.
+func sayApplied(t *remote.Target, level *remote.Level, said string, unchanged bool, unset []string, applied []remote.Applied) {
 	if level == nil {
 		a := remote.Applied{}
 		if len(applied) > 0 {
 			a = applied[0]
 		}
 		o := outcomeOf(t, a, unset)
+		if o.missing == nil && unchanged {
+			report.Info(said)
+			return
+		}
 		if o.missing == nil {
 			report.Say(report.InfoLevel, said, o.details, o.hints...)
 			return
 		}
 		report.Say(report.WarnLevel, said+willFail("its next reload or release", o.missing.AsBefore), o.details, varsFix(t, nil, *o.missing)...)
+		return
+	}
+	if len(applied) == 0 && unchanged {
+		report.Info(said)
 		return
 	}
 	if len(applied) == 0 {
@@ -305,6 +367,10 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 	for _, g := range groups {
 		details = append(details, report.JoinAnd(g.envs)+": "+g.details[0])
 		details = append(details, g.details[1:]...)
+	}
+	if len(refusing) == 0 && unchanged {
+		report.Info(said)
+		return
 	}
 	if len(refusing) == 0 {
 		report.Info(said, details...)
@@ -379,19 +445,10 @@ func varsFix(t *remote.Target, level *remote.Level, e cli.Explained) []report.Re
 		flag = "--vars-" + level.Name
 	}
 	var parts, cmds []string
-	add := func(what, verb string, keys []string) {
-		if len(keys) > 0 {
-			parts = append(parts, what)
-			cmds = append(cmds, "devopsy @"+targetRef(t)+" "+cli.VarsEdit(flag, verb, keys))
-		}
+	for _, s := range e.Steps() {
+		parts = append(parts, s.Words)
+		cmds = append(cmds, "devopsy @"+targetRef(t)+" "+cli.VarsEdit(flag, s.Verb, s.Keys))
 	}
-	add("set "+report.JoinAnd(e.SetAgain)+" again", "set", e.SetAgain)
-	add("unset "+report.JoinAnd(e.UnsetAgain)+" again", "unset", e.UnsetAgain)
-	them := "set them"
-	if len(parts) > 0 {
-		them = "set " + report.JoinAnd(e.SetThem)
-	}
-	add(them, "set", e.SetThem)
 	if len(cmds) == 0 {
 		return nil
 	}

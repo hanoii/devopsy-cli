@@ -220,6 +220,9 @@ each environment with a release under the instance or the project:
 - nothing yet, while a variable compose requires is unset, or while data
   a sync, an import or a restore did not complete is not settled.
 
+A change that leaves the file as it was (a value it already had, a key
+that was not there) says so, and that nothing needs to apply it.
+
 When a variable compose requires is missing after the change, the warning
 says how it was set before: a key you unset, a value the project's env
 capability computed from a key you changed, or a line that took its value

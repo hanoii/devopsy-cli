@@ -306,7 +306,7 @@ func changedKeys(old []byte, file string) map[string]string {
 }
 
 // missingVars is the hidden `devopsy --missing-vars`: nothing when every
-// required variable is set, else the list and how to set them, failing.
+// required variable is set, else what is missing and the fix, failing.
 func missingVars(p *loadedProject) error {
 	m, err := missingOf(p)
 	var u *ComposeUnreadable
@@ -321,13 +321,30 @@ func missingVars(p *loadedProject) error {
 	}
 	// As --vars' follow-up words it, with nothing known of before.
 	e := m.Explain(nil)
-	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
+	failure := &report.Failure{Msg: e.Details[0], Details: e.Details[1:]}
+	steps := e.Steps()
+	if len(steps) == 0 {
+		return &ExitError{Code: 1, Err: failure}
+	}
+	words := make([]string, len(steps))
+	for i, s := range steps {
+		words[i] = s.Words
+	}
+	fix := report.Fix(strings.Join(words, ", then ") + " in " + p.dotenvFile + " or the environment")
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
-	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On(VarsSet(m.Names)); cmd != "" {
-		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmd)
+	in := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir))
+	var cmds []string
+	for _, s := range steps {
+		if cmd := in.On(VarsEdit("--vars", s.Verb, s.Keys)); cmd != "" {
+			cmds = append(cmds, cmd)
+		}
 	}
-	return &ExitError{Code: 1, Err: &report.Failure{Msg: e.Details[0], Details: e.Details[1:], Remedies: []report.Remedy{fix}}}
+	if len(cmds) == len(steps) {
+		fix = report.Fix(strings.Join(words, ", then ")+" in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmds...)
+	}
+	failure.Remedies = []report.Remedy{fix}
+	return &ExitError{Code: 1, Err: failure}
 }
 
 // SaidLines are compose's words on m, as a detail says them.
@@ -522,6 +539,29 @@ func (m *Missing) Explain(unset []string) Explained {
 	// A nearer file's empty line was there before too: the edit is not why.
 	e.AsBefore = m.Before != nil && len(never)+len(m.Empty) == len(m.Names)
 	return e
+}
+
+// FixStep is one command of a missing variable's fix: its words and the --vars verb
+// and keys it runs.
+type FixStep struct {
+	Words, Verb string
+	Keys        []string
+}
+
+// Steps are e's fix, every command needed, the keys by name: those to set again, to
+// unset again, then to set; none when no key brings it back, which the details say. The
+// --vars follow-up and --missing-vars each add only their flag, address and words.
+func (e Explained) Steps() []FixStep {
+	var steps []FixStep
+	add := func(words, verb string, keys []string) {
+		if len(keys) > 0 {
+			steps = append(steps, FixStep{Words: words, Verb: verb, Keys: keys})
+		}
+	}
+	add("set "+report.JoinAnd(e.SetAgain)+" again", "set", e.SetAgain)
+	add("unset "+report.JoinAnd(e.UnsetAgain)+" again", "unset", e.UnsetAgain)
+	add("set "+report.JoinAnd(e.SetThem), "set", e.SetThem)
+	return steps
 }
 
 // fileSays names a variables file of a release's .devopsy/ in words.
