@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -322,5 +323,38 @@ func TestMissingVarsTakesComposesVerdict(t *testing.T) {
 	}
 	if !slices.Equal(m.Names, []string{"INC_NAME"}) {
 		t.Errorf("missing %q, want INC_NAME alone: the include's env_file sets INC_SET", m.Names)
+	}
+}
+
+// What the env capability needs for a missing variable travels with it from the server's
+// check to the operator: the variables it needs, those it did not compute either down to
+// one with a value, whether each has a value or an import set it empty, and the needs
+// lines devopsy could not read, by line number; a line naming what is no variable's name
+// is dropped on the way back.
+func TestMissingCarriesNeeds(t *testing.T) {
+	t.Parallel()
+	said := "required variable URL is missing a value"
+	root := project(t, "shop", map[string]string{
+		"compose.yaml":              minimalCompose,
+		"config.yaml":               "project: shop\n",
+		"bin/docker*":               fakeCompose(said, `{"URL":{"Required":true}}`),
+		"capabilities/env/compute*": "#!/bin/sh\necho '# needs: URL AUTH_USERS'\necho '# needs: AUTH_USERS AUTH SALT'\necho '# needs: LONELY'\n",
+		"target.env":                "COMPOSE_PROJECT_NAME='shop-own-prod'\nDEVOPSY_TARGET='vm1:own/prod'\n" + ImportedMarker + "\nAUTH=''\n",
+	})
+	p, err := loadProject(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin", "SALT=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.computeEnv(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := missingOf(p)
+	if err != nil || m == nil {
+		t.Fatalf("%+v %v", m, err)
+	}
+	got := ParseMissing(append(m.Lines(), "needs URL bad-name", "has bad-name", "imported $X"))
+	if got == nil || fmt.Sprint(got.Needs) != fmt.Sprint(map[string][]string{"AUTH_USERS": {"AUTH", "SALT"}, "URL": {"AUTH_USERS"}}) ||
+		fmt.Sprint(got.Has) != fmt.Sprint(map[string]bool{"SALT": true}) || fmt.Sprint(got.Imported) != fmt.Sprint(map[string]bool{"AUTH": true}) || !slices.Equal(got.Malformed, []int{3}) {
+		t.Errorf("read back from %q:\n%+v", m.Lines(), got)
 	}
 }

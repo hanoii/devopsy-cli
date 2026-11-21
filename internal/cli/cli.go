@@ -1521,6 +1521,11 @@ type loadedProject struct {
 	envFile string
 	env     *Env
 	verbose []string
+	// needs are what the env capability said it needs for each variable it did not
+	// compute, needsMalformed the line numbers of its needs lines devopsy could not read
+	// (readNeeds).
+	needs          map[string][]string
+	needsMalformed []int
 	// secrets are config.yaml's secrets: names.
 	secrets []string
 	// address is a local command's, when the devopsy that read it gave one.

@@ -3,13 +3,17 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
@@ -46,7 +50,7 @@ var Capabilities = []Capability{
 			{
 				Name:   "compute",
 				Usage:  "compute",
-				Does:   "gets the project's environment and prints .env lines; devopsy sets those not set yet (the lowest precedence) and devopsy --env shows them. Runs before every command, so keep it fast; devopsy run inside it skips it",
+				Does:   "gets the project's environment and prints .env lines; devopsy sets those not set yet (the lowest precedence) and devopsy --env shows them. Where it computes nothing for a variable, a line '# needs: <variable> <variables it needs>...' tells devopsy what to set when compose requires it. Runs before every command, so keep it fast; devopsy run inside it skips it",
 				Output: "SITE_URL='https://shop-prod.vm1.example.com'",
 			},
 		},
@@ -171,5 +175,53 @@ func (p *loadedProject) computeEnv() error {
 		p.env.defs[k] = append(p.env.defs[k], EnvDef{Kind: EnvComputed, Source: file, Value: vars[k]})
 	}
 	p.verbose = append(p.verbose, "computed "+file)
+	p.needs, p.needsMalformed = readNeeds(out, vars, p.env.Lookup, p.newSecrets().Mask)
+	for _, x := range slices.Sorted(maps.Keys(p.needs)) {
+		p.verbose = append(p.verbose, file+" needs "+report.JoinAnd(p.needs[x])+" for "+x)
+	}
+	for _, n := range p.needsMalformed {
+		p.verbose = append(p.verbose, fmt.Sprintf("%s: line %d starts %s but is not %s<variable> <variables it needs>, so devopsy ignores it", file, n, NeedsPrefix, NeedsPrefix))
+	}
 	return nil
+}
+
+// NeedsPrefix starts a line of the env capability's output that names a variable it did
+// not compute and the variables that would make it, all of them needed: a comment, which
+// no .env parser takes for a variable.
+const NeedsPrefix = "# needs: "
+
+var needsLine = regexp.MustCompile(`^# needs: [A-Za-z_][A-Za-z0-9_]*( [A-Za-z_][A-Za-z0-9_]*)+$`)
+
+// readNeeds reads the needs lines of the env capability's output out, which parses to
+// vars with lookup: each variable to the ones it needs, several lines of one adding up,
+// and the line numbers of those starting NeedsPrefix that are no needs line. A line is
+// the output's comment only when out parses to the same variables without it, compose-go
+// deciding what is inside a quoted value; one inside a value is the value's, never read.
+// A line that names a variable among its own needs, or that mask changes (a value
+// printed by mistake would make a fix that fails when copied), is no needs line either;
+// its text is never kept.
+func readNeeds(out []byte, vars map[string]string, lookup func(string) (string, bool), mask func(string) string) (map[string][]string, []int) {
+	needs := map[string][]string{}
+	var malformed []int
+	lines := strings.Split(string(out), "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(l, strings.TrimSpace(NeedsPrefix)) {
+			continue
+		}
+		without := slices.Concat(lines[:i], lines[i+1:])
+		if got, err := dotenv.UnmarshalBytesWithLookup([]byte(strings.Join(without, "\n")), lookup); err != nil || !maps.Equal(got, vars) {
+			continue
+		}
+		names := strings.Split(strings.TrimPrefix(l, NeedsPrefix), " ")
+		if !needsLine.MatchString(l) || mask(l) != l || slices.Contains(names[1:], names[0]) {
+			malformed = append(malformed, i+1)
+			continue
+		}
+		for _, n := range names[1:] {
+			if !slices.Contains(needs[names[0]], n) {
+				needs[names[0]] = append(needs[names[0]], n)
+			}
+		}
+	}
+	return needs, malformed
 }

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -174,6 +176,13 @@ type Missing struct {
 	// Empty are the ones a file other than the edited one sets empty (by name, the file's
 	// in .devopsy/): its line wins, so no key of the edited file brings them back.
 	Empty map[string]string
+	// Needs are the variables the env capability said it needs for one missing, and for
+	// each of those it did not compute either (readNeeds); Has are those of them with a
+	// value, Imported those an import sets empty. Malformed are the line numbers of its
+	// needs lines devopsy could not read.
+	Needs         map[string][]string
+	Has, Imported map[string]bool
+	Malformed     []int
 }
 
 // MissingBefore is how the variables Missing names were before an edit.
@@ -207,7 +216,8 @@ func missingOf(p *loadedProject) (*Missing, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	m := &Missing{Names: names}
+	m := &Missing{Names: names, Malformed: p.needsMalformed}
+	m.needsOf(p)
 	for _, line := range said {
 		// From its "required variable": where compose found it is no help to set it.
 		if i := strings.Index(line, "required variable "); i >= 0 && slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(line[i:], "required variable "+n+" ") }) {
@@ -224,6 +234,33 @@ func missingOf(p *loadedProject) (*Missing, error) {
 		}
 	}
 	return m, nil
+}
+
+// needsOf records in m what the env capability said it needs for each missing variable,
+// and for each variable needed that it did not compute either, transitively, and how
+// each needed one is set.
+func (m *Missing) needsOf(p *loadedProject) {
+	todo := slices.Clone(m.Names)
+	for len(todo) > 0 {
+		x := todo[0]
+		todo = todo[1:]
+		in, ok := p.needs[x]
+		if !ok || m.Needs[x] != nil {
+			continue
+		}
+		if m.Needs == nil {
+			m.Needs, m.Has, m.Imported = map[string][]string{}, map[string]bool{}, map[string]bool{}
+		}
+		m.Needs[x] = in
+		for _, n := range in {
+			if v, _ := p.env.Lookup(n); v != "" {
+				m.Has[n] = true
+			} else if defs := p.env.defs[n]; len(defs) > 0 && defs[0].Kind == EnvImported {
+				m.Imported[n] = true
+			}
+			todo = append(todo, n)
+		}
+	}
 }
 
 // CheckMissing is the --vars follow-up's check for the project at cwd, its variables
@@ -361,11 +398,25 @@ func (m *Missing) SaidLines() []string {
 // "before", then "set <name>" for one set then, "computed <name>" for one the env
 // capability computed then, and "changed <key> <removed|added|changed>"; else "unknown
 // <why>" when asked for, one per line of it, so none of a capability's is read as another;
-// and "empty <name> <file>" for one another file sets empty.
+// and "empty <name> <file>" for one another file sets empty; what the env capability
+// needs, "needs <name> <needed>...", "has <needed>" for one with a value, "imported
+// <needed>" for one an import sets empty, and "malformed <line number>".
 func (m *Missing) Lines() []string {
 	var out []string
 	for _, n := range m.Names {
 		out = append(out, "missing "+n)
+	}
+	for _, x := range slices.Sorted(maps.Keys(m.Needs)) {
+		out = append(out, "needs "+x+" "+strings.Join(m.Needs[x], " "))
+	}
+	for _, n := range slices.Sorted(maps.Keys(m.Has)) {
+		out = append(out, "has "+n)
+	}
+	for _, n := range slices.Sorted(maps.Keys(m.Imported)) {
+		out = append(out, "imported "+n)
+	}
+	for _, n := range m.Malformed {
+		out = append(out, "malformed "+strconv.Itoa(n))
 	}
 	for _, l := range m.Said {
 		out = append(out, "said "+l)
@@ -404,7 +455,7 @@ func (m *Missing) Lines() []string {
 }
 
 // ParseMissing reads Lines back, nil with no "missing" line; Before is known after a
-// "before" line.
+// "before" line. A line naming what is no variable's name is dropped.
 func ParseMissing(lines []string) *Missing {
 	m := &Missing{}
 	b := &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: map[string]string{}}
@@ -426,6 +477,29 @@ func ParseMissing(lines []string) *Missing {
 				m.Empty = map[string]string{}
 			}
 			m.Empty[n] = f
+		case "needs":
+			names := strings.Split(rest, " ")
+			if len(names) > 1 && !slices.ContainsFunc(names, func(n string) bool { return !remote.VarNameRe.MatchString(n) }) {
+				if m.Needs == nil {
+					m.Needs = map[string][]string{}
+				}
+				m.Needs[names[0]] = names[1:]
+			}
+		case "has", "imported":
+			if remote.VarNameRe.MatchString(rest) {
+				if m.Has == nil {
+					m.Has, m.Imported = map[string]bool{}, map[string]bool{}
+				}
+				if word == "has" {
+					m.Has[rest] = true
+				} else {
+					m.Imported[rest] = true
+				}
+			}
+		case "malformed":
+			if n, err := strconv.Atoi(rest); err == nil {
+				m.Malformed = append(m.Malformed, n)
+			}
 		case "set":
 			b.Set[rest] = true
 		case "computed":
