@@ -197,11 +197,11 @@ var needsLine = regexp.MustCompile(`^# needs: [A-Za-z_][A-Za-z0-9_]*( [A-Za-z_][
 // and the line numbers of those starting NeedsPrefix that are no needs line. A line is
 // the output's comment only when out parses to the same variables without it, compose-go
 // deciding what is inside a quoted value; one inside a value is the value's, never read.
-// A line that names a variable among its own needs, or that mask changes (a value
-// printed by mistake would make a fix that fails when copied), is no needs line either;
-// its text is never kept.
+// A line that names a variable among its own needs, directly or through others, or that
+// mask changes (a value printed by mistake would make a fix that fails when copied), is
+// no needs line either; its text is never kept.
 func readNeeds(out []byte, vars map[string]string, lookup func(string) (string, bool), mask func(string) string) (map[string][]string, []int) {
-	needs := map[string][]string{}
+	needs, at := map[string][]string{}, map[string][]int{}
 	var malformed []int
 	lines := strings.Split(string(out), "\n")
 	for i, l := range lines {
@@ -217,11 +217,33 @@ func readNeeds(out []byte, vars map[string]string, lookup func(string) (string, 
 			malformed = append(malformed, i+1)
 			continue
 		}
+		at[names[0]] = append(at[names[0]], i+1)
 		for _, n := range names[1:] {
 			if !slices.Contains(needs[names[0]], n) {
 				needs[names[0]] = append(needs[names[0]], n)
 			}
 		}
 	}
+	// A variable that needs itself through others: every line of the cycle.
+	var cycle []string
+	for x := range needs {
+		seen, todo := map[string]bool{}, slices.Clone(needs[x])
+		for len(todo) > 0 && !seen[x] {
+			n := todo[0]
+			todo = todo[1:]
+			if !seen[n] {
+				seen[n] = true
+				todo = append(todo, needs[n]...)
+			}
+		}
+		if seen[x] {
+			cycle = append(cycle, x)
+		}
+	}
+	for _, x := range cycle {
+		malformed = append(malformed, at[x]...)
+		delete(needs, x)
+	}
+	slices.Sort(malformed)
 	return needs, malformed
 }

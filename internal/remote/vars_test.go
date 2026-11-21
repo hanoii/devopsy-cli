@@ -329,8 +329,8 @@ func TestVarsRenamesForeignFile(t *testing.T) {
 // an environment (its shared/, the project's, holding a current/), each check under that
 // environment's lock taken without waiting: one held is busy, never waited for; one with
 // no .lock (removed meanwhile) is skipped; the take removes a killed holder's file, as
-// releaseLock does. Each check gets the file as it was on its stdin, whole, however large,
-// and the edit keeps what the operator sent and that file in memory, never beside the
+// releaseLock does. Each check gets nothing on its stdin (the session's is the operator's
+// values), and the edit keeps what the operator sent in memory, never beside the
 // environments' files.
 func TestVarsApplyLevel(t *testing.T) {
 	t.Parallel()
@@ -384,8 +384,8 @@ printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"
 	if traces := ParseVarsTraces(stdout.String()); fmt.Sprint(traces) != fmt.Sprint(map[string]string{"old": "traced", "prod": "traced", "qa": "traced"}) {
 		t.Errorf("traced %v", traces)
 	}
-	if got := readFile(filepath.Join(root, "stdin.qa")); got != old {
-		t.Errorf("qa's check got %d bytes of the old file, want %d", len(got), len(old))
+	if got, err := os.ReadFile(filepath.Join(root, "stdin.qa")); err != nil || len(got) != 0 {
+		t.Errorf("qa's check's stdin: %q %v", got, err)
 	}
 	if fileExists(filepath.Join(base, "qa", SyncHoldingFile)) {
 		t.Errorf("a killed holder's file stays once the check took the lock")

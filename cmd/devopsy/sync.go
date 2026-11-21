@@ -740,7 +740,7 @@ func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (st
 	var out bytes.Buffer
 	if code, err := remote.SSH(t, remote.VarsHintScript(t), bytes.NewReader(nil), &out, false); err == nil && code == 0 {
 		_, applied := remote.ParseVarsApplied(out.String())
-		sayApplied(t, nil, "inherited into "+varsScope(t, nil), false, nil, applied)
+		sayApplied(t, nil, "inherited into "+varsScope(t, nil), cli.Edit{File: ".env"}, applied)
 	}
 	return 0
 }
