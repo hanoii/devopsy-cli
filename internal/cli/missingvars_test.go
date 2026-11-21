@@ -130,12 +130,14 @@ func TestReadsUIDs(t *testing.T) {
 // Explain words what a change leaves missing from what the edit did and what the env
 // capability said it needs, never more: an input the edit took is set again and the
 // change is why ("so"); a change that changed nothing is "as before"; one whose outcome is
-// unknown (--missing-vars, --inherit) says neither. A chain of needs is followed down to
-// an input with a value, where the capability computed nothing and nothing is offered. A
+// unknown (--missing-vars, --inherit) says neither; the edit taking the missing variable
+// itself is why too, but under a nearer file's line. A chain of needs is followed down to
+// an input with a value, where the capability computed nothing and nothing is offered, or
+// to one a file sets empty, which is unset at the edited file, its own needs then set. A
 // file's empty line is said with that file: at the edited file or below it the fix goes
 // there, a nearer one is to remove; a variable the capability computes or needs others
-// for, emptied by a file, is unset at the edited file, never set by hand. An input an
-// import empties, or one devopsy sets itself, is said and never set.
+// for, emptied by a file, is unset at the edited file, never set by hand. A variable or
+// an input an import empties, or one devopsy sets itself, is said and never set.
 func TestExplain(t *testing.T) {
 	t.Parallel()
 	env, project := Edit{File: ".env"}, Edit{File: "project.env"}
@@ -193,6 +195,16 @@ func TestExplain(t *testing.T) {
 			"A is imported, and empty where it comes from", "", false, false},
 		{"an input devopsy sets", Missing{Names: []string{"X"}, Needs: needs("X", "DEVOPSY_UID")}, env,
 			"DEVOPSY_UID", "", false, false},
+		{"one with needs the edit removed", Missing{Names: []string{"X"}, Needs: needs("X", "A")}, took(env, "X"),
+			"compose needs X, which the project's env capability computes from A, not set", "set A", true, false},
+		{"one with needs the edit removed, its input set", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Has: map[string]bool{"A": true}}, took(env, "X"),
+			"but A is set and it computed nothing", "", true, false},
+		{"one the edit removed over an empty line below", Missing{Names: []string{"X"}, Computed: map[string]bool{"X": true}, Empty: map[string]string{"X": "project.env"}}, took(env, "X"),
+			"compose needs X, which the project's .env sets empty: its line wins over a value below it, so remove that line there", "", true, false},
+		{"an input with needs the edited file empties", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "Z"), Empty: map[string]string{"Y": ".env"}}, env,
+			"the environment's .env sets Y empty, over what the project's env capability computes from Z", "unset Y, then set Z", false, false},
+		{"one an import empties", Missing{Names: []string{"X"}, Imported: map[string]bool{"X": true}}, env,
+			"compose needs X, which the project imports, and is empty where it comes from", "", false, false},
 		{"plain ones", Missing{Names: []string{"A", "B"}}, took(env, "A"),
 			"compose needs B, which is not set", "set A again, then set B", true, false},
 		{"needs lines that do not read", Missing{Names: []string{"A"}, Malformed: []int{3, 5}}, env,

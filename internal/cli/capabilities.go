@@ -161,6 +161,9 @@ func (p *loadedProject) computeEnv() error {
 	if err != nil {
 		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: its output: %v", file, err)}
 	}
+	// Read as the output was parsed, before its own variables are set: a value reading
+	// one the output prints later would parse otherwise.
+	p.needs, p.needsMalformed = readNeeds(out, vars, p.env.Lookup, p.newSecrets().Mask)
 	keys := make([]string, 0, len(vars))
 	for k := range vars {
 		keys = append(keys, k)
@@ -175,7 +178,6 @@ func (p *loadedProject) computeEnv() error {
 		p.env.defs[k] = append(p.env.defs[k], EnvDef{Kind: EnvComputed, Source: file, Value: vars[k]})
 	}
 	p.verbose = append(p.verbose, "computed "+file)
-	p.needs, p.needsMalformed = readNeeds(out, vars, p.env.Lookup, p.newSecrets().Mask)
 	for _, x := range slices.Sorted(maps.Keys(p.needs)) {
 		p.verbose = append(p.verbose, file+" needs "+report.JoinAnd(p.needs[x])+" for "+x)
 	}
@@ -201,7 +203,11 @@ var needsLine = regexp.MustCompile(`^# needs: [A-Za-z_][A-Za-z0-9_]*( [A-Za-z_][
 // mask changes (a value printed by mistake would make a fix that fails when copied), is
 // no needs line either; its text is never kept.
 func readNeeds(out []byte, vars map[string]string, lookup func(string) (string, bool), mask func(string) string) (map[string][]string, []int) {
-	needs, at := map[string][]string{}, map[string][]int{}
+	type read struct {
+		line  int
+		names []string
+	}
+	var reads []read
 	var malformed []int
 	lines := strings.Split(string(out), "\n")
 	for i, l := range lines {
@@ -217,33 +223,46 @@ func readNeeds(out []byte, vars map[string]string, lookup func(string) (string, 
 			malformed = append(malformed, i+1)
 			continue
 		}
-		at[names[0]] = append(at[names[0]], i+1)
-		for _, n := range names[1:] {
-			if !slices.Contains(needs[names[0]], n) {
-				needs[names[0]] = append(needs[names[0]], n)
+		reads = append(reads, read{i + 1, names})
+	}
+	build := func(rs []read) map[string][]string {
+		needs := map[string][]string{}
+		for _, r := range rs {
+			for _, n := range r.names[1:] {
+				if !slices.Contains(needs[r.names[0]], n) {
+					needs[r.names[0]] = append(needs[r.names[0]], n)
+				}
 			}
 		}
+		return needs
 	}
-	// A variable that needs itself through others: every line of the cycle.
-	var cycle []string
-	for x := range needs {
-		seen, todo := map[string]bool{}, slices.Clone(needs[x])
-		for len(todo) > 0 && !seen[x] {
+	// A line one of whose needed variables needs its own back, through others, is in a
+	// cycle: those lines go, the others stay.
+	all := build(reads)
+	reaches := func(from, to string) bool {
+		seen, todo := map[string]bool{}, []string{from}
+		for len(todo) > 0 {
 			n := todo[0]
 			todo = todo[1:]
+			if n == to {
+				return true
+			}
 			if !seen[n] {
 				seen[n] = true
-				todo = append(todo, needs[n]...)
+				todo = append(todo, all[n]...)
 			}
 		}
-		if seen[x] {
-			cycle = append(cycle, x)
+		return false
+	}
+	kept := reads[:0:0]
+	for _, r := range reads {
+		if slices.ContainsFunc(r.names[1:], func(n string) bool { return reaches(n, r.names[0]) }) {
+			malformed = append(malformed, r.line)
+		} else {
+			kept = append(kept, r)
 		}
 	}
-	for _, x := range cycle {
-		malformed = append(malformed, at[x]...)
-		delete(needs, x)
-	}
+	needs := build(kept)
 	slices.Sort(malformed)
 	return needs, malformed
 }

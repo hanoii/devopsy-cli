@@ -179,6 +179,8 @@ ve_in=$(gated_read)
 ve_keys=$(printf '%s\n' "$ve_in" | awk -v mode=` + mode + ` -v sq="'" '
   # closes: s has quote q unescaped, which ends a quoted value.
   function closes(s, q) { gsub(/\\\\/, "", s); gsub("\\\\" q, "", s); return index(s, q) > 0 }
+  # blank: line l gives its key an empty value, however written (A=, A='', A="").
+  function blank(l) { sub(/^[^=:]*[=:][ \t]*/, "", l); sub(/[ \t\r]*$/, "", l); return l == "" || l == "\"\"" || l == sq sq }
   NR == FNR {
     k = $0; sub(/=.*/, "", k)
     if ((k in line) || (k in drop)) next
@@ -215,7 +217,7 @@ ve_keys=$(printf '%s\n' "$ve_in" | awk -v mode=` + mode + ` -v sq="'" '
       k = order[i]
       if (mode == "unset") o = (k in seen) ? "removed" : "absent"
       else if (!(k in done)) { print line[k]; o = "added" }
-      else if (!(k in several) && old[k] == line[k]) o = "same"
+      else if (!(k in several) && (old[k] == line[k] || (blank(old[k]) && blank(line[k])))) o = "same"
       else o = "changed"
       printf "` + VarsKey + `%s\t%s\n", o, k > "/dev/stderr"
     }
@@ -233,7 +235,7 @@ printf '%s\n' "$ve_keys"
 // VarsKey starts each line a --vars set or unset prints after the file's path: then a
 // key's outcome, a tab and the key (ParseVarsKeys). An unset's is removed or absent
 // (no line of it there), a set's added, changed or same (its one line there already
-// the line sent).
+// the line sent, or both giving it an empty value).
 const VarsKey = "key\t"
 
 // ParseVarsKeys reads the VarsKey lines of what a --vars set or unset printed: each

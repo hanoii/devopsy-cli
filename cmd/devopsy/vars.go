@@ -164,6 +164,7 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		if len(args) == 0 {
 			return fail(usage)
 		}
+		args = unique(args)
 		if t.Project != nil && t.Project.Dir != "" {
 			if err := confirmUnnamedSecrets(args, t.Project, false); err != nil {
 				return failErr(err)
@@ -187,9 +188,20 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		if len(args) == 0 {
 			return fail(usage)
 		}
+		args = unique(args)
 		return editVars(t, level, remote.VarsUnsetScript(t, level, args), strings.Join(args, "\n")+"\n", "unset", args, nil, color)
 	}
 	return fail(usage)
+}
+
+// unique is keys each once, in order: a key typed twice is one edit, said once.
+func unique(keys []string) []string {
+	seen := map[string]bool{}
+	return slices.DeleteFunc(slices.Clone(keys), func(k string) bool {
+		twice := seen[k]
+		seen[k] = true
+		return twice
+	})
 }
 
 // varValue finds the value to set for k: lookup, else a prompt at a terminal,
@@ -277,9 +289,9 @@ func editSaid(t *remote.Target, level *remote.Level, verb string, keys []string,
 	for _, k := range keys {
 		o := outcomes[k]
 		switch {
-		case o == "added" || o == "changed" || (o == "" && verb == "set"):
+		case o == "added" || o == "changed" || (o != "absent" && o != "same" && o != "removed" && verb == "set"):
 			o = "saved"
-		case o == "":
+		case o != "absent" && o != "same":
 			o = "removed"
 		}
 		if o != "absent" && o != "same" {
@@ -328,17 +340,12 @@ func varsScope(t *remote.Target, level *remote.Level) string {
 // detail. edit is what the change did (cli.Edit): one that changed nothing needs nothing
 // to apply it, so only what compose misses is said then.
 func sayApplied(t *remote.Target, level *remote.Level, said string, edit cli.Edit, applied []remote.Applied) {
-	unchanged := edit.Known && edit.Unchanged
 	if level == nil {
 		a := remote.Applied{}
 		if len(applied) > 0 {
 			a = applied[0]
 		}
 		o := outcomeOf(t, a, edit)
-		if o.missing == nil && unchanged {
-			report.Info(said)
-			return
-		}
 		if o.missing == nil {
 			report.Say(report.InfoLevel, said, o.details, o.hints...)
 			return
@@ -346,12 +353,9 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, edit cli.Edi
 		report.Say(report.WarnLevel, said+willFail("its next reload or release", *o.missing), o.details, varsFix(t, nil, *o.missing)...)
 		return
 	}
-	if len(applied) == 0 && unchanged {
-		report.Info(said)
-		return
-	}
 	if len(applied) == 0 {
-		report.Info(said, "no environment there is released yet: each one's first release applies it")
+		o := outcomeOf(t, remote.Applied{Word: "none"}, edit)
+		report.Info(said, o.details...)
 		return
 	}
 	type group struct {
@@ -361,11 +365,14 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, edit cli.Edi
 	var groups []*group
 	var refusing []string
 	// As before is the file's, the same in every environment.
-	fix := cli.Explained{AsBefore: unchanged}
+	fix := cli.Explained{AsBefore: edit.Known && edit.Unchanged}
 	for _, a := range applied {
 		o := outcomeOf(t, a, edit)
 		if o.missing != nil {
 			refusing, fix = append(refusing, a.Dir), fix.Merge(*o.missing)
+		}
+		if len(o.details) == 0 {
+			continue
 		}
 		if i := slices.IndexFunc(groups, func(g *group) bool { return slices.Equal(g.details, o.details) }); i >= 0 {
 			groups[i].envs = append(groups[i].envs, a.Dir)
@@ -377,10 +384,6 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, edit cli.Edi
 	for _, g := range groups {
 		details = append(details, report.JoinAnd(g.envs)+": "+g.details[0])
 		details = append(details, g.details[1:]...)
-	}
-	if len(refusing) == 0 && unchanged {
-		report.Info(said)
-		return
 	}
 	if len(refusing) == 0 {
 		report.Info(said, details...)
@@ -415,11 +418,18 @@ type outcome struct {
 	missing *cli.Explained
 }
 
-// outcomeOf words a, the check in one environment of t after edit.
+// outcomeOf words a, the check in one environment of t after edit (none: a level with
+// no environment released): after an edit that changed nothing, only what compose misses
+// and what was not checked, since nothing is to apply.
 func outcomeOf(t *remote.Target, a remote.Applied, edit cli.Edit) outcome {
 	status := report.Hint("as --status shows:", "devopsy @"+targetRef(t)+" --status")
 	reload := report.Hint("to apply it now:", "devopsy @"+targetRef(t)+" --reload")
+	if edit.Known && edit.Unchanged && a.Word != "4" && a.Word != "busy" {
+		return outcome{}
+	}
 	switch a.Word {
+	case "none":
+		return outcome{details: []string{"no environment there is released yet: each one's first release applies it"}}
 	case "plain":
 		return outcome{details: []string{"running containers keep their old values until they are recreated"}}
 	case "first":
@@ -458,15 +468,15 @@ func varsFix(t *remote.Target, level *remote.Level, e cli.Explained) []report.Re
 	if level != nil {
 		flag = "--vars-" + level.Name
 	}
-	var parts, cmds []string
-	for _, s := range e.Steps() {
-		parts = append(parts, s.Words)
-		cmds = append(cmds, "devopsy @"+targetRef(t)+" "+cli.VarsEdit(flag, s.Verb, s.Keys))
-	}
-	if len(cmds) == 0 {
+	words, args := e.Fix(flag)
+	if len(args) == 0 {
 		return nil
 	}
-	return []report.Remedy{report.Fix(strings.Join(parts, ", then ")+":", cmds...)}
+	cmds := make([]string, len(args))
+	for i, a := range args {
+		cmds[i] = "devopsy @" + targetRef(t) + " " + a
+	}
+	return []report.Remedy{report.Fix(words+":", cmds...)}
 }
 
 // varsSecrets masks a --vars listing: the secrets: of the server's

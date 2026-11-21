@@ -26,14 +26,17 @@ func TestDataCapabilityCalledBy(t *testing.T) {
 }
 
 // The env capability's needs lines say what it needs for a variable it did not compute,
-// several lines of one adding up. A line inside a quoted value is the value's, never
+// several lines of one adding up, whatever its other lines expand to (a value reading a
+// variable the output prints later). A line inside a quoted value is the value's, never
 // read; one devopsy cannot read (a name alone, a variable among its own needs, a secret's
-// value printed by mistake) is dropped by its line number, its text never kept, the
-// capability's other lines read as before.
+// value printed by mistake, a line of a cycle through others) is dropped by its line
+// number, its text never kept, the capability's other lines read as before.
 func TestReadNeeds(t *testing.T) {
 	t.Parallel()
 	compute := "#!/bin/sh\n" + `cat <<'OUT'
 DONE='1'
+LATER="https://${HOST}"
+HOST='shop.example.com'
 # needs: AUTH_USERS AUTH
 # needs: AUTH_USERS SALT
 # needs: LONELY
@@ -43,6 +46,9 @@ NOTE="first
 # needs: INSIDE VALUE
 end"
 # needs: URL AUTH_USERS
+# needs: CX CA
+# needs: CX CB
+# needs: CB CX
 # a comment of the project's own
 OUT
 `
@@ -58,9 +64,9 @@ OUT
 	if err := p.computeEnv(); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{"AUTH_USERS": {"AUTH", "SALT"}, "URL": {"AUTH_USERS"}}
-	if fmt.Sprint(p.needs) != fmt.Sprint(want) || !slices.Equal(p.needsMalformed, []int{4, 5, 6}) {
-		t.Errorf("needs %v, malformed %v; want %v, [4 5 6]", p.needs, p.needsMalformed, want)
+	want := map[string][]string{"AUTH_USERS": {"AUTH", "SALT"}, "CX": {"CA"}, "URL": {"AUTH_USERS"}}
+	if fmt.Sprint(p.needs) != fmt.Sprint(want) || !slices.Equal(p.needsMalformed, []int{6, 7, 8, 14, 15}) {
+		t.Errorf("needs %v, malformed %v; want %v, [6 7 8 14 15]", p.needs, p.needsMalformed, want)
 	}
 	if v, _ := p.env.Lookup("NOTE"); v != "first\n# needs: INSIDE VALUE\nend" {
 		t.Errorf("the quoted value: %q", v)
@@ -69,7 +75,7 @@ OUT
 		t.Errorf("the capability's own variable: %q", v)
 	}
 	verbose := strings.Join(p.verbose, "\n")
-	if strings.Contains(verbose, "hunter2secret") || !strings.Contains(verbose, "line 6 starts # needs:") || !strings.Contains(verbose, "needs AUTH and SALT for AUTH_USERS") {
+	if strings.Contains(verbose, "hunter2secret") || !strings.Contains(verbose, "line 8 starts # needs:") || !strings.Contains(verbose, "needs AUTH and SALT for AUTH_USERS") {
 		t.Errorf("verbose:\n%s", verbose)
 	}
 }

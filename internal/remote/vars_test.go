@@ -77,16 +77,16 @@ func TestVarsScripts(t *testing.T) {
 
 	// Existing keys are replaced in place, duplicates dropped, comments and
 	// other lines kept, new keys appended in order. Each key's outcome is said: a key
-	// whose one line is already the line sent is the same, any other line of it (a
-	// duplicate, a value of several lines) changed.
-	write(t, file, "# secrets\nexport A=old\nB=keep\nA=dup\nC = spaced\nS='s'\nT='t'\nT='t'\n\n")
-	out := runVarsScript(t, root, VarsSetScript(tg, nil, nil), "C='new c'\nA='new a'\nD='d'\nS='s'\nT='t'\n")
+	// whose one line is already the line sent, or already empty however written, is the
+	// same, any other line of it (a duplicate, a value of several lines) changed.
+	write(t, file, "# secrets\nexport A=old\nB=keep\nA=dup\nC = spaced\nS='s'\nT='t'\nT='t'\nE=\n\n")
+	out := runVarsScript(t, root, VarsSetScript(tg, nil, nil), "C='new c'\nA='new a'\nD='d'\nS='s'\nT='t'\nE=''\n")
 	got, _ := os.ReadFile(file)
-	want := "# secrets\nA='new a'\nB=keep\nC='new c'\nS='s'\nT='t'\n\nD='d'\n"
+	want := "# secrets\nA='new a'\nB=keep\nC='new c'\nS='s'\nT='t'\nE=''\n\nD='d'\n"
 	if string(got) != want {
 		t.Fatalf("set\n got %q\nwant %q", got, want)
 	}
-	if keys := ParseVarsKeys(out); fmt.Sprint(keys) != fmt.Sprint(map[string]string{"A": "changed", "C": "changed", "D": "added", "S": "same", "T": "changed"}) {
+	if keys := ParseVarsKeys(out); fmt.Sprint(keys) != fmt.Sprint(map[string]string{"A": "changed", "C": "changed", "D": "added", "E": "same", "S": "same", "T": "changed"}) {
 		t.Errorf("set's outcomes %v\n%s", keys, out)
 	}
 	want = "# secrets\nA='new a'\nB=keep\nC='new c'\n\nD='d'\n"

@@ -173,7 +173,7 @@ type Missing struct {
 	Empty map[string]string
 	// Needs are the variables the env capability said it needs for one missing, and for
 	// each of those it did not compute either (readNeeds); Has are those of them with a
-	// value, Imported those an import sets empty. Computed are those of Names the env
+	// value; Imported are those of them and of Names an import sets empty. Computed are those of Names the env
 	// capability printed a value for that a file's empty line hides. Malformed are the line
 	// numbers of its needs lines devopsy could not read.
 	Needs                   map[string][]string
@@ -212,6 +212,14 @@ func missingOf(p *loadedProject) (*Missing, error) {
 		}
 	}
 	m.needsOf(p)
+	for _, n := range names {
+		if v, _ := p.env.Lookup(n); v == "" && len(p.env.defs[n]) > 0 && p.env.defs[n][0].Kind == EnvImported {
+			if m.Imported == nil {
+				m.Imported = map[string]bool{}
+			}
+			m.Imported[n] = true
+		}
+	}
 	keys := slices.Clone(names)
 	for _, in := range m.Needs {
 		keys = append(keys, in...)
@@ -301,26 +309,22 @@ func missingVars(p *loadedProject) error {
 	// As --vars' follow-up words it, at the environment's own file, no edit known.
 	e := m.Explain(Edit{File: ".env"})
 	failure := &report.Failure{Msg: e.Details[0], Details: e.Details[1:]}
-	steps := e.Steps()
-	if len(steps) == 0 {
+	if len(e.Steps()) == 0 {
 		return &ExitError{Code: 1, Err: failure}
 	}
-	words := make([]string, len(steps))
-	for i, s := range steps {
-		words[i] = s.Words
-	}
-	fix := report.Fix(strings.Join(words, ", then ") + " in " + p.dotenvFile + " or the environment")
+	words, args := e.Fix("--vars")
+	fix := report.Fix(words + " in " + p.dotenvFile + " or the environment")
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
 	in := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir))
 	var cmds []string
-	for _, s := range steps {
-		if cmd := in.On(VarsEdit("--vars", s.Verb, s.Keys)); cmd != "" {
+	for _, a := range args {
+		if cmd := in.On(a); cmd != "" {
 			cmds = append(cmds, cmd)
 		}
 	}
-	if len(cmds) == len(steps) {
-		fix = report.Fix(strings.Join(words, ", then ")+" in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmds...)
+	if len(cmds) == len(args) {
+		fix = report.Fix(words+" in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmds...)
 	}
 	failure.Remedies = []report.Remedy{fix}
 	return &ExitError{Code: 1, Err: failure}
@@ -481,13 +485,25 @@ func (m *Missing) Explain(edit Edit) Explained {
 		}
 	}
 	remove := ": its line wins over a value below it, so remove that line there"
-	// An input, set where the fix reaches; caused when the edit took it.
-	input := func(n string) {
+	// An input, set where the fix reaches, by the rules of a missing variable: one the
+	// capability needs others for, that a file sets empty, is unset at the edited file
+	// and its own inputs followed, else its line is to remove; caused when the edit took it.
+	var input func(n string)
+	input = func(n string) {
 		switch f := m.Empty[n]; {
 		case m.Imported[n]:
 			notes = appendNew(notes, n+" is imported, and empty where it comes from")
-		case f != "" && nearer(f):
+		case f != "" && len(m.Needs[n]) > 0 && f == edit.File:
+			all, missing := m.inputsOf(n)
+			notes = appendNew(notes, fileSays(f)+" sets "+n+" empty, over what the project's env capability computes from "+report.JoinAnd(all))
+			unset(n)
+			e.Caused = e.Caused || gone(n)
+			for _, z := range missing {
+				input(z)
+			}
+		case f != "" && (len(m.Needs[n]) > 0 || nearer(f)):
 			notes = appendNew(notes, fileSays(f)+" sets "+n+" empty"+remove)
+			e.Caused = e.Caused || (gone(n) && !nearer(f))
 		default:
 			if f != "" {
 				notes = appendNew(notes, fileSays(f)+" sets "+n+" empty")
@@ -501,7 +517,11 @@ func (m *Missing) Explain(edit Edit) Explained {
 		all, missing := m.inputsOf(x)
 		computes := "which the project's env capability computes from " + report.JoinAnd(all)
 		f := m.Empty[x]
+		// What the edit took of X itself is why, but under a nearer file's line.
+		e.Caused = e.Caused || (gone(x) && (f == "" || !nearer(f)))
 		switch {
+		case m.Imported[x]:
+			e.Details = append(e.Details, "compose needs "+x+", which the project imports, and is empty where it comes from")
 		case f != "" && (len(all) > 0 || m.Computed[x]) && f == edit.File:
 			what := ", hiding what the project's env capability computes"
 			if !m.Computed[x] {
@@ -509,7 +529,6 @@ func (m *Missing) Explain(edit Edit) Explained {
 			}
 			e.Details = append(e.Details, "compose needs "+x+", which "+fileSays(f)+" sets empty"+what)
 			unset(x)
-			e.Caused = e.Caused || gone(x)
 			for _, n := range missing {
 				input(n)
 			}
@@ -518,7 +537,6 @@ func (m *Missing) Explain(edit Edit) Explained {
 		case f != "":
 			e.Details = append(e.Details, "compose needs "+x+", which "+fileSays(f)+" sets empty")
 			set(x)
-			e.Caused = e.Caused || gone(x)
 		case len(all) > 0 && len(missing) == 0:
 			e.Details = append(e.Details, "compose needs "+x+", "+computes+", but "+report.JoinAnd(all)+" "+are(all)+" set and it computed nothing")
 		case len(all) > 0:
@@ -538,7 +556,6 @@ func (m *Missing) Explain(edit Edit) Explained {
 	}
 	if len(own) > 0 {
 		e.Details = append(e.Details, "compose needs "+report.JoinAnd(own))
-		e.Caused = true
 	}
 	if len(never) > 0 {
 		e.Details = append(e.Details, "compose needs "+report.JoinAnd(never)+", which "+are(never)+" not set")
@@ -565,7 +582,8 @@ func (m *Missing) Explain(edit Edit) Explained {
 
 // inputsOf are the variables the env capability needs for x, each that it did not
 // compute either replaced by what it needs, down to one with a value (the capability saw
-// it, and computed nothing), and those of them with none; nil when it said none.
+// it, and computed nothing) or one a file sets empty (whose line comes first), and those
+// of them with none; nil when it said none.
 func (m *Missing) inputsOf(x string) (all, missing []string) {
 	seen := map[string]bool{x: true}
 	var walk func(n string)
@@ -574,7 +592,7 @@ func (m *Missing) inputsOf(x string) (all, missing []string) {
 			return
 		}
 		seen[n] = true
-		if !m.Has[n] && len(m.Needs[n]) > 0 {
+		if !m.Has[n] && m.Empty[n] == "" && len(m.Needs[n]) > 0 {
 			for _, i := range m.Needs[n] {
 				walk(i)
 			}
@@ -600,6 +618,17 @@ func (e Explained) Merge(o Explained) Explained {
 	e.Set = slices.DeleteFunc(appendNew(e.Set, o.Set...), func(k string) bool { return slices.Contains(e.SetAgain, k) })
 	e.Caused = e.Caused || o.Caused
 	return e
+}
+
+// Fix is e's fix as words ("unset X, then set A") and each step's arguments of flag
+// (--vars, --vars-instance, --vars-project): a caller adds only where and how it says it.
+func (e Explained) Fix(flag string) (string, []string) {
+	var words, args []string
+	for _, s := range e.Steps() {
+		words = append(words, s.Words)
+		args = append(args, VarsEdit(flag, s.Verb, s.Keys))
+	}
+	return strings.Join(words, ", then "), args
 }
 
 // FixStep is one command of a missing variable's fix: its words and the --vars verb

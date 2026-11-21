@@ -225,8 +225,10 @@ func TestVarsApply(t *testing.T) {
 	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: SITE_NAME saved on @devopsy@one:prod\n") || !strings.Contains(out, "to apply it now:\ndevopsy: | $ devopsy @devopsy@one:prod --reload") || strings.Contains(out, s.root) {
 		t.Errorf("a plain value:\n%s", out)
 	}
-	// A value it already had: nothing changed, so nothing applies it.
-	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: SITE_NAME already had that value on @devopsy@one:prod, so nothing changed\n") || strings.Contains(out, "--reload") {
+	// A value it already had: nothing changed, so nothing applies it (the head has no
+	// detail nor hint of its own).
+	head := "devopsy: SITE_NAME already had that value on @devopsy@one:prod, so nothing changed\n"
+	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.HasPrefix(out, head) || strings.HasPrefix(out[len(head):], "devopsy: | ") {
 		t.Errorf("a value it already had:\n%s", out)
 	}
 	if out := vars([]string{"FAKE_DB_IMAGE=mariadb:12"}, "@prod", "--vars", "set", "FAKE_DB_IMAGE"); !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release") || strings.Contains(out, "--reload") {
@@ -249,8 +251,9 @@ func TestVarsApply(t *testing.T) {
 	}
 	// The same unset again changed nothing, and says so: what fails failed before, and
 	// its fix still sets what the capability needs, never what it computes.
-	if out := vars(nil, "@prod", "--vars", "unset", "A"); !strings.Contains(out, "warning: A was not set on @devopsy@one:prod, so nothing changed, but its next reload or release will still fail, as before\ndevopsy: | compose needs AU, which the project's env capability computes from A, not set\n") ||
-		!strings.Contains(out, "set A:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set A\n") || strings.Contains(out, "--vars set AU") {
+	// A key typed twice is one.
+	if out := vars(nil, "@prod", "--vars", "unset", "A", "A"); !strings.Contains(out, "warning: A was not set on @devopsy@one:prod, so nothing changed, but its next reload or release will still fail, as before\ndevopsy: | compose needs AU, which the project's env capability computes from A, not set\n") ||
+		!strings.HasSuffix(out, "devopsy: | to fix it:\ndevopsy: | set A:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set A\n") {
 		t.Errorf("an unset of a key not set:\n%s", out)
 	}
 	vars([]string{"A=1"}, "@prod", "--vars", "set", "A")
@@ -733,6 +736,37 @@ func TestLocalReloadInReleaseRunTarget(t *testing.T) {
 	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='app-prod'\nDEVOPSY_PROJECT='app'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
 	if out, code := runDevopsy(t, filepath.Join(rel, remote.CodeDir), nil, "--reload"); code != 0 || !strings.Contains(out, "APPLIED") {
 		t.Errorf("--reload in a release, its step a target's command (%d):\n%s", code, out)
+	}
+}
+
+// A level's edit that changed nothing says, of its environments, only what fails (as
+// before) and what was not checked: the others have nothing to apply. --inherit's
+// outcome is unknown, so what fails ends "and", never "as before" nor "so", and its fix
+// sets nothing "again".
+//
+// Not parallel: it sets report's default logger.
+func TestUnchangedOrUnknownEditsSayWhatFails(t *testing.T) {
+	old := report.Default()
+	defer report.SetDefault(old)
+	var said strings.Builder
+	report.SetDefault(report.New(&said, false, 0))
+	tg := &remote.Target{Name: "prod", Host: "vm1", Address: "vm1:prod", Path: "shop/prod"}
+	level := &remote.Level{Name: "project", Dir: "shop", Link: "project.env"}
+	missing := (&cli.Missing{Names: []string{"X"}}).Lines()
+	sayApplied(tg, level, "X was not set in "+varsScope(tg, level)+", so nothing changed", cli.Edit{File: "project.env", Known: true, Unchanged: true}, []remote.Applied{
+		{Dir: "dev", Word: "0"},
+		{Dir: "qa", Word: "busy"},
+		{Dir: "prod", Word: "4", Lines: missing},
+	})
+	if got := said.String(); got != "devopsy: warning: X was not set in project shop on vm1, so nothing changed, but prod's next reload or release will still fail, as before\n"+
+		"devopsy: | qa: not checked, its lock is held now\ndevopsy: | prod: compose needs X, which is not set\n"+
+		"devopsy: | to fix it:\ndevopsy: | set X:\ndevopsy: | $ devopsy @vm1:prod --vars-project set X\n" {
+		t.Errorf("a level's edit that changed nothing:\n%s", got)
+	}
+	said.Reset()
+	sayApplied(tg, nil, "inherited into "+varsScope(tg, nil), cli.Edit{File: ".env"}, []remote.Applied{{Word: "4", Lines: missing}})
+	if got := said.String(); !strings.HasPrefix(got, "devopsy: warning: inherited into @vm1:prod, and its next reload or release will fail\n") || !strings.Contains(got, "set X:\n") {
+		t.Errorf("--inherit:\n%s", got)
 	}
 }
 
