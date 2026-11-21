@@ -24,7 +24,7 @@ func fakeCompose(said, vars string) string {
 // --variables lists (a variable an include's env_file sets is listed required, and set);
 // when they do not read, the required variables unset or empty are listed with what
 // compose said, a set one and an optional one left out; when none is, compose's words
-// alone, a line compose said twice once, its message the variables missing as --vars'
+// alone, a line compose said twice once (twice for two services, once too), its message the variables missing as --vars'
 // follow-up words them. Compose's words are kept only where they name a missing variable,
 // from its "required variable", after "compose says:", and masked, on either path: compose
 // interpolates a :? message, and its other errors quote values. On a target, the fix names the environment's
@@ -33,7 +33,7 @@ func fakeCompose(said, vars string) string {
 func TestMissingVars(t *testing.T) {
 	t.Parallel()
 	vars := `{"TOKEN":{"Required":true},"EMPTY":{"Required":true},"SET":{"Required":true},"OPT":{"Required":false}}`
-	said := "error while interpolating services.app.environment.EMPTY: required variable EMPTY is missing a value\nerror while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for hunter2secret"
+	said := "error while interpolating services.app.environment.EMPTY: required variable EMPTY is missing a value\nerror while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for hunter2secret\nerror while interpolating services.db.environment.EMPTY: required variable EMPTY is missing a value"
 	masked := "compose says: required variable TOKEN is missing a value: the token for ***"
 	warned := `level=warning msg="The TOKEN variable is not set. Defaulting to a blank string."`
 	for _, c := range []struct {

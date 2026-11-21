@@ -205,9 +205,10 @@ func missingOf(p *loadedProject) (*Missing, error) {
 	}
 	m := &Missing{Names: names, Malformed: p.needsMalformed}
 	for _, line := range said {
-		// From its "required variable": where compose found it is no help to set it.
+		// From its "required variable": where compose found it (one service or another)
+		// is no help to set it, so two services' same line is one.
 		if i := strings.Index(line, "required variable "); i >= 0 && slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(line[i:], "required variable "+n+" ") }) {
-			m.Said = append(m.Said, line[i:])
+			m.Said = appendNew(m.Said, line[i:])
 		}
 	}
 	m.needsOf(p)
