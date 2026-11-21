@@ -58,7 +58,7 @@ func TestReview1aRemovingXOverAnEmptyLineBelowIsTheCause(t *testing.T) {
 
 // Bug (review 1a): an input that has its own needs line and that a file sets empty is
 // replaced by its own inputs (inputsOf), and its empty line is never said nor fixed: the
-// fix sets Z only, though the edited file's Y='' would still hide whatever the
+// fix sets Z only, though the edited file's empty Y line would still hide whatever the
 // capability computes for Y once Z is set. The plan treats a key that a file sets empty
 // by one helper for every key, X or an input, and for X with a needs line empty in the
 // edited file the fix unsets it and sets its inputs.
