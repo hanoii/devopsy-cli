@@ -163,9 +163,9 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 // everything else stay as they are. An environment's edit takes its release lock, so it
 // never interleaves with a deploy writing its own secrets; an instance's or a project's
 // takes that level's own lock, which no release takes. stdin is gated (gated_read):
-// devopsy sends it once the lock is held. What it sends, and the file as it was
-// ($va_old, the follow-up's --before), stay in shell variables, never in a file.
-// mode is set or unset.
+// devopsy sends it once the lock is held. What it sends stays in a shell variable, never
+// in a file. After the file's path, one VarsKey line per key says what the edit did to
+// it. mode is set or unset.
 func varsEdit(mode string) string {
 	return gatedRead + `if [ -z "$plain" ]; then
   ` + releaseLock(false, true) + `  mkdir -p "$(dirname "$file")"
@@ -175,13 +175,17 @@ umask 077
 # What a link points to: the result goes beside it.
 t=$(readlink -f "$file")
 ve_in=$(gated_read)
-va_old=$(cat "$t")
-printf '%s\n' "$ve_in" | awk -v mode=` + mode + ` -v sq="'" '
+# awk's stdout is the new file, its stderr each key's outcome (names only).
+ve_keys=$(printf '%s\n' "$ve_in" | awk -v mode=` + mode + ` -v sq="'" '
   # closes: s has quote q unescaped, which ends a quoted value.
   function closes(s, q) { gsub(/\\\\/, "", s); gsub("\\\\" q, "", s); return index(s, q) > 0 }
+  # blank: line l gives its key an empty value, however written (A=, A='', A="").
+  function blank(l) { sub(/^[^=:]*[=:][ \t]*/, "", l); sub(/[ \t\r]*$/, "", l); return l == "" || l == "\"\"" || l == sq sq }
   NR == FNR {
     k = $0; sub(/=.*/, "", k)
-    if (mode == "set") { line[k] = $0; order[++n] = k } else { drop[k] = 1 }
+    if ((k in line) || (k in drop)) next
+    order[++n] = k
+    if (mode == "set") line[k] = $0; else drop[k] = 1
     next
   }
   # A quoted value goes on until its quote closes: those lines belong to
@@ -195,23 +199,56 @@ printf '%s\n' "$ve_in" | awk -v mode=` + mode + ` -v sq="'" '
     # KEY=value, or KEY: value, which the compose parser reads alike.
     k = $0; sub(/^[ \t]*(export[ \t]+)?/, "", k); sub(/[ \t]*[=:].*/, "", k)
     skip = 0
-    if ($0 ~ /[=:]/ && (k in drop)) skip = 1
+    if ($0 ~ /[=:]/ && (k in drop)) { skip = 1; seen[k] = 1 }
     else if ($0 ~ /[=:]/ && (k in line)) {
-      if (!(k in done)) print line[k]
-      done[k] = 1
+      # A second line of it, or one of several lines, changes the file.
+      if (!(k in done)) print line[k]; else several[k] = 1
+      done[k] = 1; old[k] = $0
       skip = 1
     } else print
     v = $0; sub(/^[^=:]*[=:][ \t]*/, "", v); c = substr(v, 1, 1)
-    if ($0 ~ /[=:]/ && (c == "\"" || c == sq) && !closes(substr(v, 2), c)) q = c
+    if ($0 ~ /[=:]/ && (c == "\"" || c == sq) && !closes(substr(v, 2), c)) {
+      q = c
+      if (skip && (k in line)) several[k] = 1
+    }
   }
-  END { for (i = 1; i <= n; i++) if (!(order[i] in done)) print line[order[i]] }
-' - "$file" > "$t.tmp"
+  END {
+    for (i = 1; i <= n; i++) {
+      k = order[i]
+      if (mode == "unset") o = (k in seen) ? "removed" : "absent"
+      else if (!(k in done)) { print line[k]; o = "added" }
+      else if (!(k in several) && (old[k] == line[k] || (blank(old[k]) && blank(line[k])))) o = "same"
+      else o = "changed"
+      printf "` + VarsKey + `%s\t%s\n", o, k > "/dev/stderr"
+    }
+  }
+' - "$file" 2>&1 > "$t.tmp") || { rm -f "$t.tmp"; printf '%s\n' "$ve_keys" >&2; exit 1; }
 # Into place in one rename, with the file's mode, so nothing reads it
 # empty or cut, whoever owned it (nothing makes one another user's).
 chmod "$(stat -c %a "$t" 2>/dev/null || stat -f %Lp "$t")" "$t.tmp"
 mv -f "$t.tmp" "$t"
 printf '%s\n' "$file"
+printf '%s\n' "$ve_keys"
 `
+}
+
+// VarsKey starts each line a --vars set or unset prints after the file's path: then a
+// key's outcome, a tab and the key (ParseVarsKeys). An unset's is removed or absent
+// (no line of it there), a set's added, changed or same (its one line there already
+// the line sent, or both giving it an empty value).
+const VarsKey = "key\t"
+
+// ParseVarsKeys reads the VarsKey lines of what a --vars set or unset printed: each
+// key's outcome.
+func ParseVarsKeys(out string) map[string]string {
+	keys := map[string]string{}
+	for _, l := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(l, VarsKey); ok {
+			o, k, _ := strings.Cut(rest, "\t")
+			keys[k] = o
+		}
+	}
+	return keys
 }
 
 // sharedTemporaries are the files devopsy writes in shared/ on their way into place
@@ -223,13 +260,13 @@ var sharedTemporaries = []string{".env.tmp", InheritFile + ".tmp", ParentEnvFile
 // VarsSetScript sets the KEY=value lines given on stdin, keys their
 // names.
 func VarsSetScript(t *Target, level *Level, keys []string) string {
-	return varsPrelude(t, level) + varsEdit("set") + varsTrace(t, level, keys) + varsApply(t, level, true)
+	return varsPrelude(t, level) + varsEdit("set") + varsTrace(t, level, keys) + varsApply(t, level)
 }
 
 // VarsUnsetScript removes the keys given on stdin, one per line, keys
 // their names.
 func VarsUnsetScript(t *Target, level *Level, keys []string) string {
-	return varsPrelude(t, level) + varsEdit("unset") + varsTrace(t, level, keys) + varsApply(t, level, true)
+	return varsPrelude(t, level) + varsEdit("unset") + varsTrace(t, level, keys) + varsApply(t, level)
 }
 
 // VarsTrace starts the lines a --vars set or unset prints after the
@@ -283,20 +320,10 @@ const VarsAppliedLine = "applied\t"
 
 // varsApply checks what the edit does: in the environment, or with a level in each of
 // its environments that has a current release (each_env), each under its own release lock
-// taken without waiting (the edit holds the level's). With before, the edited file as it
-// was ($va_old, varsEdit's) goes to each check, its stdin only: --prepare-release runs the
-// project's code.
-func varsApply(t *Target, level *Level, before bool) string {
+// taken without waiting (the edit holds the level's). The check's stdin is nothing: the
+// session's is the operator's values, and it runs the project's code.
+func varsApply(t *Target, level *Level) string {
 	check := []string{"--check-images", "--hint"}
-	feed := ""
-	if before {
-		was := "env"
-		if level != nil {
-			was = level.Name
-		}
-		check = append(check, "--before", was)
-		feed = `printf '%s\n' "$va_old" | `
-	}
 	// The environment's own edit runs under its compose name, as every command of it; a
 	// level's environments each read theirs from their release (devopsy-target.env).
 	name := t.ComposeName()
@@ -328,7 +355,7 @@ va_apply() (
     rm -f "$va_pending"
     (cd "$base/current" && ` + call("--prepare-release", "reload") + ` >/dev/null 2>&1) || rm -f "$va_pending"
     va=0
-    va_out=$(cd "$base/current" && ` + feed + TargetPendingEnv + `="$va_pending" ` + call(check...) + ` 2>/dev/null) || va=$?
+    va_out=$(cd "$base/current" && ` + TargetPendingEnv + `="$va_pending" ` + call(check...) + ` 2>/dev/null </dev/null) || va=$?
     rm -f "$va_pending"
     printf '` + VarsApplied + `%s\t%s\n' "$2" "$va"
     printf '%s\n' "$va_out" | while IFS= read -r va_l; do
@@ -360,7 +387,7 @@ func VarsHintScript(t *Target) string {
 	return varsPrelude(t, nil) + `if [ -z "$plain" ]; then
   ` + releaseLock(false, false) + `fi
 printf '\n'
-` + varsApply(t, nil, false)
+` + varsApply(t, nil)
 }
 
 // Applied is what varsApply found in one environment: its directory under the edited

@@ -3,13 +3,18 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
@@ -46,7 +51,7 @@ var Capabilities = []Capability{
 			{
 				Name:   "compute",
 				Usage:  "compute",
-				Does:   "gets the project's environment and prints .env lines; devopsy sets those not set yet (the lowest precedence) and devopsy --env shows them. Runs before every command, so keep it fast; devopsy run inside it skips it",
+				Does:   "gets the project's environment and prints .env lines; devopsy sets those not set yet (the lowest precedence) and devopsy --env shows them. Where it computes nothing for a variable, a line '# needs: <variable> <variables it needs>...' tells devopsy what to set when compose requires it. Runs before every command, so keep it fast; devopsy run inside it skips it",
 				Output: "SITE_URL='https://shop-prod.vm1.example.com'",
 			},
 		},
@@ -157,6 +162,18 @@ func (p *loadedProject) computeEnv() error {
 	if err != nil {
 		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: its output: %v", file, err)}
 	}
+	// Read as the output was parsed, before its own variables were set (a value reading
+	// one the output prints later would parse otherwise), and masked with its secrets too.
+	before := map[string]bool{}
+	for k := range vars {
+		_, before[k] = p.env.Lookup(k)
+	}
+	parsed := func(k string) (string, bool) {
+		if was, own := before[k]; own && !was {
+			return "", false
+		}
+		return p.env.Lookup(k)
+	}
 	keys := make([]string, 0, len(vars))
 	for k := range vars {
 		keys = append(keys, k)
@@ -171,5 +188,105 @@ func (p *loadedProject) computeEnv() error {
 		p.env.defs[k] = append(p.env.defs[k], EnvDef{Kind: EnvComputed, Source: file, Value: vars[k]})
 	}
 	p.verbose = append(p.verbose, "computed "+file)
+	p.needs, p.needsMalformed = readNeeds(out, vars, parsed, p.newSecrets().Mask)
+	for _, x := range slices.Sorted(maps.Keys(p.needs)) {
+		p.verbose = append(p.verbose, file+" needs "+report.JoinAnd(p.needs[x])+" for "+x)
+	}
+	if len(p.needsMalformed) > 0 {
+		p.verbose = append(p.verbose, file+": "+NeedsMalformed(p.needsMalformed))
+	}
 	return nil
+}
+
+// NeedsPrefix starts a line of the env capability's output that names a variable it did
+// not compute and the variables that would make it, all of them needed: a comment, which
+// no .env parser takes for a variable.
+const NeedsPrefix = "# needs: "
+
+// NeedsMalformed says which lines of the env capability's output start NeedsPrefix and
+// do not read as one, by their numbers, never their text.
+func NeedsMalformed(lines []int) string {
+	ns := make([]string, len(lines))
+	for i, n := range lines {
+		ns[i] = strconv.Itoa(n)
+	}
+	if len(ns) == 1 {
+		return "line " + ns[0] + " of the env capability's output starts " + strings.TrimSpace(NeedsPrefix) + " and does not read, so devopsy ignores it"
+	}
+	return "lines " + report.JoinAnd(ns) + " of the env capability's output start " + strings.TrimSpace(NeedsPrefix) + " and do not read, so devopsy ignores them"
+}
+
+var needsLine = regexp.MustCompile(`^# needs: [A-Za-z_][A-Za-z0-9_]*( [A-Za-z_][A-Za-z0-9_]*)+$`)
+
+// readNeeds reads the needs lines of the env capability's output out, which parses to
+// vars with lookup: each variable to the ones it needs, several lines of one adding up,
+// and the line numbers of those starting NeedsPrefix that are no needs line. A line is
+// the output's comment only when out parses to the same variables without it, compose-go
+// deciding what is inside a quoted value; one inside a value is the value's, never read.
+// A line that names a variable among its own needs, directly or through others, or that
+// mask changes (a value printed by mistake would make a fix that fails when copied), is
+// no needs line either; its text is never kept.
+func readNeeds(out []byte, vars map[string]string, lookup func(string) (string, bool), mask func(string) string) (map[string][]string, []int) {
+	type read struct {
+		line  int
+		names []string
+	}
+	var reads []read
+	var malformed []int
+	lines := strings.Split(string(out), "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(l, strings.TrimSpace(NeedsPrefix)) {
+			continue
+		}
+		without := slices.Concat(lines[:i], lines[i+1:])
+		if got, err := dotenv.UnmarshalBytesWithLookup([]byte(strings.Join(without, "\n")), lookup); err != nil || !maps.Equal(got, vars) {
+			continue
+		}
+		names := strings.Split(strings.TrimPrefix(l, NeedsPrefix), " ")
+		if !needsLine.MatchString(l) || mask(l) != l || slices.Contains(names[1:], names[0]) {
+			malformed = append(malformed, i+1)
+			continue
+		}
+		reads = append(reads, read{i + 1, names})
+	}
+	build := func(rs []read) map[string][]string {
+		needs := map[string][]string{}
+		for _, r := range rs {
+			for _, n := range r.names[1:] {
+				if !slices.Contains(needs[r.names[0]], n) {
+					needs[r.names[0]] = append(needs[r.names[0]], n)
+				}
+			}
+		}
+		return needs
+	}
+	// A line one of whose needed variables needs its own back, through others, is in a
+	// cycle: those lines go, the others stay.
+	all := build(reads)
+	reaches := func(from, to string) bool {
+		seen, todo := map[string]bool{}, []string{from}
+		for len(todo) > 0 {
+			n := todo[0]
+			todo = todo[1:]
+			if n == to {
+				return true
+			}
+			if !seen[n] {
+				seen[n] = true
+				todo = append(todo, all[n]...)
+			}
+		}
+		return false
+	}
+	kept := reads[:0:0]
+	for _, r := range reads {
+		if slices.ContainsFunc(r.names[1:], func(n string) bool { return reaches(n, r.names[0]) }) {
+			malformed = append(malformed, r.line)
+		} else {
+			kept = append(kept, r)
+		}
+	}
+	needs := build(kept)
+	slices.Sort(malformed)
+	return needs, malformed
 }

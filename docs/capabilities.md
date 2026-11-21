@@ -65,6 +65,25 @@ the imported `PROXY_BASE_DOMAIN` and their own `PROXY_DOMAINS`. It runs
 every time, so keep it fast; a devopsy it calls skips it. A failure stops
 the command.
 
+Where it computes nothing for a variable, it can say what that variable
+needs, on a comment line of its own:
+
+```sh
+if [ -n "${SITE_BASIC_AUTH:-}" ]; then
+  echo "SITE_BASIC_AUTH_USERS='...'"
+else
+  echo "# needs: SITE_BASIC_AUTH_USERS SITE_BASIC_AUTH"
+fi
+```
+
+The first name is the variable it did not compute, the rest the variables
+that would make it, all of them needed; several lines for one variable add
+up. When compose requires that variable and it is missing, devopsy names
+what it needs and offers to set those, never the variable itself, which
+would bypass the capability. A `.env` parser takes the line for a comment,
+so it never becomes a variable. A line devopsy cannot read is ignored,
+said by its line number at `-v`.
+
 ## shell
 
 `open [service] [exec options...] [-- command...]` replaces devopsy's own

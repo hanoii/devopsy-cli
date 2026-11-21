@@ -200,11 +200,13 @@ func TestRestoreNoCodeChecksImages(t *testing.T) {
 }
 
 // --vars set and unset say what applies the change, under a first line naming the
-// change and its scope, never the file: a reload, a release when the variables now need
+// change and its scope, never the file, and what it did to each key (a set of the value
+// it had, an unset of a key not there, changed nothing): a reload, a release when the variables now need
 // another image, or nothing until compose's required variables are set, refusing none.
 // A variable missing after the change gets one fix, by what made it go: a required one
-// the change unset, set again; one the env capability computed from a key the change
-// unset, that key set again, never the computed one by hand; compose's own words carried.
+// the change unset, set again; one the env capability says it needs a key for, that key,
+// again when the change unset it, never the computed one by hand; compose's own words
+// carried.
 // The instance's and the project's files reach several environments: each one with a
 // current release is checked under its own lock, taken without waiting (one held is said
 // not checked), environments with the same outcome on one detail, the fix at that level.
@@ -223,23 +225,36 @@ func TestVarsApply(t *testing.T) {
 	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.Contains(out, "devopsy: SITE_NAME saved on @devopsy@one:prod\n") || !strings.Contains(out, "to apply it now:\ndevopsy: | $ devopsy @devopsy@one:prod --reload") || strings.Contains(out, s.root) {
 		t.Errorf("a plain value:\n%s", out)
 	}
+	// A value it already had: nothing changed, so nothing applies it (the head has no
+	// detail nor hint of its own).
+	head := "devopsy: SITE_NAME already had that value on @devopsy@one:prod, so nothing changed\n"
+	if out := vars([]string{"SITE_NAME=shop"}, "@prod", "--vars", "set", "SITE_NAME"); !strings.HasPrefix(out, head) || strings.HasPrefix(out[len(head):], "devopsy: | ") {
+		t.Errorf("a value it already had:\n%s", out)
+	}
 	if out := vars([]string{"FAKE_DB_IMAGE=mariadb:12"}, "@prod", "--vars", "set", "FAKE_DB_IMAGE"); !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release") || strings.Contains(out, "--reload") {
 		t.Errorf("an image's name:\n%s", out)
 	}
 	vars(nil, "@prod", "--vars", "unset", "FAKE_DB_IMAGE")
 	code := filepath.Join(s.root, "shop", "prod", s.current("prod"), remote.CodeDir, ".devopsy")
 	write(t, filepath.Join(code, "compose.yaml"), "services:\n  app:\n    image: x\n    environment: [\"KEY=${REQUIRED:?}\", \"AUTH=${AU:?set A, or run secrets}\"]\n  db:\n    image: y\n", 0o644)
-	write(t, filepath.Join(code, "capabilities", "env", "compute"), "#!/bin/sh\n[ -z \"${A:-}\" ] || echo \"AU=u-$A\"\n", 0o755)
+	write(t, filepath.Join(code, "capabilities", "env", "compute"), "#!/bin/sh\nif [ -n \"${A:-}\" ]; then echo \"AU=u-$A\"; else echo '# needs: AU A'; fi\n", 0o755)
 	vars([]string{"REQUIRED=1", "A=1"}, "@prod", "--vars", "set", "REQUIRED", "A")
 	if out := vars(nil, "@prod", "--vars", "unset", "REQUIRED"); !strings.Contains(out, "warning: REQUIRED removed from @devopsy@one:prod, so its next reload or release will fail\ndevopsy: | compose needs REQUIRED\n") || !strings.Contains(out, "set REQUIRED again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set REQUIRED\n") {
 		t.Errorf("a required variable unset:\n%s", out)
 	}
 	vars([]string{"REQUIRED=1"}, "@prod", "--vars", "set", "REQUIRED")
 	out := vars(nil, "@prod", "--vars", "unset", "A")
-	if !strings.Contains(out, "warning: A removed from @devopsy@one:prod, so its next reload or release will fail\ndevopsy: | compose needs AU, which the project's env capability computes, and without A it computes nothing\n") ||
+	if !strings.Contains(out, "warning: A removed from @devopsy@one:prod, so its next reload or release will fail\ndevopsy: | compose needs AU, which the project's env capability computes from A, not set\n") ||
 		!strings.Contains(out, "required variable AU is missing a value: set A, or run secrets") ||
 		!strings.Contains(out, "set A again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set A\n") || strings.Contains(out, "--vars set AU") {
 		t.Errorf("a key the env capability computed from unset:\n%s", out)
+	}
+	// The same unset again changed nothing, and says so: what fails failed before, and
+	// its fix still sets what the capability needs, never what it computes.
+	// A key typed twice is one.
+	if out := vars(nil, "@prod", "--vars", "unset", "A", "A"); !strings.Contains(out, "warning: A was not set on @devopsy@one:prod, so nothing changed, but its next reload or release will still fail, as before\ndevopsy: | compose needs AU, which the project's env capability computes from A, not set\n") ||
+		!strings.HasSuffix(out, "devopsy: | to fix it:\ndevopsy: | set A:\ndevopsy: | $ devopsy @devopsy@one:prod --vars set A\n") {
+		t.Errorf("an unset of a key not set:\n%s", out)
 	}
 	vars([]string{"A=1"}, "@prod", "--vars", "set", "A")
 
@@ -258,7 +273,7 @@ func TestVarsApply(t *testing.T) {
 	vars(nil, "@prod", "--vars", "unset", "A")
 	out = vars(nil, "@prod", "--vars-project", "unset", "A")
 	if !strings.Contains(out, "warning: A removed from project shop on devopsy@one, so prod's next reload or release will fail\n") ||
-		!strings.Contains(out, "devopsy: | dev: running containers keep their old values until a reload recreates them\ndevopsy: | prod: compose needs AU, which the project's env capability computes, and without A it computes nothing\n") ||
+		!strings.Contains(out, "devopsy: | dev: running containers keep their old values until a reload recreates them\ndevopsy: | prod: compose needs AU, which the project's env capability computes from A, not set\n") ||
 		!strings.Contains(out, "set A again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars-project set A\n") {
 		t.Errorf("a project's key prod's capability computed from:\n%s", out)
 	}
@@ -724,9 +739,40 @@ func TestLocalReloadInReleaseRunTarget(t *testing.T) {
 	}
 }
 
-// A level's fix offers each command once: a key one environment sets again (the project's
-// value was its own) and another only sets (unset there before too) is one command, never
-// "set X again, then set X".
+// A level's edit that changed nothing says, of its environments, only what fails (as
+// before) and what was not checked: the others have nothing to apply. --inherit's
+// outcome is unknown, so what fails ends "and", never "as before" nor "so", and its fix
+// sets nothing "again".
+//
+// Not parallel: it sets report's default logger.
+func TestUnchangedOrUnknownEditsSayWhatFails(t *testing.T) {
+	old := report.Default()
+	defer report.SetDefault(old)
+	var said strings.Builder
+	report.SetDefault(report.New(&said, false, 0))
+	tg := &remote.Target{Name: "prod", Host: "vm1", Address: "vm1:prod", Path: "shop/prod"}
+	level := &remote.Level{Name: "project", Dir: "shop", Link: "project.env"}
+	missing := (&cli.Missing{Names: []string{"X"}}).Lines()
+	sayApplied(tg, level, "X was not set in "+varsScope(tg, level)+", so nothing changed", cli.Edit{File: "project.env", Known: true, Unchanged: true}, []remote.Applied{
+		{Dir: "dev", Word: "0"},
+		{Dir: "qa", Word: "busy"},
+		{Dir: "prod", Word: "4", Lines: missing},
+	})
+	if got := said.String(); got != "devopsy: warning: X was not set in project shop on vm1, so nothing changed, but prod's next reload or release will still fail, as before\n"+
+		"devopsy: | qa: not checked, its lock is held now\ndevopsy: | prod: compose needs X, which is not set\n"+
+		"devopsy: | to fix it:\ndevopsy: | set X:\ndevopsy: | $ devopsy @vm1:prod --vars-project set X\n" {
+		t.Errorf("a level's edit that changed nothing:\n%s", got)
+	}
+	said.Reset()
+	sayApplied(tg, nil, "inherited into "+varsScope(tg, nil), cli.Edit{File: ".env"}, []remote.Applied{{Word: "4", Lines: missing}})
+	if got := said.String(); !strings.HasPrefix(got, "devopsy: warning: inherited into @vm1:prod, and its next reload or release will fail\n") || !strings.Contains(got, "set X:\n") {
+		t.Errorf("--inherit:\n%s", got)
+	}
+}
+
+// A level's fix offers each command once: a key two environments miss for different
+// reasons (one has no other value, a file below sets it empty in the other) is one
+// command, never "set X again, then set X again".
 //
 // Not parallel: it sets report's default logger.
 func TestLevelFixOffersEachCommandOnce(t *testing.T) {
@@ -736,15 +782,13 @@ func TestLevelFixOffersEachCommandOnce(t *testing.T) {
 	report.SetDefault(report.New(&said, false, 0))
 	tg := &remote.Target{Name: "prod", Host: "vm1", Address: "vm1:prod", Path: "shop/prod"}
 	level := &remote.Level{Name: "project", Dir: "shop", Link: "project.env"}
-	before := func(set bool) []string {
-		return (&cli.Missing{Names: []string{"X"}, Before: &cli.MissingBefore{Set: map[string]bool{"X": set}, Computed: map[string]bool{}, Changed: map[string]string{"X": "removed"}}}).Lines()
-	}
-	sayApplied(tg, level, "X removed from "+varsScope(tg, level), []string{"X"}, []remote.Applied{
-		{Dir: "dev", Word: "4", Lines: before(true)},
-		{Dir: "prod", Word: "4", Lines: before(false)},
+	edit := cli.Edit{File: "project.env", Known: true, Gone: map[string]bool{"X": true}}
+	sayApplied(tg, level, "X removed from "+varsScope(tg, level), edit, []remote.Applied{
+		{Dir: "dev", Word: "4", Lines: (&cli.Missing{Names: []string{"X"}}).Lines()},
+		{Dir: "prod", Word: "4", Lines: (&cli.Missing{Names: []string{"X"}, Empty: map[string]string{"X": remote.TargetEnvFile}}).Lines()},
 	})
-	cmd := "$ devopsy @vm1:prod --vars-project set X\n"
-	if got := said.String(); strings.Count(got, cmd) != 1 || strings.Contains(got, "set X again, then set X:") {
+	cmd := "set X again:\ndevopsy: | $ devopsy @vm1:prod --vars-project set X\n"
+	if got := said.String(); strings.Count(got, "--vars-project set X") != 1 || !strings.Contains(got, cmd) || !strings.Contains(got, ", so the next reload or release of dev and prod will fail") {
 		t.Errorf("the fix repeats a command:\n%s", got)
 	}
 }

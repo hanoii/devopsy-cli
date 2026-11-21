@@ -332,15 +332,6 @@ func LoadDotenv(env *Env, file string) error {
 	return setDotenv(env, file, vars)
 }
 
-// loadDotenvFrom is LoadDotenv of content standing in for file, defined as file's.
-func loadDotenvFrom(env *Env, file string, content []byte) error {
-	vars, err := dotenv.UnmarshalBytesWithLookup(content, env.Lookup)
-	if err != nil {
-		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: %v", file, err)}
-	}
-	return setDotenv(env, file, vars)
-}
-
 // setDotenv sets what file defined, below what env has.
 func setDotenv(env *Env, file string, vars map[string]string) error {
 	// A release's devopsy-target.env ends with what it imported.
@@ -1521,6 +1512,14 @@ type loadedProject struct {
 	envFile string
 	env     *Env
 	verbose []string
+	// needs are what the env capability said it needs for each variable it did not
+	// compute, needsMalformed the line numbers of its needs lines devopsy could not read
+	// (readNeeds).
+	needs          map[string][]string
+	needsMalformed []int
+	// fileNames are the envFiles each loaded file is, by its path: a stand-in's its
+	// file's.
+	fileNames map[string]string
 	// secrets are config.yaml's secrets: names.
 	secrets []string
 	// address is a local command's, when the devopsy that read it gave one.
@@ -1534,12 +1533,6 @@ type loadedProject struct {
 
 // newSecrets masks the project's secrets as loaded.
 func (p *loadedProject) newSecrets() *Secrets { return NewSecrets(p.env, p.secrets) }
-
-// loadProject finds the project from cwd and loads its environment over the
-// caller's.
-func loadProject(cwd string, environ []string) (*loadedProject, error) {
-	return loadProjectBefore(cwd, environ, nil)
-}
 
 // envFiles are the files a project's environment loads, nearest first, each read where
 // it is, or where its stand-in's variable names when that file exists:
@@ -1574,6 +1567,17 @@ var envFiles = []struct {
 	{remote.TargetEnvFile, func(dir string) string { return remote.ReleaseFile(dir, remote.TargetEnvFile) }, lookupOf(remote.TargetPendingEnv)},
 }
 
+// envFileRank is where the envFiles file of that name stands, 0 the nearest, and one
+// that is none below them all.
+func envFileRank(name string) int {
+	for i, f := range envFiles {
+		if f.name == name {
+			return i
+		}
+	}
+	return len(envFiles)
+}
+
 func inProject(name string) func(string) string {
 	return func(dir string) string { return filepath.Join(dir, name) }
 }
@@ -1582,24 +1586,9 @@ func lookupOf(name string) func(*Env) string {
 	return func(env *Env) string { v, _ := env.Lookup(name); return v }
 }
 
-// Before is what one of a project's variables files held before an edit, standing in for
-// it (BeforeFiles names which): the --vars follow-up's second load.
-type Before struct {
-	File    string
-	Content []byte
-}
-
-// BeforeFiles are the files Before stands in for, by the level --vars edited.
-var BeforeFiles = map[string]string{"env": ".env", "instance": "instance.env", "project": "project.env"}
-
-// beforeError is Before's content failing to parse: its words quote the line, value
-// included, so the follow-up says it in its own.
-type beforeError struct{ err error }
-
-func (e *beforeError) Error() string { return e.err.Error() }
-
-// loadProjectBefore is loadProject with before standing in for its file.
-func loadProjectBefore(cwd string, environ []string, before *Before) (*loadedProject, error) {
+// loadProject finds the project from cwd and loads its environment over the
+// caller's.
+func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	projectDir, err := FindProjectDir(cwd)
 	if err != nil {
 		return nil, err
@@ -1621,17 +1610,10 @@ func loadProjectBefore(cwd string, environ []string, before *Before) (*loadedPro
 	verbose := []string{"project " + projectDir}
 	dotenvFile := filepath.Join(projectDir, ".env")
 	envFile := ""
+	fileNames := map[string]string{}
 	for _, f := range envFiles {
 		file := f.path(projectDir)
 		if file == "" {
-			continue
-		}
-		if before != nil && before.File == f.name {
-			// What the file held before an edit (--vars' follow-up): read in its
-			// place, never a file compose is told to read.
-			if err := loadDotenvFrom(env, file, before.Content); err != nil {
-				return nil, &beforeError{err}
-			}
 			continue
 		}
 		if f.pending != nil {
@@ -1647,6 +1629,7 @@ func loadProjectBefore(cwd string, environ []string, before *Before) (*loadedPro
 		if err := LoadDotenv(env, file); err != nil {
 			return nil, err
 		}
+		fileNames[file] = f.name
 		if _, err := os.Stat(file); err == nil {
 			verbose = append(verbose, "loaded "+file)
 		}
@@ -1686,7 +1669,7 @@ func loadProjectBefore(cwd string, environ []string, before *Before) (*loadedPro
 	}
 	env.Mark("COMPOSE_PROJECT_NAME")
 	env.Mark("DEVOPSY_PROJECT_DIR")
-	p := &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, envFile: envFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}
+	p := &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, envFile: envFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed, fileNames: fileNames}
 	if err := p.setUIDs(cwd, project); err != nil {
 		return nil, err
 	}

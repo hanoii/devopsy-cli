@@ -525,24 +525,6 @@ func TestProjectUsersSetupFeature(t *testing.T) {
 	}
 }
 
-// A --vars edit, at every level, gives its follow-up the file as it was (--before), which
-// an older server's check refuses as usage after the edit: it needs its named feature, so
-// the edit refuses first. --inherit's follow-up passes none.
-func TestVarsBeforeFeature(t *testing.T) {
-	t.Parallel()
-	tg := &Target{Name: "prod", Host: "vm1", Path: "app/prod"}
-	for _, level := range []*Level{nil, {Name: "project", Dir: "app", Link: "project.env"}} {
-		for _, s := range []string{VarsSetScript(tg, level, []string{"A"}), VarsUnsetScript(tg, level, []string{"A"})} {
-			if got := Needs(s); !slices.Contains(got, VarsBeforeFeature) {
-				t.Errorf("level %v: needs %v", level, got)
-			}
-		}
-	}
-	if got := Needs(VarsHintScript(tg)); slices.Contains(got, VarsBeforeFeature) {
-		t.Errorf("--inherit's follow-up needs %v", got)
-	}
-}
-
 // A script saying a time needs --since from the server's devopsy, and
 // one saying fixes or hints --fix and --hint: an older --say would print
 // "--since" as the line, and "--fix" and what follows as details.

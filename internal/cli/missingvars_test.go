@@ -2,12 +2,14 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // fakeCompose is a project's bin/docker whose compose config -q says said and fails, or
@@ -23,7 +25,7 @@ func fakeCompose(said, vars string) string {
 // --variables lists (a variable an include's env_file sets is listed required, and set);
 // when they do not read, the required variables unset or empty are listed with what
 // compose said, a set one and an optional one left out; when none is, compose's words
-// alone, a line compose said twice once, its message the variables missing as --vars'
+// alone, a line compose said twice once (twice for two services, once too), its message the variables missing as --vars'
 // follow-up words them. Compose's words are kept only where they name a missing variable,
 // from its "required variable", after "compose says:", and masked, on either path: compose
 // interpolates a :? message, and its other errors quote values. On a target, the fix names the environment's
@@ -32,7 +34,7 @@ func fakeCompose(said, vars string) string {
 func TestMissingVars(t *testing.T) {
 	t.Parallel()
 	vars := `{"TOKEN":{"Required":true},"EMPTY":{"Required":true},"SET":{"Required":true},"OPT":{"Required":false}}`
-	said := "error while interpolating services.app.environment.EMPTY: required variable EMPTY is missing a value\nerror while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for hunter2secret"
+	said := "error while interpolating services.app.environment.EMPTY: required variable EMPTY is missing a value\nerror while interpolating services.app.environment.TOKEN: required variable TOKEN is missing a value: the token for hunter2secret\nerror while interpolating services.db.environment.EMPTY: required variable EMPTY is missing a value"
 	masked := "compose says: required variable TOKEN is missing a value: the token for ***"
 	warned := `level=warning msg="The TOKEN variable is not set. Defaulting to a blank string."`
 	for _, c := range []struct {
@@ -77,7 +79,7 @@ func TestMissingVars(t *testing.T) {
 		if failure.Msg != "compose needs EMPTY and TOKEN, which are not set" {
 			t.Errorf("%s: message %q", c.name, failure.Msg)
 		}
-		want := report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @vm1:own/prod --vars set EMPTY TOKEN")
+		want := report.Fix("set EMPTY and TOKEN in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @vm1:own/prod --vars set EMPTY TOKEN")
 		if len(failure.Remedies) != 1 || failure.Remedies[0].Text != want.Text || len(failure.Remedies[0].Cmds) != 1 || failure.Remedies[0].Cmds[0] != want.Cmds[0] {
 			t.Errorf("%s: fixes %+v\nwant: %+v", c.name, failure.Remedies, want)
 		}
@@ -126,138 +128,120 @@ func TestReadsUIDs(t *testing.T) {
 	}
 }
 
-// The --vars follow-up's check loads the project again with the edited file as it was
-// standing in, at its level, only when something is missing: a variable the env capability
-// computed then, one a file's interpolation set then, one missing then too (a nearer file
-// emptying the key, which overlaying the old value would hide), a key the edit added that
-// made the capability stop, each with the keys the edit changed. The old content not
-// parsing, or the capability failing on it, leaves them unknown, said in words that
-// never carry an old value.
-func TestCheckMissingBefore(t *testing.T) {
+// Explain words what a change leaves missing from what the edit did and what the env
+// capability said it needs, never more: an input the edit took is set again and the
+// change is why ("so"); a change that changed nothing is "as before"; one whose outcome is
+// unknown (--missing-vars, --inherit) says neither; the edit taking the missing variable
+// itself, or an input it needs others for, is why too, but under a nearer file's line. A
+// chain of needs is followed down to
+// an input with a value, where the capability computed nothing and nothing is offered, or
+// to one a file or an import sets empty, which goes as a missing variable does: one rule
+// for every key, so a key is never unset for one variable and set for another. A
+// file's empty line is said with that file: at the edited file or below it the fix goes
+// there, a nearer one is to remove; a variable the capability computes or needs others
+// for, emptied by a file, is unset at the edited file, never set by hand. A variable or
+// an input an import empties, or one devopsy sets itself, is said and never set.
+func TestExplain(t *testing.T) {
 	t.Parallel()
-	compute := "#!/bin/sh\n[ -z \"${FAIL:-}\" ] || { echo \"failing on $FAIL\" >&2; exit 1; }\n[ -z \"${A:-}\" ] || [ -n \"${OFF:-}\" ] || echo \"AU=u-$A\"\n"
-	said := "error while interpolating services.app.environment.AU: required variable AU is missing a value: set A\nerror while interpolating services.app.environment.X: required variable X is missing a value"
+	env, project := Edit{File: ".env"}, Edit{File: "project.env"}
+	took := func(e Edit, keys ...string) Edit {
+		e.Known, e.Gone = true, map[string]bool{}
+		for _, k := range keys {
+			e.Gone[k] = true
+		}
+		return e
+	}
+	unchanged := Edit{File: ".env", Known: true, Unchanged: true}
+	needs := func(kv ...string) map[string][]string {
+		n := map[string][]string{}
+		for i := 0; i < len(kv); i += 2 {
+			n[kv[i]] = strings.Split(kv[i+1], " ")
+		}
+		return n
+	}
 	for _, c := range []struct {
-		name, level, env, instance, old string
-		missing                         []string
-		set, computed                   []string
-		changed                         map[string]string
-		unknown                         string
+		name   string
+		m      Missing
+		edit   Edit
+		detail string
+		fix    string
+		caused bool
+		before bool
 	}{
-		{name: "unset", level: "env", env: "X=${B}\n", old: "A=hunter2secret\nB=1\nX=${B}\n",
-			missing: []string{"AU", "X"}, set: []string{"AU", "X"}, computed: []string{"AU"}, changed: map[string]string{"A": "removed", "B": "removed"}},
-		{name: "added", level: "env", env: "A=1\nOFF=1\nX=1\n", old: "A=1\nX=1\n",
-			missing: []string{"AU"}, set: []string{"AU"}, computed: []string{"AU"}, changed: map[string]string{"OFF": "added"}},
-		{name: "nearer", level: "instance", env: "A=\nX=1\n", instance: "", old: "A=hunter2secret\n",
-			missing: []string{"AU"}, changed: map[string]string{"A": "removed"}},
-		{name: "unparsable", level: "env", env: "X=1\n", old: "A='hunter2secret\n",
-			missing: []string{"AU"}, unknown: "the file before this change does not parse"},
-		{name: "capability", level: "env", env: "X=1\n", old: "A=1\nFAIL=hunter2secret\nX=1\n",
-			missing: []string{"AU"}, unknown: "failing on ***"},
+		{"an input the edit removed", Missing{Names: []string{"U"}, Needs: needs("U", "A")}, took(env, "A"),
+			"compose needs U, which the project's env capability computes from A, not set", "set A again", true, false},
+		{"the same, already gone", Missing{Names: []string{"U"}, Needs: needs("U", "A")}, unchanged,
+			"compose needs U, which the project's env capability computes from A, not set", "set A", false, true},
+		{"the same, no edit known", Missing{Names: []string{"U"}, Needs: needs("U", "A")}, env,
+			"compose needs U, which the project's env capability computes from A, not set", "set A", false, false},
+		{"a chain down to an input set", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "Z"), Has: map[string]bool{"Y": true}}, env,
+			"compose needs X, which the project's env capability computes from Y, but Y is set and it computed nothing", "", false, false},
+		{"a chain followed", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "Z")}, took(env, "Z"),
+			"compose needs X, which the project's env capability computes from Z, not set", "set Z again", true, false},
+		{"several inputs, one set", Missing{Names: []string{"X"}, Needs: needs("X", "A B"), Has: map[string]bool{"A": true}}, env,
+			"compose needs X, which the project's env capability computes from A and B, B not set", "set B", false, false},
+		{"computed, emptied by the edit", Missing{Names: []string{"X"}, Empty: map[string]string{"X": ".env"}, Computed: map[string]bool{"X": true}}, took(env, "X"),
+			"compose needs X, which the environment's .env sets empty, hiding what the project's env capability computes", "unset X again", true, false},
+		{"needing others, emptied in the edited file", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Empty: map[string]string{"X": ".env"}}, env,
+			"compose needs X, which the environment's .env sets empty, over what the project's env capability computes from A", "unset X, then set A", false, false},
+		{"computed, emptied by a nearer file", Missing{Names: []string{"X"}, Empty: map[string]string{"X": ".env"}, Computed: map[string]bool{"X": true}}, took(project, "A"),
+			"compose needs X, which the environment's .env sets empty: its line wins over a value below it, so remove that line there", "", false, false},
+		{"a plain one emptied by a nearer file", Missing{Names: []string{"X"}, Empty: map[string]string{"X": ".env"}}, took(project, "X"),
+			"compose needs X, which the environment's .env sets empty: its line wins over a value below it, so remove that line there", "", false, false},
+		{"a plain one emptied below", Missing{Names: []string{"X"}, Empty: map[string]string{"X": "project.env"}}, env,
+			"compose needs X, which the project's .env sets empty", "set X", false, false},
+		{"a plain one the edit emptied", Missing{Names: []string{"X"}, Empty: map[string]string{"X": ".env"}}, took(env, "X"),
+			"compose needs X, which the environment's .env sets empty", "set X again", true, false},
+		{"an input a nearer file empties", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Empty: map[string]string{"A": ".env"}}, took(project, "A"),
+			"A, which the environment's .env sets empty: its line wins over a value below it, so remove that line there", "", false, false},
+		{"an input an import empties", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Imported: map[string]bool{"A": true}}, env,
+			"A, which the project imports, and is empty where it comes from", "", false, false},
+		{"an input devopsy sets", Missing{Names: []string{"X"}, Needs: needs("X", "DEVOPSY_UID")}, env,
+			uids.Reserved("DEVOPSY_UID").Error(), "", false, false},
+		{"one with needs the edit removed", Missing{Names: []string{"X"}, Needs: needs("X", "A")}, took(env, "X"),
+			"compose needs X, which the project's env capability computes from A, not set", "set A", true, false},
+		{"one with needs the edit removed, its input set", Missing{Names: []string{"X"}, Needs: needs("X", "A"), Has: map[string]bool{"A": true}}, took(env, "X"),
+			"but A is set and it computed nothing", "", true, false},
+		{"one the edit removed over an empty line below", Missing{Names: []string{"X"}, Computed: map[string]bool{"X": true}, Empty: map[string]string{"X": "project.env"}}, took(env, "X"),
+			"compose needs X, which the project's .env sets empty: its line wins over a value below it, so remove that line there", "", true, false},
+		{"an input with needs the edited file empties", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "Z"), Empty: map[string]string{"Y": ".env"}}, env,
+			"Y, which the environment's .env sets empty, over what the project's env capability computes from Z", "unset Y, then set Z", false, false},
+		{"an input with needs the edit removed", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "A")}, took(env, "Y"),
+			"compose needs X, which the project's env capability computes from A, not set", "set A", true, false},
+		{"an input with needs an import empties", Missing{Names: []string{"X"}, Needs: needs("X", "Y", "Y", "B"), Imported: map[string]bool{"Y": true}}, env,
+			"Y, which the project imports, and is empty where it comes from", "", false, false},
+		{"one the capability computes, emptied, and another's input", Missing{Names: []string{"A", "X"}, Needs: needs("X", "A"), Empty: map[string]string{"A": ".env"}, Computed: map[string]bool{"A": true}}, env,
+			"compose needs A, which the environment's .env sets empty, hiding what the project's env capability computes", "unset A", false, false},
+		{"one an import empties", Missing{Names: []string{"X"}, Imported: map[string]bool{"X": true}}, env,
+			"compose needs X, which the project imports, and is empty where it comes from", "", false, false},
+		{"plain ones", Missing{Names: []string{"A", "B"}}, took(env, "A"),
+			"compose needs B, which is not set", "set A again, then set B", true, false},
+		{"needs lines that do not read", Missing{Names: []string{"A"}, Malformed: []int{3, 5}}, env,
+			"lines 3 and 5 of the env capability's output start # needs: and do not read, so devopsy ignores them", "set A", false, false},
 	} {
-		root := project(t, "shop", map[string]string{
-			"compose.yaml":              minimalCompose,
-			"config.yaml":               "project: shop\nsecrets: [A, FAIL]\n",
-			"bin/docker*":               fakeCompose(said, `{"AU":{"Required":true},"X":{"Required":true}}`),
-			"capabilities/env/compute*": compute,
-			".env":                      c.env,
-			"instance.env":              c.instance,
-		})
-		m, err := CheckMissing(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin"}, &Before{File: BeforeFiles[c.level], Content: []byte(c.old)})
-		if err != nil || m == nil {
-			t.Fatalf("%s: %+v %v", c.name, m, err)
+		e := c.m.Explain(c.edit)
+		if !slices.ContainsFunc(e.Details, func(d string) bool { return strings.Contains(d, c.detail) }) {
+			t.Errorf("%s: details %q, want %q", c.name, e.Details, c.detail)
 		}
-		if !slices.Equal(m.Names, c.missing) || len(m.Said) != len(c.missing) {
-			t.Errorf("%s: missing %q, said %q", c.name, m.Names, m.Said)
+		var words []string
+		for _, s := range e.Steps() {
+			words = append(words, s.Words)
 		}
-		if c.unknown != "" {
-			if m.Before != nil || !strings.Contains(m.Unknown, c.unknown) || strings.Contains(m.Unknown, "hunter2secret") {
-				t.Errorf("%s: before %+v, unknown %q, want %q and no value", c.name, m.Before, m.Unknown, c.unknown)
-			}
-			continue
-		}
-		if m.Before == nil {
-			t.Fatalf("%s: unknown %q", c.name, m.Unknown)
-		}
-		keys := func(set map[string]bool) []string {
-			var out []string
-			for k, ok := range set {
-				if ok {
-					out = append(out, k)
-				}
-			}
-			slices.Sort(out)
-			return out
-		}
-		if got := keys(m.Before.Set); !slices.Equal(got, c.set) {
-			t.Errorf("%s: set before %q, want %q", c.name, got, c.set)
-		}
-		if got := keys(m.Before.Computed); !slices.Equal(got, c.computed) {
-			t.Errorf("%s: computed before %q, want %q", c.name, got, c.computed)
-		}
-		if len(m.Before.Changed) != len(c.changed) {
-			t.Errorf("%s: changed %v, want %v", c.name, m.Before.Changed, c.changed)
-		}
-		for k, v := range c.changed {
-			if m.Before.Changed[k] != v {
-				t.Errorf("%s: changed %v, want %v", c.name, m.Before.Changed, c.changed)
-			}
+		if got := strings.Join(words, ", then "); got != c.fix || e.Caused != c.caused || e.AsBefore != c.before {
+			t.Errorf("%s: fix %q caused %v as before %v, want %q %v %v", c.name, got, e.Caused, e.AsBefore, c.fix, c.caused, c.before)
 		}
 	}
 }
 
-// The check's lines read back as they were written: the variables before the edit known
-// whatever the edit changed, none included (an unset of a key the file lacks still says
-// "as before" of a variable compose missed then too), and a capability's stderr of
-// several lines kept whole as the reason they are unknown, none of its lines taken for
-// one of the protocol's (a "set A ..." line making them known).
-func TestMissingLines(t *testing.T) {
+// One fix of several environments names each key once: a key set again in one and
+// plainly in another is set again, once.
+func TestExplainedMerge(t *testing.T) {
 	t.Parallel()
-	known := &Missing{Names: []string{"REQUIRED"}, Before: &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: map[string]string{}}}
-	got := ParseMissing(known.Lines())
-	if got == nil || got.Before == nil {
-		t.Fatalf("the variables before the edit lost: %q -> %+v", known.Lines(), got)
-	}
-	if e := got.Explain([]string{"REQUIRED"}); !e.AsBefore || len(e.SetAgain) != 0 {
-		t.Errorf("an edit that changed nothing: %+v", e)
-	}
-	unknown := &Missing{Names: []string{"X"}, Unknown: "devopsy could not tell whether the env capability computed what is missing: compute: exit status 1\nset A (user:password) first"}
-	got = ParseMissing(strings.Split(strings.Join(unknown.Lines(), "\n"), "\n"))
-	if got == nil || got.Before != nil || got.Unknown != unknown.Unknown {
-		t.Fatalf("a capability's stderr: %+v", got)
-	}
-	if e := got.Explain(nil); e.AsBefore || !slices.Contains(e.Details, "set A (user:password) first") {
-		t.Errorf("a capability's stderr explained: %+v", e)
-	}
-}
-
-// Explain never offers a key the edit did not change: a variable set before is brought
-// back by the keys the edit changed, so with none (a key set to the value it had, the
-// capability answering otherwise) it says so in words and offers nothing; and a key the
-// edit removed that was empty before too is no key of the edit's, compose having missed
-// it already (an environment's empty line winning over the project's value the edit
-// unset), so it is "as before", and its fix names the file that empties it, never one at
-// the edited level, where the nearer line still wins.
-func TestExplainOffersOnlyWhatBringsItBack(t *testing.T) {
-	t.Parallel()
-	m := &Missing{Names: []string{"X"}, Before: &MissingBefore{Computed: map[string]bool{"X": true}, Set: map[string]bool{"X": true}, Changed: map[string]string{}}}
-	if e := m.Explain(nil); len(e.SetAgain)+len(e.UnsetAgain)+len(e.SetThem) != 0 || !slices.ContainsFunc(e.Details, func(d string) bool { return strings.Contains(d, "left its file as it was") }) {
-		t.Errorf("no key changed: %+v", e)
-	}
-	said := "error while interpolating services.app.environment.REQUIRED: required variable REQUIRED is missing a value"
-	root := project(t, "shop", map[string]string{
-		"compose.yaml": minimalCompose,
-		"config.yaml":  "project: shop\n",
-		"bin/docker*":  fakeCompose(said, `{"REQUIRED":{"Required":true}}`),
-		".env":         "REQUIRED=\n",
-		"project.env":  "",
-	})
-	m, err := CheckMissing(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin"}, &Before{File: BeforeFiles["project"], Content: []byte("REQUIRED='1'\n")})
-	if err != nil || m == nil || m.Before == nil {
-		t.Fatalf("%+v %v", m, err)
-	}
-	if e := m.Explain([]string{"REQUIRED"}); !e.AsBefore || slices.Contains(e.SetAgain, "REQUIRED") || slices.Contains(e.SetThem, "REQUIRED") || !strings.Contains(e.Details[0], "the environment's .env sets empty") {
-		t.Errorf("a key removed that was empty before too: %+v", e)
+	a := Explained{SetAgain: []string{"A"}, Set: []string{"B"}}
+	b := Explained{Set: []string{"A", "C"}, Unset: []string{"X"}, UnsetAgain: []string{"X"}, Caused: true}
+	m := a.Merge(b)
+	if fmt.Sprint(m.SetAgain, m.Set, m.UnsetAgain, m.Unset) != "[A] [B C] [X] []" || !m.Caused {
+		t.Errorf("merged: %+v", m)
 	}
 }
 
@@ -322,5 +306,72 @@ func TestMissingVarsTakesComposesVerdict(t *testing.T) {
 	}
 	if !slices.Equal(m.Names, []string{"INC_NAME"}) {
 		t.Errorf("missing %q, want INC_NAME alone: the include's env_file sets INC_SET", m.Names)
+	}
+}
+
+// What the env capability needs for a missing variable travels with it from the server's
+// check to the operator: the variables it needs, those it did not compute either down to
+// one with a value, whether each has a value or an import set it empty, the files that
+// set a missing one or an input empty (never the capability's own empty value nor an
+// import's), a computed one a file's empty line hides, and the needs lines devopsy could
+// not read, by line number; a line naming what is no variable's name is dropped on the way
+// back.
+func TestMissingCarriesNeeds(t *testing.T) {
+	t.Parallel()
+	said := "required variable URL is missing a value\nrequired variable HIDDEN is missing a value\nrequired variable BLANK is missing a value"
+	root := project(t, "shop", map[string]string{
+		"compose.yaml":              minimalCompose,
+		"config.yaml":               "project: shop\n",
+		"bin/docker*":               fakeCompose(said, `{"URL":{"Required":true},"HIDDEN":{"Required":true},"BLANK":{"Required":true}}`),
+		"capabilities/env/compute*": "#!/bin/sh\necho '# needs: URL AUTH_USERS'\necho '# needs: AUTH_USERS AUTH SALT'\necho '# needs: LONELY'\necho \"HIDDEN='v'\"\necho \"BLANK=''\"\n",
+		".env":                      "HIDDEN=\nSALT=\n",
+		"target.env":                "COMPOSE_PROJECT_NAME='shop-own-prod'\nDEVOPSY_TARGET='vm1:own/prod'\n" + ImportedMarker + "\nAUTH=''\n",
+	})
+	p, err := loadProject(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.computeEnv(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := missingOf(p)
+	if err != nil || m == nil {
+		t.Fatalf("%+v %v", m, err)
+	}
+	got := ParseMissing(append(m.Lines(), "needs URL bad-name", "has bad-name", "imported $X"))
+	if got == nil || fmt.Sprint(got.Needs) != fmt.Sprint(map[string][]string{"AUTH_USERS": {"AUTH", "SALT"}, "URL": {"AUTH_USERS"}}) ||
+		len(got.Has) != 0 || fmt.Sprint(got.Imported) != fmt.Sprint(map[string]bool{"AUTH": true}) || !slices.Equal(got.Malformed, []int{3}) ||
+		fmt.Sprint(got.Empty) != fmt.Sprint(map[string]string{"HIDDEN": ".env", "SALT": ".env"}) || fmt.Sprint(got.Computed) != fmt.Sprint(map[string]bool{"HIDDEN": true}) {
+		t.Errorf("read back from %q:\n%+v", m.Lines(), got)
+	}
+}
+
+// What the env capability computes that a file's empty line hides is recorded for an
+// input too, not only for a missing variable: an input the capability prints a value for,
+// set empty in the edited file, is unset there, never set by hand, which bypasses the
+// capability.
+func TestComputedInputEmptiedIsUnset(t *testing.T) {
+	t.Parallel()
+	root := project(t, "shop", map[string]string{
+		"compose.yaml":              minimalCompose,
+		"config.yaml":               "project: shop\n",
+		"bin/docker*":               fakeCompose("required variable URL is missing a value", `{"URL":{"Required":true}}`),
+		"capabilities/env/compute*": "#!/bin/sh\necho \"HOST='shop.example.com'\"\necho '# needs: URL HOST'\n",
+		".env":                      "HOST=\n",
+	})
+	p, err := loadProject(root, []string{"PATH=" + filepath.Join(root, ProjectDirName, "bin") + ":/usr/bin:/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.computeEnv(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := missingOf(p)
+	if err != nil || m == nil {
+		t.Fatalf("%+v %v", m, err)
+	}
+	e := ParseMissing(m.Lines()).Explain(Edit{File: ".env"})
+	if fmt.Sprint(e.Unset, e.Set) != "[HOST] []" {
+		t.Errorf("unset %v, set %v, details %q: want HOST unset, never set by hand", e.Unset, e.Set, e.Details)
 	}
 }

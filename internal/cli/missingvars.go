@@ -1,22 +1,23 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 
-	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -166,23 +167,19 @@ type Missing struct {
 	// Said are compose's lines naming one of them, masked: compose stops at the first, and
 	// interpolates a :? message, values included.
 	Said []string
-	// Before is how the variables were before an edit, nil when unknown.
-	Before *MissingBefore
-	// Unknown says, in words, why Before is nil when it was asked for, a capability's
-	// stderr on the lines after.
-	Unknown string
-	// Empty are the ones a file other than the edited one sets empty (by name, the file's
-	// in .devopsy/): its line wins, so no key of the edited file brings them back.
+	// Empty are those of Names, and of the variables they need, that a file sets empty, by
+	// the file's envFiles name: what an import (Imported) or the env capability sets empty
+	// is no file's line.
 	Empty map[string]string
-}
-
-// MissingBefore is how the variables Missing names were before an edit.
-type MissingBefore struct {
-	// Computed are the ones the env capability computed then, Set the ones set then
-	// (computed or from a file's interpolation).
-	Computed, Set map[string]bool
-	// Changed are the keys the edit changed in its file: removed, added or changed.
-	Changed map[string]string
+	// Needs are the variables the env capability said it needs for one missing, and for
+	// each of those it did not compute either (readNeeds); Has are those of them with a
+	// value; Imported are those of them and of Names an import sets empty. Computed are those
+	// of them and of Names the env capability printed a value for that a file's empty line
+	// hides. Malformed are the line
+	// numbers of its needs lines devopsy could not read.
+	Needs                   map[string][]string
+	Has, Imported, Computed map[string]bool
+	Malformed               []int
 }
 
 // ComposeUnreadable is compose failing on a project's files for another reason than a
@@ -207,31 +204,85 @@ func missingOf(p *loadedProject) (*Missing, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	m := &Missing{Names: names}
+	m := &Missing{Names: names, Malformed: p.needsMalformed}
 	for _, line := range said {
-		// From its "required variable": where compose found it is no help to set it.
+		// From its "required variable": where compose found it (one service or another)
+		// is no help to set it, so two services' same line is one.
 		if i := strings.Index(line, "required variable "); i >= 0 && slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(line[i:], "required variable "+n+" ") }) {
-			m.Said = append(m.Said, line[i:])
+			m.Said = appendNew(m.Said, line[i:])
 		}
 	}
-	// One a file sets empty: that file's line wins over any value below it.
+	m.needsOf(p)
 	for _, n := range names {
-		if v, ok := p.env.Lookup(n); ok && v == "" && p.env.origin[n] != "" {
-			if m.Empty == nil {
-				m.Empty = map[string]string{}
+		if v, _ := p.env.Lookup(n); v == "" && len(p.env.defs[n]) > 0 && p.env.defs[n][0].Kind == EnvImported {
+			if m.Imported == nil {
+				m.Imported = map[string]bool{}
 			}
-			m.Empty[n] = filepath.Base(p.env.origin[n])
+			m.Imported[n] = true
+		}
+	}
+	keys := slices.Clone(names)
+	for _, in := range m.Needs {
+		keys = append(keys, in...)
+	}
+	capability := capabilityFile(p.dir)
+	for _, k := range keys {
+		v, ok := p.env.Lookup(k)
+		origin := p.env.origin[k]
+		if !ok || v != "" || origin == "" || origin == capability || m.Imported[k] {
+			continue
+		}
+		file := p.fileNames[origin]
+		if file == "" {
+			file = filepath.Base(origin)
+		}
+		if m.Empty == nil {
+			m.Empty = map[string]string{}
+		}
+		m.Empty[k] = file
+	}
+	for _, n := range keys {
+		if m.Empty[n] != "" && slices.ContainsFunc(p.env.defs[n], func(d EnvDef) bool { return d.Kind == EnvComputed && d.Value != "" }) {
+			if m.Computed == nil {
+				m.Computed = map[string]bool{}
+			}
+			m.Computed[n] = true
 		}
 	}
 	return m, nil
 }
 
+// needsOf records in m what the env capability said it needs for each missing variable,
+// and for each variable needed that it did not compute either, transitively, and how
+// each needed one is set.
+func (m *Missing) needsOf(p *loadedProject) {
+	todo := slices.Clone(m.Names)
+	for len(todo) > 0 {
+		x := todo[0]
+		todo = todo[1:]
+		in, ok := p.needs[x]
+		if !ok || m.Needs[x] != nil {
+			continue
+		}
+		if m.Needs == nil {
+			m.Needs, m.Has, m.Imported = map[string][]string{}, map[string]bool{}, map[string]bool{}
+		}
+		m.Needs[x] = in
+		for _, n := range in {
+			if v, _ := p.env.Lookup(n); v != "" {
+				m.Has[n] = true
+			} else if defs := p.env.defs[n]; len(defs) > 0 && defs[0].Kind == EnvImported {
+				m.Imported[n] = true
+			}
+			todo = append(todo, n)
+		}
+	}
+}
+
 // CheckMissing is the --vars follow-up's check for the project at cwd, its variables
 // loaded from environ and its files and computed by its env capability: what compose
-// requires that they leave unset, nil for nothing. With before, what its file held before
-// the edit, the project is loaded again with it standing in, only when something is
-// missing, to tell what the edit changed and how each was set before.
-func CheckMissing(cwd string, environ []string, before *Before) (*Missing, error) {
+// requires that they leave unset, nil for nothing.
+func CheckMissing(cwd string, environ []string) (*Missing, error) {
 	p, err := loadProject(cwd, environ)
 	if err != nil {
 		return nil, err
@@ -239,74 +290,11 @@ func CheckMissing(cwd string, environ []string, before *Before) (*Missing, error
 	if err := p.computeEnv(); err != nil {
 		return nil, err
 	}
-	m, err := missingOf(p)
-	if err != nil || m == nil || before == nil {
-		return m, err
-	}
-	for n, f := range m.Empty {
-		if f == before.File {
-			delete(m.Empty, n)
-		}
-	}
-	was, err := loadProjectBefore(cwd, environ, before)
-	if err != nil {
-		// A parser's words quote the line, value included, and nothing masks an old one.
-		m.Unknown = "devopsy could not load the variables as they were before this change"
-		if _, ok := err.(*beforeError); ok {
-			m.Unknown = "the file before this change does not parse"
-		}
-		return m, nil
-	}
-	if err := was.computeEnv(); err != nil {
-		// The capability's stderr may print an old value the current secrets lack.
-		m.Unknown = "devopsy could not tell whether the env capability computed what is missing: " + was.newSecrets().Mask(p.newSecrets().Mask(err.Error()))
-		return m, nil
-	}
-	b := &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: changedKeys(before.Content, filepath.Join(p.dir, before.File))}
-	capability := capabilityFile(was.dir)
-	for _, n := range m.Names {
-		if v, _ := was.env.Lookup(n); v != "" {
-			b.Set[n] = true
-			b.Computed[n] = was.env.origin[n] == capability
-		}
-	}
-	m.Before = b
-	return m, nil
-}
-
-// changedKeys are the keys whose values differ between old and file as it is now, as
-// written, never as interpolated (X=${B} is not changed by B's removal): removed, added or
-// changed.
-func changedKeys(old []byte, file string) map[string]string {
-	now, _ := os.ReadFile(file)
-	parse := func(b []byte) map[string]string {
-		// No $ left, nothing is interpolated; both sides alike, so equal stays equal.
-		b = bytes.ReplaceAll(b, []byte("$"), []byte("\x01"))
-		vars, err := dotenv.UnmarshalBytesWithLookup(b, func(string) (string, bool) { return "", false })
-		if err != nil {
-			return map[string]string{}
-		}
-		return vars
-	}
-	was, is := parse(old), parse(now)
-	changed := map[string]string{}
-	for k, v := range was {
-		if w, ok := is[k]; !ok {
-			changed[k] = "removed"
-		} else if w != v {
-			changed[k] = "changed"
-		}
-	}
-	for k := range is {
-		if _, ok := was[k]; !ok {
-			changed[k] = "added"
-		}
-	}
-	return changed
+	return missingOf(p)
 }
 
 // missingVars is the hidden `devopsy --missing-vars`: nothing when every
-// required variable is set, else the list and how to set them, failing.
+// required variable is set, else what is missing and the fix, failing.
 func missingVars(p *loadedProject) error {
 	m, err := missingOf(p)
 	var u *ComposeUnreadable
@@ -319,15 +307,36 @@ func missingVars(p *loadedProject) error {
 	if m == nil {
 		return &Output{}
 	}
-	// As --vars' follow-up words it, with nothing known of before.
-	e := m.Explain(nil)
-	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
+	// As --vars' follow-up words it, at the environment's own file, no edit known.
+	e := m.Explain(Edit{File: ".env"})
+	failure := &report.Failure{Msg: e.Details[0], Details: e.Details[1:]}
+	if len(e.Steps()) == 0 {
+		return &ExitError{Code: 1, Err: failure}
+	}
+	words, args := e.Fix("--vars")
+	// The environment's own file only, when a step unsets or a key's empty line is there:
+	// the environment's variables, or the other two levels, would not win over it.
+	or, others := " or the environment", " (--vars-instance or --vars-project for the instance's or the project's .env)"
+	if slices.ContainsFunc(e.Steps(), func(s FixStep) bool {
+		return s.Verb == "unset" || slices.ContainsFunc(s.Keys, func(k string) bool { return m.Empty[k] == ".env" })
+	}) {
+		or, others = "", ""
+	}
+	fix := report.Fix(words + " in " + p.dotenvFile + or)
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
-	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On(VarsSet(m.Names)); cmd != "" {
-		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmd)
+	in := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir))
+	var cmds []string
+	for _, a := range args {
+		if cmd := in.On(a); cmd != "" {
+			cmds = append(cmds, cmd)
+		}
 	}
-	return &ExitError{Code: 1, Err: &report.Failure{Msg: e.Details[0], Details: e.Details[1:], Remedies: []report.Remedy{fix}}}
+	if len(cmds) == len(args) {
+		fix = report.Fix(words+" in the environment's shared/.env"+others+", then try again:", cmds...)
+	}
+	failure.Remedies = []report.Remedy{fix}
+	return &ExitError{Code: 1, Err: failure}
 }
 
 // SaidLines are compose's words on m, as a detail says them.
@@ -340,11 +349,10 @@ func (m *Missing) SaidLines() []string {
 }
 
 // Lines are m as --check-images --hint prints it for --vars' follow-up (ParseMissing):
-// "missing <name>" and compose's "said <line>"; with the variables before the edit known,
-// "before", then "set <name>" for one set then, "computed <name>" for one the env
-// capability computed then, and "changed <key> <removed|added|changed>"; else "unknown
-// <why>" when asked for, one per line of it, so none of a capability's is read as another;
-// and "empty <name> <file>" for one another file sets empty.
+// "missing <name>" and compose's "said <line>"; "empty <name> <file>" for one a file sets
+// empty; what the env capability needs, "needs <name> <needed>...", "has <needed>" for one
+// with a value, "imported <needed>" for one an import sets empty; "computed <name>" for
+// one it computed that a file's empty line hides; and "malformed <line number>".
 func (m *Missing) Lines() []string {
 	var out []string
 	for _, n := range m.Names {
@@ -353,175 +361,300 @@ func (m *Missing) Lines() []string {
 	for _, l := range m.Said {
 		out = append(out, "said "+l)
 	}
-	if m.Unknown != "" {
-		for _, l := range strings.Split(m.Unknown, "\n") {
-			out = append(out, "unknown "+l)
-		}
+	for _, n := range slices.Sorted(maps.Keys(m.Empty)) {
+		out = append(out, "empty "+n+" "+m.Empty[n])
 	}
-	for _, n := range m.Names {
-		if f := m.Empty[n]; f != "" {
-			out = append(out, "empty "+n+" "+f)
-		}
+	for _, x := range slices.Sorted(maps.Keys(m.Needs)) {
+		out = append(out, "needs "+x+" "+strings.Join(m.Needs[x], " "))
 	}
-	if m.Before == nil {
-		return out
+	for _, n := range slices.Sorted(maps.Keys(m.Has)) {
+		out = append(out, "has "+n)
 	}
-	out = append(out, "before")
-	for _, n := range m.Names {
-		if m.Before.Set[n] {
-			out = append(out, "set "+n)
-		}
-		if m.Before.Computed[n] {
-			out = append(out, "computed "+n)
-		}
+	for _, n := range slices.Sorted(maps.Keys(m.Imported)) {
+		out = append(out, "imported "+n)
 	}
-	keys := make([]string, 0, len(m.Before.Changed))
-	for k := range m.Before.Changed {
-		keys = append(keys, k)
+	for _, n := range slices.Sorted(maps.Keys(m.Computed)) {
+		out = append(out, "computed "+n)
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		out = append(out, "changed "+k+" "+m.Before.Changed[k])
+	for _, n := range m.Malformed {
+		out = append(out, "malformed "+strconv.Itoa(n))
 	}
 	return out
 }
 
-// ParseMissing reads Lines back, nil with no "missing" line; Before is known after a
-// "before" line.
+// ParseMissing reads Lines back, nil with no "missing" line. A line naming what is no
+// variable's name is dropped.
 func ParseMissing(lines []string) *Missing {
 	m := &Missing{}
-	b := &MissingBefore{Computed: map[string]bool{}, Set: map[string]bool{}, Changed: map[string]string{}}
-	known := false
+	name := remote.VarNameRe.MatchString
+	flag := func(set *map[string]bool, n string) {
+		if name(n) {
+			if *set == nil {
+				*set = map[string]bool{}
+			}
+			(*set)[n] = true
+		}
+	}
 	for _, l := range lines {
 		word, rest, _ := strings.Cut(l, " ")
 		switch word {
 		case "missing":
-			m.Names = append(m.Names, rest)
+			if name(rest) {
+				m.Names = append(m.Names, rest)
+			}
 		case "said":
 			m.Said = append(m.Said, rest)
-		case "unknown":
-			m.Unknown = strings.TrimPrefix(m.Unknown+"\n"+rest, "\n")
-		case "before":
-			known = true
 		case "empty":
 			n, f, _ := strings.Cut(rest, " ")
-			if m.Empty == nil {
-				m.Empty = map[string]string{}
+			if name(n) {
+				if m.Empty == nil {
+					m.Empty = map[string]string{}
+				}
+				m.Empty[n] = f
 			}
-			m.Empty[n] = f
-		case "set":
-			b.Set[rest] = true
+		case "needs":
+			names := strings.Split(rest, " ")
+			if len(names) > 1 && !slices.ContainsFunc(names, func(n string) bool { return !name(n) }) {
+				if m.Needs == nil {
+					m.Needs = map[string][]string{}
+				}
+				m.Needs[names[0]] = names[1:]
+			}
+		case "has":
+			flag(&m.Has, rest)
+		case "imported":
+			flag(&m.Imported, rest)
 		case "computed":
-			b.Computed[rest] = true
-		case "changed":
-			k, kind, _ := strings.Cut(rest, " ")
-			b.Changed[k] = kind
+			flag(&m.Computed, rest)
+		case "malformed":
+			if n, err := strconv.Atoi(rest); err == nil {
+				m.Malformed = append(m.Malformed, n)
+			}
 		}
 	}
 	if len(m.Names) == 0 {
 		return nil
 	}
-	if known {
-		m.Before = b
-	}
 	return m
 }
 
-// Explained is what --vars' follow-up says of a Missing: why each is missing, compose's
-// words, and the keys its one fix sets again, unsets again or sets, every one needed.
-type Explained struct {
-	Details                       []string
-	SetAgain, UnsetAgain, SetThem []string
-	// AsBefore: none of them was set before the edit either, so the edit is not why.
-	AsBefore bool
+// Edit is what a change of variables did, as Explain words what it leaves missing: the
+// file it edited, by its envFiles name (.env for an environment's change, and for
+// --missing-vars, which edits none), and when Known, from the edit's own script, the keys
+// it removed or emptied (Gone) and whether it changed nothing (Unchanged). --inherit's and
+// --missing-vars' are not known.
+type Edit struct {
+	File      string
+	Known     bool
+	Gone      map[string]bool
+	Unchanged bool
 }
 
-// Explain words m. unset are the keys the operator unset, set again when the variables
-// before the edit are unknown. No fix sets what the env capability or a file's
-// interpolation set before: that bypasses them; the keys the edit changed bring it back.
-func (m *Missing) Explain(unset []string) Explained {
-	var e Explained
-	var computed, derived, own, never []string
-	emptied := map[string][]string{}
-	for _, n := range m.Names {
-		switch {
-		case m.Empty[n] != "":
-			emptied[m.Empty[n]] = append(emptied[m.Empty[n]], n)
-		case m.Before == nil:
-			if slices.Contains(unset, n) {
-				own = append(own, n)
+// Explained is what --vars' follow-up and --missing-vars say of a Missing: why each is
+// missing, compose's words, and the keys of its one fix: to unset (again when the edit
+// emptied them), then to set (again when the edit removed or emptied them). Caused: the
+// edit removed or emptied what is missing or what it needs; AsBefore: the edit changed
+// nothing, so what is missing was missing before it.
+type Explained struct {
+	Details                          []string
+	UnsetAgain, Unset, SetAgain, Set []string
+	Caused, AsBefore                 bool
+}
+
+// Explain words m after edit. A variable the env capability needs others for is
+// missing for want of them, down to one with a value, and the fix sets those, never the
+// variable itself, which bypasses the capability; with all of them set, the capability
+// computed nothing, and nothing is offered. A line that sets a key empty is said with its
+// file: a fix at the edited file goes on that file or on one below it, which it wins
+// over; a nearer one still wins, so its line is to remove. What the capability computes
+// or says it needs, a file setting it empty, is to unset at the edited file, else to
+// remove: setting it by hand bypasses the capability. devopsy only says what it saw: what
+// the edit did, what the capability printed.
+func (m *Missing) Explain(edit Edit) Explained {
+	e := Explained{AsBefore: edit.Known && edit.Unchanged}
+	nearer := func(f string) bool { return envFileRank(f) < envFileRank(edit.File) }
+	gone := func(k string) bool { return edit.Known && edit.Gone[k] }
+	var notes []string
+	set := func(k string) {
+		if err := uids.Reserved(k); err != nil {
+			notes = appendNew(notes, err.Error())
+			return
+		}
+		if gone(k) {
+			e.SetAgain = appendNew(e.SetAgain, k)
+		} else {
+			e.Set = appendNew(e.Set, k)
+		}
+	}
+	unset := func(k string) {
+		if gone(k) {
+			e.UnsetAgain = appendNew(e.UnsetAgain, k)
+		} else {
+			e.Unset = appendNew(e.Unset, k)
+		}
+	}
+	remove := ": its line wins over a value below it, so remove that line there"
+	var own, never []string
+	// key words and fixes k, a missing variable (top) or an input of one, by one rule:
+	// its words a detail of its own when top, else a note.
+	var key func(k string, top bool)
+	key = func(k string, top bool) {
+		all, missing, through := m.inputsOf(k)
+		f := m.Empty[k]
+		computes := len(m.Needs[k]) > 0 || m.Computed[k]
+		// What the edit took of k, or of what k needs, is why, but under a nearer file's
+		// line, which was winning already.
+		if f == "" || !nearer(f) {
+			e.Caused = e.Caused || gone(k) || slices.ContainsFunc(through, gone)
+		}
+		say := func(what string) {
+			if top {
+				e.Details = append(e.Details, "compose needs "+k+", "+what)
 			} else {
-				never = append(never, n)
+				notes = appendNew(notes, k+", "+what)
 			}
-		case m.Before.Set[n] && m.Before.Changed[n] != "" && m.Before.Changed[n] != "added":
-			own = append(own, n)
-		case m.Before.Set[n] && m.Before.Computed[n]:
-			computed = append(computed, n)
-		case m.Before.Set[n]:
-			derived = append(derived, n)
+		}
+		hiding := "hiding what the project's env capability computes"
+		if len(all) > 0 {
+			hiding = "over what the project's env capability computes from " + report.JoinAnd(all)
+		}
+		switch {
+		case m.Imported[k]:
+			say("which the project imports, and is empty where it comes from")
+		case f != "" && computes && f == edit.File:
+			say("which " + fileSays(f) + " sets empty, " + hiding)
+			unset(k)
+			for _, n := range missing {
+				key(n, false)
+			}
+		case f != "" && (computes || nearer(f)):
+			say("which " + fileSays(f) + " sets empty" + remove)
+		case f != "":
+			say("which " + fileSays(f) + " sets empty")
+			set(k)
+		case len(all) > 0 && len(missing) == 0:
+			say("which the project's env capability computes from " + report.JoinAnd(all) + ", but " + report.JoinAnd(all) + " " + are(all) + " set and it computed nothing")
+		case len(all) > 0:
+			unsetWords := ", not set"
+			if len(missing) < len(all) {
+				unsetWords = ", " + report.JoinAnd(missing) + " not set"
+			}
+			say("which the project's env capability computes from " + report.JoinAnd(all) + unsetWords)
+			for _, n := range missing {
+				key(n, false)
+			}
+		case top && gone(k):
+			own = append(own, k)
+		case top:
+			never = append(never, k)
 		default:
-			never = append(never, n)
+			set(k)
 		}
 	}
-	join := func(ns []string) string { return report.JoinAnd(ns) }
-	if len(computed) > 0 {
-		// What the check saw: computed with the file as it was, not with it as it is.
-		without := "this change"
-		if len(m.Before.Changed) == 1 {
-			for k := range m.Before.Changed {
-				without = k
-			}
-		}
-		e.Details = append(e.Details, "compose needs "+join(computed)+", which the project's env capability computes, and without "+without+" it computes nothing")
-	}
-	if len(derived) > 0 {
-		e.Details = append(e.Details, "compose needs "+join(derived)+", which "+were(derived)+" set before this change and "+are(derived)+" empty now")
+	for _, x := range m.Names {
+		key(x, true)
 	}
 	if len(own) > 0 {
-		e.Details = append(e.Details, "compose needs "+join(own))
+		e.Details = append(e.Details, "compose needs "+report.JoinAnd(own))
 	}
 	if len(never) > 0 {
-		why := "which " + are(never) + " not set"
-		if m.Before != nil {
-			why = "which " + were(never) + " not set before this change either"
-		}
-		e.Details = append(e.Details, "compose needs "+join(never)+", "+why)
+		e.Details = append(e.Details, "compose needs "+report.JoinAnd(never)+", which "+are(never)+" not set")
 	}
-	files := make([]string, 0, len(emptied))
-	for f := range emptied {
-		files = append(files, f)
+	for _, x := range append(own, never...) {
+		set(x)
 	}
-	sort.Strings(files)
-	for _, f := range files {
-		e.Details = append(e.Details, "compose needs "+join(emptied[f])+", which "+fileSays(f)+" sets empty: its line wins over a value anywhere else, so set "+join(emptied[f])+" there, or remove that line")
-	}
-	if m.Unknown != "" {
-		e.Details = append(e.Details, strings.Split(m.Unknown, "\n")...)
-	}
+	// A key unset for one variable is never set for another: that bypasses the
+	// capability the unset gives it back to.
+	e.Set = slices.DeleteFunc(e.Set, func(k string) bool { return slices.Contains(e.Unset, k) || slices.Contains(e.UnsetAgain, k) })
+	e.SetAgain = slices.DeleteFunc(e.SetAgain, func(k string) bool { return slices.Contains(e.Unset, k) || slices.Contains(e.UnsetAgain, k) })
+	e.Details = append(e.Details, notes...)
 	e.Details = append(e.Details, m.SaidLines()...)
-	e.SetAgain = append(e.SetAgain, own...)
-	if len(computed)+len(derived) > 0 && len(m.Before.Changed) == 0 {
-		// Nothing to set back: the edit left its file as it was (a key set to the value it had).
-		e.Details = append(e.Details, "this change left its file as it was, so no key of it brings "+join(append(slices.Clone(computed), derived...))+" back")
+	if len(m.Malformed) > 0 {
+		e.Details = append(e.Details, NeedsMalformed(m.Malformed))
 	}
-	if len(computed)+len(derived) > 0 {
-		keys := make([]string, 0, len(m.Before.Changed))
-		for k := range m.Before.Changed {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			if m.Before.Changed[k] == "added" {
-				e.UnsetAgain = append(e.UnsetAgain, k)
-			} else if !slices.Contains(e.SetAgain, k) {
-				e.SetAgain = append(e.SetAgain, k)
-			}
-		}
-	}
-	e.SetThem = never
-	// A nearer file's empty line was there before too: the edit is not why.
-	e.AsBefore = m.Before != nil && len(never)+len(m.Empty) == len(m.Names)
+	e.Caused = e.Caused && !e.AsBefore
 	return e
+}
+
+// inputsOf are the variables the env capability needs for x, each that it did not
+// compute either replaced by what it needs, down to one with a value (the capability saw
+// it, and computed nothing) or one a file's or an import's empty line sets (which comes
+// first), and those of them with none; through are those it replaced; nil when it said
+// none.
+func (m *Missing) inputsOf(x string) (all, missing, through []string) {
+	seen := map[string]bool{x: true}
+	var walk func(n string)
+	walk = func(n string) {
+		if seen[n] {
+			return
+		}
+		seen[n] = true
+		if !m.Has[n] && m.Empty[n] == "" && !m.Imported[n] && len(m.Needs[n]) > 0 {
+			through = append(through, n)
+			for _, i := range m.Needs[n] {
+				walk(i)
+			}
+			return
+		}
+		all = append(all, n)
+		if !m.Has[n] {
+			missing = append(missing, n)
+		}
+	}
+	for _, n := range m.Needs[x] {
+		walk(n)
+	}
+	return all, missing, through
+}
+
+// Merge adds o's fix to e's, as one fix of several environments: each key once, one set
+// or unset again anywhere said once as again, one unset anywhere never set (that bypasses
+// the capability it gives the key back to). Details stay e's; as before only when both are.
+func (e Explained) Merge(o Explained) Explained {
+	e.UnsetAgain = appendNew(e.UnsetAgain, o.UnsetAgain...)
+	e.SetAgain = appendNew(e.SetAgain, o.SetAgain...)
+	e.Unset = slices.DeleteFunc(appendNew(e.Unset, o.Unset...), func(k string) bool { return slices.Contains(e.UnsetAgain, k) })
+	e.Set = slices.DeleteFunc(appendNew(e.Set, o.Set...), func(k string) bool { return slices.Contains(e.SetAgain, k) })
+	unsets := func(k string) bool { return slices.Contains(e.Unset, k) || slices.Contains(e.UnsetAgain, k) }
+	e.Set, e.SetAgain = slices.DeleteFunc(e.Set, unsets), slices.DeleteFunc(e.SetAgain, unsets)
+	e.Caused, e.AsBefore = e.Caused || o.Caused, e.AsBefore && o.AsBefore
+	return e
+}
+
+// Fix is e's fix as words ("unset X, then set A") and each step's arguments of flag
+// (--vars, --vars-instance, --vars-project): a caller adds only where and how it says it.
+func (e Explained) Fix(flag string) (string, []string) {
+	var words, args []string
+	for _, s := range e.Steps() {
+		words = append(words, s.Words)
+		args = append(args, VarsEdit(flag, s.Verb, s.Keys))
+	}
+	return strings.Join(words, ", then "), args
+}
+
+// FixStep is one command of a missing variable's fix: its words and the --vars verb
+// and keys it runs.
+type FixStep struct {
+	Words, Verb string
+	Keys        []string
+}
+
+// Steps are e's fix, every command needed, the keys by name: those to unset again, to
+// unset, to set again, then to set; none when no key brings it back, which the details
+// say. The --vars follow-up and --missing-vars each add only their flag, address and
+// words.
+func (e Explained) Steps() []FixStep {
+	var steps []FixStep
+	add := func(words, verb string, keys []string) {
+		if len(keys) > 0 {
+			steps = append(steps, FixStep{Words: words, Verb: verb, Keys: keys})
+		}
+	}
+	add("unset "+report.JoinAnd(e.UnsetAgain)+" again", "unset", e.UnsetAgain)
+	add("unset "+report.JoinAnd(e.Unset), "unset", e.Unset)
+	add("set "+report.JoinAnd(e.SetAgain)+" again", "set", e.SetAgain)
+	add("set "+report.JoinAnd(e.Set), "set", e.Set)
+	return steps
 }
 
 // fileSays names a variables file of a release's .devopsy/ in words.
@@ -537,15 +670,10 @@ func fileSays(f string) string {
 		return "what the environment inherits from its parent"
 	case remote.ParentEnvFile:
 		return "its copy of the parent's server's .env"
+	case remote.TargetEnvFile:
+		return "the release's " + remote.TargetEnvFile
 	}
 	return f
-}
-
-func were(ns []string) string {
-	if len(ns) == 1 {
-		return "was"
-	}
-	return "were"
 }
 
 func are(ns []string) string {
@@ -553,4 +681,14 @@ func are(ns []string) string {
 		return "is"
 	}
 	return "are"
+}
+
+// appendNew appends what list lacks of vs.
+func appendNew(list []string, vs ...string) []string {
+	for _, v := range vs {
+		if !slices.Contains(list, v) {
+			list = append(list, v)
+		}
+	}
+	return list
 }

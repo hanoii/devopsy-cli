@@ -164,28 +164,44 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		if len(args) == 0 {
 			return fail(usage)
 		}
+		args = unique(args)
 		if t.Project != nil && t.Project.Dir != "" {
 			if err := confirmUnnamedSecrets(args, t.Project, false); err != nil {
 				return failErr(err)
 			}
 		}
 		var lines strings.Builder
+		var empty []string
 		for _, k := range args {
 			v, err := varValue(k, len(args) == 1, show, lookup)
 			if err != nil {
 				return fail(err.Error())
 			}
+			if v == "" {
+				empty = append(empty, k)
+			}
 			lines.WriteString(cli.DotenvLine(k, v) + "\n")
 		}
-		return editVars(t, level, remote.VarsSetScript(t, level, args), lines.String(), "set", args, color)
+		return editVars(t, level, remote.VarsSetScript(t, level, args), lines.String(), "set", args, empty, color)
 
 	case "unset":
 		if len(args) == 0 {
 			return fail(usage)
 		}
-		return editVars(t, level, remote.VarsUnsetScript(t, level, args), strings.Join(args, "\n")+"\n", "unset", args, color)
+		args = unique(args)
+		return editVars(t, level, remote.VarsUnsetScript(t, level, args), strings.Join(args, "\n")+"\n", "unset", args, nil, color)
 	}
 	return fail(usage)
+}
+
+// unique is keys each once, in order: a key typed twice is one edit, said once.
+func unique(keys []string) []string {
+	seen := map[string]bool{}
+	return slices.DeleteFunc(slices.Clone(keys), func(k string) bool {
+		twice := seen[k]
+		seen[k] = true
+		return twice
+	})
 }
 
 // varValue finds the value to set for k: lookup, else a prompt at a terminal,
@@ -214,7 +230,9 @@ func varValue(k string, only, show bool, lookup func(string) (string, bool)) (st
 	return "", fmt.Errorf("%s is not set in your environment or the project's .env, and stdin can only give one value", k)
 }
 
-func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string, keys []string, color bool) int {
+// editVars runs a --vars edit of keys and says what it did and what applies it; empty are
+// the keys a set gives an empty value.
+func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string, keys, empty []string, color bool) int {
 	var out bytes.Buffer
 	// Gated: the values go once the server holds the release lock.
 	code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, script, strings.NewReader(remote.GatedInput(stdin)), &out, false, nil)
@@ -226,21 +244,81 @@ func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string,
 	}
 	file, applied := remote.ParseVarsApplied(out.String())
 	report.Default().Debug("the file: " + t.Host + ":" + file)
-	var unset []string
-	if verb == "unset" {
-		unset = keys
-	}
-	// What was done, never a verb a reader takes for one to do ("unset X").
-	done := " saved on "
+	outcomes := remote.ParseVarsKeys(out.String())
+	said, unchanged := editSaid(t, level, verb, keys, outcomes)
+	// What the edit took, from what its script did: a key removed, or set empty where it
+	// was not already.
+	edit := cli.Edit{File: ".env", Known: len(outcomes) > 0, Gone: map[string]bool{}, Unchanged: unchanged}
 	if level != nil {
-		done = " saved in "
+		edit.File = level.Name + ".env"
 	}
-	if verb == "unset" {
-		done = " removed from "
+	for _, k := range keys {
+		if o := outcomes[k]; o == "removed" || (slices.Contains(empty, k) && o != "same" && o != "") {
+			edit.Gone[k] = true
+		}
 	}
-	sayApplied(t, level, strings.Join(keys, ", ")+done+varsScope(t, level), unset, applied)
-	sayLevels(t, level, verb, keys, ownFile(file), remote.ParseVarsTraces(out.String()))
+	sayApplied(t, level, said, edit, applied)
+	// What overrides a value stays said when it was the value already; what an unset
+	// leaves, only where it removed something.
+	sayLevels(t, level, verb, slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return outcomes[k] == "absent" }), ownFile(file), remote.ParseVarsTraces(out.String()))
 	return 0
+}
+
+// editSaid is a --vars edit's first line, from what the server's edit did to each key
+// (remote.ParseVarsKeys): one clause per outcome, in the keys' order, the first naming
+// where (varsScope), and whether the edit changed nothing. Its words say what was done,
+// never a verb a reader takes for one to do ("unset X"). A key the server did not say is
+// the verb's (removed, saved).
+func editSaid(t *remote.Target, level *remote.Level, verb string, keys []string, outcomes map[string]string) (string, bool) {
+	on := " on "
+	if level != nil {
+		on = " in "
+	}
+	type clause struct {
+		one, several, prep string
+		keys               []string
+	}
+	clauses := map[string]*clause{
+		"removed": {one: "removed", several: "removed", prep: " from "},
+		"absent":  {one: "was not set", several: "were not set", prep: on},
+		"saved":   {one: "saved", several: "saved", prep: on},
+		"same":    {one: "already had that value", several: "already had those values", prep: on},
+	}
+	var order []string
+	unchanged := true
+	for _, k := range keys {
+		o := outcomes[k]
+		switch {
+		case o == "added" || o == "changed" || (o != "absent" && o != "same" && o != "removed" && verb == "set"):
+			o = "saved"
+		case o != "absent" && o != "same":
+			o = "removed"
+		}
+		if o != "absent" && o != "same" {
+			unchanged = false
+		}
+		if len(clauses[o].keys) == 0 {
+			order = append(order, o)
+		}
+		clauses[o].keys = append(clauses[o].keys, k)
+	}
+	parts := make([]string, len(order))
+	for i, o := range order {
+		c := clauses[o]
+		words := c.one
+		if len(c.keys) > 1 {
+			words = c.several
+		}
+		parts[i] = strings.Join(c.keys, ", ") + " " + words
+		if i == 0 {
+			parts[i] += c.prep + varsScope(t, level)
+		}
+	}
+	said := strings.Join(parts, ", ")
+	if unchanged {
+		said += ", so nothing changed"
+	}
+	return said, unchanged
 }
 
 // varsScope is where a --vars edit was made, as its first line names it: the
@@ -259,23 +337,25 @@ func varsScope(t *remote.Target, level *remote.Level) string {
 // sayApplied says said, and what applies a change of t's variables, from what the
 // server's check found in each environment (remote.ParseVarsApplied): the environment's
 // own, or with level each one under it, environments with the same outcome on one
-// detail. unset are the keys the change unset.
-func sayApplied(t *remote.Target, level *remote.Level, said string, unset []string, applied []remote.Applied) {
+// detail. edit is what the change did (cli.Edit): one that changed nothing needs nothing
+// to apply it, so only what compose misses is said then.
+func sayApplied(t *remote.Target, level *remote.Level, said string, edit cli.Edit, applied []remote.Applied) {
 	if level == nil {
 		a := remote.Applied{}
 		if len(applied) > 0 {
 			a = applied[0]
 		}
-		o := outcomeOf(t, a, unset)
+		o := outcomeOf(t, a, edit)
 		if o.missing == nil {
 			report.Say(report.InfoLevel, said, o.details, o.hints...)
 			return
 		}
-		report.Say(report.WarnLevel, said+willFail("its next reload or release", o.missing.AsBefore), o.details, varsFix(t, nil, *o.missing)...)
+		report.Say(report.WarnLevel, said+willFail("its next reload or release", *o.missing), o.details, varsFix(t, nil, *o.missing)...)
 		return
 	}
 	if len(applied) == 0 {
-		report.Info(said, "no environment there is released yet: each one's first release applies it")
+		o := outcomeOf(t, remote.Applied{Word: "none"}, edit)
+		report.Info(said, o.details...)
 		return
 	}
 	type group struct {
@@ -284,14 +364,15 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 	}
 	var groups []*group
 	var refusing []string
-	fix, asBefore := cli.Explained{}, true
+	// As before only when every one says it (the file's, the same in each).
+	fix := cli.Explained{AsBefore: true}
 	for _, a := range applied {
-		o := outcomeOf(t, a, unset)
+		o := outcomeOf(t, a, edit)
 		if o.missing != nil {
-			refusing, asBefore = append(refusing, a.Dir), asBefore && o.missing.AsBefore
-			fix.SetAgain = appendNew(fix.SetAgain, o.missing.SetAgain...)
-			fix.UnsetAgain = appendNew(fix.UnsetAgain, o.missing.UnsetAgain...)
-			fix.SetThem = appendNew(fix.SetThem, o.missing.SetThem...)
+			refusing, fix = append(refusing, a.Dir), fix.Merge(*o.missing)
+		}
+		if len(o.details) == 0 {
+			continue
 		}
 		if i := slices.IndexFunc(groups, func(g *group) bool { return slices.Equal(g.details, o.details) }); i >= 0 {
 			groups[i].envs = append(groups[i].envs, a.Dir)
@@ -299,8 +380,6 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 			groups = append(groups, &group{envs: []string{a.Dir}, details: o.details})
 		}
 	}
-	// One environment's set again is another's set: one command.
-	fix.SetThem = slices.DeleteFunc(fix.SetThem, func(k string) bool { return slices.Contains(fix.SetAgain, k) })
 	var details []string
 	for _, g := range groups {
 		details = append(details, report.JoinAnd(g.envs)+": "+g.details[0])
@@ -314,16 +393,20 @@ func sayApplied(t *remote.Target, level *remote.Level, said string, unset []stri
 	if len(refusing) > 1 {
 		whose = "the next reload or release of " + report.JoinAnd(refusing)
 	}
-	report.Say(report.WarnLevel, said+willFail(whose, asBefore), details, varsFix(t, level, fix)...)
+	report.Say(report.WarnLevel, said+willFail(whose, fix), details, varsFix(t, level, fix)...)
 }
 
-// willFail ends a change's first line with what it leaves failing: whose next reload
-// or release, as before when the change is not why.
-func willFail(whose string, asBefore bool) string {
-	if asBefore {
+// willFail ends a change's first line with what it leaves failing: whose next reload or
+// release, "so" when the change took what is missing, "as before" when it changed
+// nothing, else "and": devopsy cannot tell whether it failed before.
+func willFail(whose string, e cli.Explained) string {
+	switch {
+	case e.AsBefore:
 		return ", but " + whose + " will still fail, as before"
+	case e.Caused:
+		return ", so " + whose + " will fail"
 	}
-	return ", so " + whose + " will fail"
+	return ", and " + whose + " will fail"
 }
 
 // outcome is what the check found in one environment, worded: what applies the change,
@@ -335,11 +418,18 @@ type outcome struct {
 	missing *cli.Explained
 }
 
-// outcomeOf words a, the check in one environment of t; unset are the keys unset.
-func outcomeOf(t *remote.Target, a remote.Applied, unset []string) outcome {
+// outcomeOf words a, the check in one environment of t after edit (none: a level with
+// no environment released): after an edit that changed nothing, only what compose misses
+// and what was not checked, since nothing is to apply.
+func outcomeOf(t *remote.Target, a remote.Applied, edit cli.Edit) outcome {
 	status := report.Hint("as --status shows:", "devopsy @"+targetRef(t)+" --status")
 	reload := report.Hint("to apply it now:", "devopsy @"+targetRef(t)+" --reload")
+	if edit.Known && edit.Unchanged && a.Word != "4" && a.Word != "busy" {
+		return outcome{}
+	}
 	switch a.Word {
+	case "none":
+		return outcome{details: []string{"no environment there is released yet: each one's first release applies it"}}
 	case "plain":
 		return outcome{details: []string{"running containers keep their old values until they are recreated"}}
 	case "first":
@@ -362,7 +452,7 @@ func outcomeOf(t *remote.Target, a remote.Applied, unset []string) outcome {
 		return outcome{details: append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), hints: []report.Remedy{report.Hint("to apply it:", "devopsy @"+remote.HintAddress(t)+" --release")}}
 	case "4":
 		if m := cli.ParseMissing(a.Lines); m != nil {
-			e := m.Explain(unset)
+			e := m.Explain(edit)
 			return outcome{details: e.Details, missing: &e}
 		}
 	}
@@ -378,34 +468,15 @@ func varsFix(t *remote.Target, level *remote.Level, e cli.Explained) []report.Re
 	if level != nil {
 		flag = "--vars-" + level.Name
 	}
-	var parts, cmds []string
-	add := func(what, verb string, keys []string) {
-		if len(keys) > 0 {
-			parts = append(parts, what)
-			cmds = append(cmds, "devopsy @"+targetRef(t)+" "+cli.VarsEdit(flag, verb, keys))
-		}
-	}
-	add("set "+report.JoinAnd(e.SetAgain)+" again", "set", e.SetAgain)
-	add("unset "+report.JoinAnd(e.UnsetAgain)+" again", "unset", e.UnsetAgain)
-	them := "set them"
-	if len(parts) > 0 {
-		them = "set " + report.JoinAnd(e.SetThem)
-	}
-	add(them, "set", e.SetThem)
-	if len(cmds) == 0 {
+	words, args := e.Fix(flag)
+	if len(args) == 0 {
 		return nil
 	}
-	return []report.Remedy{report.Fix(strings.Join(parts, ", then ")+":", cmds...)}
-}
-
-// appendNew appends what list lacks of vs.
-func appendNew(list []string, vs ...string) []string {
-	for _, v := range vs {
-		if !slices.Contains(list, v) {
-			list = append(list, v)
-		}
+	cmds := make([]string, len(args))
+	for i, a := range args {
+		cmds[i] = "devopsy @" + targetRef(t) + " " + a
 	}
-	return list
+	return []report.Remedy{report.Fix(words+":", cmds...)}
 }
 
 // varsSecrets masks a --vars listing: the secrets: of the server's

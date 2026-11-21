@@ -156,6 +156,11 @@ own, as in whoami's compose.yaml: `traefik.enable=true`,
 Copy that block rather than writing routing anew. `PROXY_DOMAINS` holds
 literal names, never a wildcard.
 
+Where the `env` capability computes nothing for a variable compose
+requires (a basic auth line from an unset login), its `else` prints
+`# needs: <variable> <variables it needs>...`, so devopsy's fix sets the
+login, never the computed line by hand.
+
 ## Dockerfile
 
 Build mode (the default) uploads the project and builds on the server, so

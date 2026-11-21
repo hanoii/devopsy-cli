@@ -220,20 +220,27 @@ each environment with a release under the instance or the project:
 - nothing yet, while a variable compose requires is unset, or while data
   a sync, an import or a restore did not complete is not settled.
 
+A change that leaves the file as it was (a value it already had, a key
+that was not there) says so, and that nothing needs to apply it.
+
 When a variable compose requires is missing after the change, the warning
-says how it was set before: a key you unset, a value the project's env
-capability computed from a key you changed, or a line that took its value
-from one. Its fix sets those keys again, never the computed value itself,
-and compose's own message for the variable follows:
+says why, from what the change did and what the project's env capability
+says it needs ([`# needs:` lines](capabilities.md#env)): a key you unset,
+or one the capability computes a value from. Its fix sets those keys,
+never the computed value itself, and compose's own message for the
+variable follows:
 
 ```
 devopsy: warning: ADMIN_AUTH removed from @vm1:prod, so its next reload or release will fail
-devopsy: | compose needs ADMIN_AUTH_USERS, which the project's env capability computes, and without ADMIN_AUTH it computes nothing
+devopsy: | compose needs ADMIN_AUTH_USERS, which the project's env capability computes from ADMIN_AUTH, not set
 devopsy: | compose says: required variable ADMIN_AUTH_USERS is missing a value: set ADMIN_AUTH
 devopsy: | to fix it:
 devopsy: | set ADMIN_AUTH again:
 devopsy: | $ devopsy @vm1:prod --vars set ADMIN_AUTH
 ```
+
+A variable a file sets empty is named with that file: when a nearer file's
+line wins over the one you edited, the fix is to remove that line.
 
 An environment whose lock something holds (a release, a reload, a sync)
 is not waited for: the instance's or the project's change names it as not
