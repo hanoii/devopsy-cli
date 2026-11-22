@@ -100,8 +100,11 @@ anyway.
 
 A project's data lives in entries the door makes, under
 `<space>/mnt/<compose name>/`. The project's `./mnt/<name>` binds reach
-them through a link in its tree ([Data](data.md)). The project user can
-write inside an entry but not replace or move it.
+them through a link in its tree ([Data](data.md)). The door makes one
+entry for each `./mnt/<name>` the compose files bind. The project user
+can write inside an entry but cannot make, replace or move one, so a
+command's own files, such as a tool's config or a registry login, go in
+the project user's home.
 
 Copies, imports, exports, snapshots and syncs run in short-lived
 containers of devopsy's util image, as root. The door runs only the

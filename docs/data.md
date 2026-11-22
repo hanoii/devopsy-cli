@@ -10,7 +10,8 @@ with `--export` and `--import`.
 and on a server it is a link to `shared/mnt`, one per environment, so data
 outlives releases, rollbacks and pruning. Bind-mount its entries
 (`./mnt/<name>:/path`), one per concern (`storage`, `database`, `logs`),
-never `./mnt` whole.
+never `./mnt` whole. For a project user, only the binds make entries
+([Project users](project-users.md#data)).
 
 The alternatives:
 
