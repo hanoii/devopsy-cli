@@ -436,6 +436,13 @@ func TestCheckVerb(t *testing.T) {
 		{"run -v /:/h web", false},
 		{"run --cap-add ALL web", false},
 		{"run --service-ports web", false},
+		// An entrypoint is the container's own process, as the file's entrypoint: is, and
+		// the flags after its value are still checked.
+		{"run --rm --no-deps --quiet-pull -T --entrypoint sh web -c x", true},
+		{"run --entrypoint= web", true},
+		{"run --entrypoint sh -v /:/h web", false},
+		{"run --entrypoint", false},
+		{"exec --entrypoint sh web sh", false},
 		{"cp web:/x /y", false},
 		{"config", false},
 		{"publish x", false},

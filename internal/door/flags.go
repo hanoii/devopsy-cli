@@ -20,7 +20,7 @@ var Verbs = map[string]map[string]int{
 	"pull":    {"-q": 0, "--quiet": 0, "--ignore-buildable": 0, "--ignore-pull-failures": 0, "--include-deps": 0},
 	"restart": {"-t": 1, "--timeout": 1, "--no-deps": 0},
 	"rm":      {"-f": 0, "-s": 0, "-v": 0, "-fs": 0, "-fsv": 0},
-	"run":     {"--rm": 0, "-T": 0, "--no-deps": 0, "-e": 1, "--env": 1, "--quiet-pull": 0, "-w": 1, "--workdir": 1},
+	"run":     {"--rm": 0, "-T": 0, "--no-deps": 0, "-e": 1, "--env": 1, "--quiet-pull": 0, "-w": 1, "--workdir": 1, "--entrypoint": 1},
 	"start":   {},
 	"stop":    {"-t": 1, "--timeout": 1},
 	"top":     {},

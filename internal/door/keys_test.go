@@ -309,7 +309,6 @@ func TestCheckVerbOtherSpellings(t *testing.T) {
 		{"exec", "--", "web", "sh"},
 		{"run", "-u", "0", "web", "sh"},
 		{"run", "--user=0", "web", "sh"},
-		{"run", "--entrypoint", "/x", "web"},
 		{"run", "--name", "other-prod-web-1", "web"},
 		{"run", "-l", "devopsy.role=proxy", "web"},
 		{"run", "--label=devopsy.role=proxy", "web"},
