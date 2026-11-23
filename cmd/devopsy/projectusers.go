@@ -563,11 +563,11 @@ func hostScriptSaid(out string) (updated []string, reboot bool) {
 	return updated, reboot
 }
 
-// sayUpdated says each of the door's pieces add wrote again, an earlier devopsy's text
-// replaced by this one's.
+// sayUpdated says each of the door's pieces add wrote again, one that differed from this
+// devopsy's (an earlier devopsy's, an admin's edit).
 func sayUpdated(l *report.Logger, updated []string) {
 	for _, p := range updated {
-		l.Say(report.InfoLevel, "updated "+p+": an earlier devopsy wrote it otherwise", nil)
+		l.Say(report.InfoLevel, "updated "+p+": it differed from this devopsy's", nil)
 	}
 }
 

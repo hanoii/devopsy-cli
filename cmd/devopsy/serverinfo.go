@@ -192,9 +192,9 @@ func doorPiecesStale() ([]string, string) {
 // doorStaleLines is --server-info's warning of the door's pieces stale on the host, each named,
 // and sshd's reboot after the add when its drop-in is among them.
 func doorStaleLines(stale []string) []string {
-	lines := append([]string{"the door's pieces on the host are an earlier devopsy's, not this one's"}, stale...)
+	lines := append([]string{"the door's pieces on the host differ from this devopsy's"}, stale...)
 	if slices.Contains(stale, remote.DoorSSHDropIn) {
-		lines = append(lines, "sshd takes its drop-in at the next reboot after the add")
+		lines = append(lines, "sshd takes the drop-in only at the next reboot after the add")
 	}
 	return lines
 }
@@ -206,8 +206,8 @@ func doorAddFix(ref, project string) report.Remedy {
 	if ref != "" && project != "" {
 		cmd = "devopsy @" + ref + " --project-users add " + project
 	}
-	return offer(report.Fix, "write them again, by an add of a project user there already:", cmd,
-		"write them again, by --project-users add of a project user there already, for this server")
+	return offer(report.Fix, "write them again as this devopsy does, by an add of a project user the server has:", cmd,
+		"write them again as this devopsy does, by --project-users add of a project user this server has")
 }
 
 // procMounts is the file a host's mounts are read from, /proc's options among them, under the
@@ -1485,7 +1485,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: doorStaleLines(dr.Stale), Remedies: []report.Remedy{doorAddFix(ref, dr.AddProject)}})
 		}
 		if dr.StaleUnread != "" {
-			warn("the door's pieces on the host were not read: " + dr.StaleUnread)
+			warn("the door's pieces on the host were not checked: " + dr.StaleUnread)
 		}
 		if len(dr.Listeners) > 0 {
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),

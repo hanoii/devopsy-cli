@@ -109,7 +109,7 @@ restart_flag /run/docker-mark "$1"`, "sh", "id-1")
 }
 
 // A door piece add writes again, a file or a link that was there otherwise, is said on stdout
-// with its path, for add to tell what an earlier devopsy wrote; one it makes, or leaves as it
+// with its path, for add to tell what differed from this devopsy's; one it makes, or leaves as it
 // is, says nothing.
 func TestDoorPieceSaysWhatItUpdated(t *testing.T) {
 	t.Parallel()

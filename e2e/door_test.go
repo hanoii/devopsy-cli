@@ -2902,13 +2902,13 @@ func TestDoorSudoKeepsNoVariable(t *testing.T) {
 	}
 }
 
-// The door's pieces an earlier devopsy wrote are told by --server-info, read as root (the
+// The door's pieces that differ from this devopsy's are told by --server-info, read as root (the
 // sudo rule is root's alone), with the add that writes them again, which says each piece it
 // updated; once written, --server-info says nothing of them. A piece added to the rule stands
 // for an older text: a comment visudo takes and sudo ignores.
 func TestDoorPiecesWrittenAgain(t *testing.T) {
 	doorUser(t, "doorpieces")
-	const stale = "the door's pieces on the host are an earlier devopsy's"
+	const stale = "the door's pieces on the host differ from this devopsy's"
 	info := func() string {
 		t.Helper()
 		out, code := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
@@ -2929,7 +2929,7 @@ func TestDoorPiecesWrittenAgain(t *testing.T) {
 		t.Errorf("--server-info on an older rule:\n%s", out)
 	}
 	out, code := op(t, "/", "devopsy @devopsy@doorsrv: --project-users add doorpieces 2>&1")
-	if code != 0 || !saysWords(out, "updated "+remote.DoorSudoers+": an earlier devopsy wrote it otherwise") || strings.Contains(out, "updated "+remote.DoorSSHDropIn) {
+	if code != 0 || !saysWords(out, "updated "+remote.DoorSudoers+": it differed from this devopsy's") || strings.Contains(out, "updated "+remote.DoorSSHDropIn) {
 		t.Errorf("the add again (%d):\n%s", code, out)
 	}
 	if out := info(); strings.Contains(out, stale) {
