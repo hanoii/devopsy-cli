@@ -506,7 +506,10 @@ networks, roles and vets](#shared-networks-roles-and-vets)).
 The first `add` also puts on the server what the door needs, each piece
 checked before it lands: the `devopsy-projects` and `devopsy-door`
 groups, the door's sudo rules, a `docker` that is devopsy, sshd's part, which asks devopsy for a
-project user's keys, and the firewall. `add` refuses:
+project user's keys, and the firewall. A later `add` writes again each
+piece an earlier devopsy wrote otherwise, and says which (`updated
+/etc/sudoers.d/devopsy-projects`): a server upgraded keeps the older
+pieces until then. `add` refuses:
 
 - while the release root is not a directory of the deploy user's, which
   `--server-setup` makes it;
@@ -543,7 +546,11 @@ and directories in the door's space), as `--server-info` does, and each
 whose `remove --destroy` did not complete, with that command, which
 completes it, instead. `--server-info` also checks that `<space>` is
 mounted `nosuid,nodev`, that other users' processes are hidden from
-project users, and whether sshd waits for a reboot.
+project users, and whether sshd waits for a reboot. It reads the door's
+pieces as root and warns of each its devopsy would write otherwise,
+offering an `add` of a project user there already, which writes them
+again; when sshd's part is among them, sshd takes it at the reboot
+after that.
 
 ## Releasing as a project user
 

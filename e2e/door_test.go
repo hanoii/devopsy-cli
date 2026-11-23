@@ -2902,6 +2902,41 @@ func TestDoorSudoKeepsNoVariable(t *testing.T) {
 	}
 }
 
+// The door's pieces an earlier devopsy wrote are told by --server-info, read as root (the
+// sudo rule is root's alone), with the add that writes them again, which says each piece it
+// updated; once written, --server-info says nothing of them. A piece added to the rule stands
+// for an older text: a comment visudo takes and sudo ignores.
+func TestDoorPiecesWrittenAgain(t *testing.T) {
+	doorUser(t, "doorpieces")
+	const stale = "the door's pieces on the host are an earlier devopsy's"
+	info := func() string {
+		t.Helper()
+		out, code := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
+		if code != 0 && !strings.Contains(out, "warning") {
+			t.Fatalf("--server-info (%d):\n%s", code, out)
+		}
+		return out
+	}
+	if out := info(); strings.Contains(out, stale) {
+		t.Fatalf("the control: the pieces as add wrote them read as stale:\n%s", out)
+	}
+	t.Cleanup(func() { doorRoot(t, "sed -i '/^# an earlier devopsy/d' "+remote.DoorSudoers) })
+	if out, code := doorRoot(t, "echo '# an earlier devopsy' >>"+remote.DoorSudoers+" && visudo -cq"); code != 0 {
+		t.Fatalf("the older rule (%d): %s", code, out)
+	}
+	if out := info(); !saysWords(out, stale) || !strings.Contains(out, remote.DoorSudoers) || strings.Contains(out, remote.DoorSSHDropIn) ||
+		!strings.Contains(out, "--project-users add ") {
+		t.Errorf("--server-info on an older rule:\n%s", out)
+	}
+	out, code := op(t, "/", "devopsy @devopsy@doorsrv: --project-users add doorpieces 2>&1")
+	if code != 0 || !saysWords(out, "updated "+remote.DoorSudoers+": an earlier devopsy wrote it otherwise") || strings.Contains(out, "updated "+remote.DoorSSHDropIn) {
+		t.Errorf("the add again (%d):\n%s", code, out)
+	}
+	if out := info(); strings.Contains(out, stale) {
+		t.Errorf("--server-info after the add:\n%s", out)
+	}
+}
+
 // The door's sudo keeps what a session carries for its hints, by name: a restart over a file
 // changed in place in the release warns of the copy its container keeps and offers the release
 // by the environment's address, which only the session brings to the door.

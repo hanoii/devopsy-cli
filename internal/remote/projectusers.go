@@ -1,6 +1,8 @@
 package remote
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path"
 	"strconv"
@@ -88,6 +90,71 @@ func doorSudoers(deploy, devopsy string) string {
 		deploy + " ALL=(%" + DoorGroup + ") NOPASSWD: DEVOPSY_DOOR_READ\n"
 }
 
+// DoorPiece is one of what --project-users add puts on the host for the door (DoorHostScript):
+// a file with its text, or a link with the path it names.
+type DoorPiece struct{ Path, Text, Link string }
+
+// DoorPieces are the door's host pieces as this devopsy writes them, the one list --server-info
+// compares the host's with (DoorPiecesStale): a server upgraded keeps what an older add wrote
+// until an add writes them again.
+func DoorPieces(deploy, devopsy string) []DoorPiece {
+	return []DoorPiece{
+		{Path: DoorSudoers, Text: doorSudoers(deploy, devopsy)},
+		{Path: DoorKeysCommand, Text: doorKeysCommand(devopsy)},
+		{Path: DoorSSHDropIn, Text: doorDropIn(deploy)},
+		{Path: DoorDockerLink, Link: devopsy},
+		{Path: DoorShell, Link: devopsy},
+	}
+}
+
+// DoorPiecesRead prints, as root on the host, one line per argument, in their order: an
+// argument l:<path> a link's "link <what it names>", f:<path> a file's "file <its sha256>"
+// (through a link, as put leaves one with the same text), and "none" for neither. Only the
+// sudo rule needs root (0440), the others read the same way.
+const DoorPiecesRead = `for a in "$@"; do
+  p=${a#?:}
+  case $a in
+    l:*) if [ -L "$p" ]; then printf 'link %s\n' "$(readlink "$p")"; else echo none; fi ;;
+    *) if [ -f "$p" ]; then printf 'file %s\n' "$(sha256sum <"$p" | cut -d' ' -f1)"; else echo none; fi ;;
+  esac
+done
+`
+
+// DoorPiecesArgs are DoorPiecesRead's arguments for pieces.
+func DoorPiecesArgs(pieces []DoorPiece) []string {
+	args := make([]string, len(pieces))
+	for i, p := range pieces {
+		kind := "f:"
+		if p.Link != "" {
+			kind = "l:"
+		}
+		args[i] = kind + p.Path
+	}
+	return args
+}
+
+// DoorPiecesStale are the paths of pieces the host has otherwise than they are, missing ones
+// included, from DoorPiecesRead's output for them; an error when the output is not one line
+// per piece.
+func DoorPiecesStale(pieces []DoorPiece, read string) ([]string, error) {
+	lines := strings.Split(strings.TrimSuffix(read, "\n"), "\n")
+	if len(lines) != len(pieces) {
+		return nil, fmt.Errorf("the read of the door's pieces gave %d lines for %d pieces", len(lines), len(pieces))
+	}
+	var stale []string
+	for i, p := range pieces {
+		want := "link " + p.Link
+		if p.Link == "" {
+			sum := sha256.Sum256([]byte(p.Text))
+			want = "file " + hex.EncodeToString(sum[:])
+		}
+		if lines[i] != want {
+			stale = append(stale, p.Path)
+		}
+	}
+	return stale, nil
+}
+
 // doorTreeCheck refuses a tree that is there and not the user's ($1 the user, $2 the tree): it
 // would hand that user what another made there, whose entries it could then rename. A link
 // there is never the user's.
@@ -159,6 +226,32 @@ var hostPut = `put() {
 }
 `
 
+// doorPieceSh is piece <path> <mode> <check> <content>, put for a door piece (DoorPieces), and
+// piece_link <target> <link>, a link to target: each written only when missing or different,
+// and one that was there before said on stdout as "updated <path>" (DoorUpdatedPrefix), for add
+// to tell what an older devopsy wrote and this one changed.
+var doorPieceSh = `piece() {
+  pw=
+  if [ -e "$1" ] || [ -L "$1" ]; then pw=1; fi
+  put "$@" || return 1
+  [ -z "$pw" ] || echo "` + DoorUpdatedPrefix + `$1"
+}
+piece_link() {
+  [ "$(readlink "$2" 2>/dev/null || :)" != "$1" ] || return 0
+  pw=
+  if [ -e "$2" ] || [ -L "$2" ]; then pw=1; fi
+  ln -sfn "$1" "$2"
+  [ -z "$pw" ] || echo "` + DoorUpdatedPrefix + `$2"
+}
+`
+
+// DoorUpdatedPrefix starts DoorHostScript's line for a piece it wrote again (doorPieceSh), and
+// DoorRebootLine is its line when sshd takes the door at the next reboot.
+const (
+	DoorUpdatedPrefix = "updated "
+	DoorRebootLine    = "reboot"
+)
+
 // RebootRequired is the system's restart flag, which unattended-upgrades takes at its reboot
 // time (devopsy-server's DEVOPSY_AUTO_REBOOT_TIME), its .pkgs naming what asked for it.
 const RebootRequired = "/run/reboot-required"
@@ -214,7 +307,8 @@ func DoorDevopsyPath(p string) error {
 // the tree to make ("" for the home's default), the release root the project user's own
 // config names ("" for none), and the id a user made here takes, uid and gid ("" when the user
 // is there). The deploy user and root are never in the
-// group: sshd would then ignore their own keys. A drop-in written says "reboot" on stdout.
+// group: sshd would then ignore their own keys. A drop-in written says DoorRebootLine on
+// stdout, and a piece written again DoorUpdatedPrefix and its path (doorPieceSh).
 func DoorHostScript(deploy, devopsy string) string {
 	return `set -eu
 umask 022
@@ -228,29 +322,29 @@ group=` + DoorGroup + `
 done
 (set -- "$user" "$tree"
 ` + doorUserCheck + doorTreeCheck + `)
-` + hostPut + hostRestartFlag + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
+` + hostPut + hostRestartFlag + doorPieceSh + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
 # Docker. A real docker there would put the project users on the socket.
 if [ ! -L ` + DoorDockerLink + ` ] && [ -e ` + DoorDockerLink + ` ]; then
   ` + echoLine(report.ErrorLevel, DoorDockerLink+" is a real docker: project users would reach the socket through it") + `
   exit 3
 fi
-[ "$(readlink ` + DoorDockerLink + ` 2>/dev/null || :)" = ` + Quote(devopsy) + ` ] || ln -sfn ` + Quote(devopsy) + ` ` + DoorDockerLink + `
+piece_link ` + Quote(devopsy) + ` ` + DoorDockerLink + `
 mkdir -p ` + path.Dir(DoorKeysCommand) + ` ` + path.Dir(DoorSSHDropIn) + `
-put ` + DoorSudoers + ` 440 'visudo -cqf "$1"' ` + Quote(doorSudoers(deploy, devopsy)) + ` || :
-put ` + DoorKeysCommand + ` 755 'sh -n "$1"' ` + Quote(doorKeysCommand(devopsy)) + ` || :
+piece ` + DoorSudoers + ` 440 'visudo -cqf "$1"' ` + Quote(doorSudoers(deploy, devopsy)) + ` || :
+piece ` + DoorKeysCommand + ` 755 'sh -n "$1"' ` + Quote(doorKeysCommand(devopsy)) + ` || :
 # A project user's login shell is devopsy too (its runDoorShell): static, nothing a login's
 # environment names (LD_PRELOAD from a home's ~/.pam_environment) loads into it, and it hands
 # /bin/sh an environment of its own.
-[ "$(readlink ` + DoorShell + ` 2>/dev/null || :)" = ` + Quote(devopsy) + ` ] || ln -sfn ` + Quote(devopsy) + ` ` + DoorShell + `
+piece_link ` + Quote(devopsy) + ` ` + DoorShell + `
 old=$(cat ` + DoorSSHDropIn + ` 2>/dev/null || :)
-if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
+if piece ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
   if ! sshd -t; then
     if [ -n "$old" ]; then printf '%s\n' "$old" >` + DoorSSHDropIn + `; else rm -f ` + DoorSSHDropIn + `; fi
     ` + echoLine(report.ErrorLevel, "sshd refused "+DoorSSHDropIn+": put back as it was") + `
     exit 4
   fi
   restart_flag ` + DoorRebootMarker + `
-  echo reboot
+  echo ` + DoorRebootLine + `
 fi
 made=
 if ! id -u "$user" >/dev/null 2>&1; then

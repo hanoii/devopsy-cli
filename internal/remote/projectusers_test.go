@@ -6,6 +6,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -48,7 +49,7 @@ func TestDoorHostScript(t *testing.T) {
 		`useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u "$id" -g "$id" `,
 		"for f in /etc/subuid /etc/subgid; do",
 		// The door's entrance for a project user, never over a real docker.
-		"ln -sfn '/opt/bin/devopsy' /usr/local/bin/docker",
+		"piece_link '/opt/bin/devopsy' /usr/local/bin/docker",
 		"/usr/local/bin/docker is a real docker",
 		// sshd takes the drop-in at a reboot, which empties /run (hostRestartFlag).
 		"restart_flag /run/devopsy-door-reboot\n", hostRestartFlag,
@@ -64,8 +65,8 @@ func TestDoorHostScript(t *testing.T) {
 	last := -1
 	for _, step := range []string{
 		"sshd would ignore its own keys", "is there already, and no project user", "is there already, and not $1's",
-		"is a real docker", "put /etc/sudoers.d/devopsy-projects 440 'visudo -cqf \"$1\"'", "put /usr/local/libexec/devopsy-authorized-keys 755 'sh -n \"$1\"'",
-		"if put /etc/ssh/sshd_config.d/devopsy.conf 644 true", "if ! sshd -t; then", "put back as it was", "no id given for $user", "groupadd -g", "useradd ", "sshd -T -C", "/etc/cron.deny",
+		"is a real docker", "piece /etc/sudoers.d/devopsy-projects 440 'visudo -cqf \"$1\"'", "piece /usr/local/libexec/devopsy-authorized-keys 755 'sh -n \"$1\"'",
+		"if piece /etc/ssh/sshd_config.d/devopsy.conf 644 true", "if ! sshd -t; then", "put back as it was", "no id given for $user", "groupadd -g", "useradd ", "sshd -T -C", "/etc/cron.deny",
 		`if [ -n "$made" ] && [ -n "$root" ]; then`, `runuser -u "$user" -- sh -c`,
 	} {
 		i := strings.Index(s, step)
@@ -104,6 +105,111 @@ restart_flag /run/docker-mark "$1"`, "sh", "id-1")
 		if data, err := os.ReadFile(filepath.Join(host, file)); err != nil || string(data) != want {
 			t.Errorf("%s holds %q (%v), want %q", file, data, err, want)
 		}
+	}
+}
+
+// A door piece add writes again, a file or a link that was there otherwise, is said on stdout
+// with its path, for add to tell what an earlier devopsy wrote; one it makes, or leaves as it
+// is, says nothing.
+func TestDoorPieceSaysWhatItUpdated(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	f, l := filepath.Join(dir, "rule"), filepath.Join(dir, "link")
+	run := func(call string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("sh", append([]string{"-c", "set -eu\n" + hostPut + doorPieceSh + call, "sh"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", call, err, out)
+		}
+		return string(out)
+	}
+	file := `piece "$1" 640 true "$2" || :`
+	link := `piece_link "$1" "$2"`
+	for _, c := range []struct {
+		what, call string
+		args       []string
+		want       string
+	}{
+		{"a file made", file, []string{f, "one\n"}, ""},
+		{"a file the same", file, []string{f, "one\n"}, ""},
+		{"a file written again", file, []string{f, "two\n"}, DoorUpdatedPrefix + f + "\n"},
+		{"a link made", link, []string{"/opt/a", l}, ""},
+		{"a link the same", link, []string{"/opt/a", l}, ""},
+		{"a link to another", link, []string{"/opt/b", l}, DoorUpdatedPrefix + l + "\n"},
+	} {
+		if got := run(c.call, c.args...); got != c.want {
+			t.Errorf("%s: said %q, want %q", c.what, got, c.want)
+		}
+	}
+	if data, _ := os.ReadFile(f); string(data) != "two\n" {
+		t.Errorf("the file holds %q", data)
+	}
+	if target, _ := os.Readlink(l); target != "/opt/b" {
+		t.Errorf("the link names %q", target)
+	}
+}
+
+// --server-info's root read of the door's pieces tells each one the host has otherwise than
+// this devopsy writes it, a missing one included, and none that is the same, a file's text
+// through a link (put leaves a link with the same text) as well.
+func TestDoorPiecesStale(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := func(name string) string { return filepath.Join(dir, name) }
+	pieces := []DoorPiece{
+		{Path: at("same"), Text: "rule\n"},
+		{Path: at("other"), Text: "rule\n"},
+		{Path: at("missing"), Text: "rule\n"},
+		{Path: at("through-link"), Text: "rule\n"},
+		{Path: at("link-same"), Link: "/opt/devopsy"},
+		{Path: at("link-other"), Link: "/opt/devopsy"},
+		{Path: at("link-missing"), Link: "/opt/devopsy"},
+		{Path: at("link-a-file"), Link: "/opt/devopsy"},
+	}
+	for name, text := range map[string]string{"same": "rule\n", "other": "old rule\n", "real": "rule\n", "link-a-file": "x"} {
+		if err := os.WriteFile(at(name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for link, target := range map[string]string{"through-link": at("real"), "link-same": "/opt/devopsy", "link-other": "/usr/bin/devopsy"} {
+		if err := os.Symlink(target, at(link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := exec.Command("sh", append([]string{"-c", DoorPiecesRead, "sh"}, DoorPiecesArgs(pieces)...)...).Output()
+	if err != nil {
+		t.Fatalf("the read: %v", err)
+	}
+	stale, err := DoorPiecesStale(pieces, string(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{at("other"), at("missing"), at("link-other"), at("link-missing"), at("link-a-file")}
+	if !slices.Equal(stale, want) {
+		t.Errorf("stale %v, want %v", stale, want)
+	}
+	// A read cut short is no judgment.
+	if _, err := DoorPiecesStale(pieces, "none\n"); err == nil {
+		t.Error("a read of one line for eight pieces passed")
+	}
+}
+
+// Every door piece --server-info compares is one add's host script writes, and through piece
+// or piece_link, so a piece added to one list is in the other.
+func TestDoorPiecesAreWhatAddWrites(t *testing.T) {
+	t.Parallel()
+	s := DoorHostScript("deploy", "/opt/bin/devopsy")
+	for _, p := range DoorPieces("deploy", "/opt/bin/devopsy") {
+		call := "piece " + p.Path + " "
+		if p.Link != "" {
+			call = "piece_link '" + p.Link + "' " + p.Path + "\n"
+		}
+		if !strings.Contains(s, call) {
+			t.Errorf("add writes no %s as %q", p.Path, call)
+		}
+	}
+	if n := len(regexp.MustCompile(`(?m)^(if )?piece(_link)? `).FindAllString(s, -1)); n != len(DoorPieces("deploy", "/opt/bin/devopsy")) {
+		t.Errorf("add writes %d pieces, %d compared", n, len(DoorPieces("deploy", "/opt/bin/devopsy")))
 	}
 }
 
@@ -389,7 +495,7 @@ func TestDoorHostScriptAsksNoRebootForADropInsMode(t *testing.T) {
 	}
 	run := func() string {
 		t.Helper()
-		cmd := exec.Command("sh", "-c", "set -eu\n"+hostPut+"restart_flag() { echo \"flagged $1\"; }\n"+lines)
+		cmd := exec.Command("sh", "-c", "set -eu\n"+hostPut+doorPieceSh+"restart_flag() { echo \"flagged $1\"; }\n"+lines)
 		cmd.Env = []string{"PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin"}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -428,24 +534,27 @@ func TestDoorHostScriptStopsAtAPieceNotWritten(t *testing.T) {
 	// what it is called by.
 	script := DoorHostScript("deploy", "/opt/bin/devopsy")
 	n := 0
-	for _, at := range regexp.MustCompile(`(?m)^\s*(if )?put `).FindAllStringIndex(script, -1) {
+	for _, at := range regexp.MustCompile(`(?m)^\s*(if )?(put|piece) `).FindAllStringIndex(script, -1) {
 		call := script[at[0]:]
 		cut := min(strings.Index(call+" || :\n", " || :\n"), strings.Index(call+"; then\n", "; then\n"))
 		if cut == len(call) {
 			t.Fatalf("a put called otherwise than in an if or with || : (a pipeline or $(...) keeps its exit): %.80s", call)
 		}
 		ifCall := strings.HasPrefix(strings.TrimSpace(call), "if ")
-		target, args, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(call[:cut]), "if "), " ")
-		target, args, _ = strings.Cut(args, " ")
+		name, args, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(call[:cut]), "if "), " ")
+		target, args, _ := strings.Cut(args, " ")
+		if target == `"$@"` {
+			continue // piece's own put (doorPieceSh)
+		}
 		n++
-		piece := `put "$1" ` + args
+		piece := name + ` "$1" ` + args
 		if ifCall {
 			piece = "if " + piece + "; then :; fi"
 		} else {
 			piece += " || :"
 		}
 		f := filepath.Join(t.TempDir(), filepath.Base(target))
-		c := exec.Command("sh", "-c", "set -eu\n"+hostPut+piece+"\necho after", "sh", f)
+		c := exec.Command("sh", "-c", "set -eu\n"+hostPut+doorPieceSh+piece+"\necho after", "sh", f)
 		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 		out, _ := c.CombinedOutput()
 		if code := c.ProcessState.ExitCode(); code != 5 || !strings.Contains(string(out), "could not be written") || strings.Contains(string(out), "after") {
