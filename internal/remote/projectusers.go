@@ -71,11 +71,17 @@ func doorKeysCommand(devopsy string) string {
 // environment through /proc. The door's keeps only what a session carries for its hints
 // (doorKept), by name, which the door reads, checks and clears before anything else. The
 // Defaults are the command's, which sudo applies after every user's, group's and run-as
-// user's, wherever those are written.
+// user's, wherever those are written. The door's runs on its caller's terminal, with no
+// pseudo-terminal of sudo's own (!use_pty, on in Ubuntu's sudoers): sudo-rs (0.2.13) hands
+// its pty's foreground to its child alone, so docker's compose plugin, a grandchild, is
+// stopped as it starts on it and never resumed, and with it every compose call a project
+// user makes from a terminal. use_pty keeps a less trusted target from typing into its
+// caller's terminal, and the door's target is the deploy user; the read's, the project user,
+// keeps it, though a read runs in a session of its own with no terminal (doorRead).
 func doorSudoers(deploy, devopsy string) string {
 	return "# Written by devopsy (devopsy @<server> --project-users add): the door's rules.\n" +
 		"Cmnd_Alias DEVOPSY_DOOR = " + devopsy + " --door *\n" +
-		"Defaults!DEVOPSY_DOOR env_reset, !env_keep, env_keep = \"" + strings.Join(doorKept, " ") + "\", !setenv\n" +
+		"Defaults!DEVOPSY_DOOR env_reset, !env_keep, env_keep = \"" + strings.Join(doorKept, " ") + "\", !setenv, !use_pty\n" +
 		"%" + DoorGroup + " ALL=(" + deploy + " : " + DoorRunGroup + ") NOPASSWD: DEVOPSY_DOOR\n" +
 		"Cmnd_Alias DEVOPSY_DOOR_READ = " + devopsy + " --door-read *\n" +
 		"Defaults!DEVOPSY_DOOR_READ env_reset, !env_keep, !setenv\n" +
