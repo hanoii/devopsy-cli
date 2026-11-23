@@ -202,6 +202,12 @@ type DoorFacts struct {
 	Users     int    `json:"users"`
 	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
 	Reboot bool `json:"reboot,omitempty"`
+	// Stale are the door's host pieces the host has otherwise than this devopsy writes them
+	// (DoorPieces), read as root, and StaleUnread why they could not be read; AddProject is a
+	// project user's project, whose add writes them again.
+	Stale       []string `json:"stale,omitempty"`
+	StaleUnread string   `json:"stale_unread,omitempty"`
+	AddProject  string   `json:"add_project,omitempty"`
 	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the
 	// firewall's root read.
 	Listeners []string `json:"listeners,omitempty"`

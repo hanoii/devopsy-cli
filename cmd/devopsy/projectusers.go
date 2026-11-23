@@ -453,7 +453,9 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 		}
 	}
 	sayAdded(report.Default(), who, project, entry, ref, had, remote.KeysLeft(remote.DoorKeysFile(who)))
-	if strings.Contains(out.String(), "reboot") {
+	updated, reboot := hostScriptSaid(out.String())
+	sayUpdated(report.Default(), updated)
+	if reboot {
 		report.Say(report.WarnLevel, "sshd takes the door at the next reboot: until then no project user logs in",
 			[]string{"any reboot takes it, one the server does by itself for /run/reboot-required included"}, rebootFix(ref))
 	}
@@ -548,6 +550,27 @@ func leftGroupID(group, who string) (gid int, left bool, err error) {
 // already (had: its entry and its Unix user), with the ways to its keys while it has none
 // (keys), on ref as typed when there is one: adding a key in words, its file being the
 // operator's to name, then a pair made for it (--ssh-keys-generate) and a restricted one for
+// hostScriptSaid is what DoorHostScript's stdout says: the door's pieces it wrote again, by
+// path, and whether sshd takes the door at the next reboot.
+func hostScriptSaid(out string) (updated []string, reboot bool) {
+	for line := range strings.SplitSeq(out, "\n") {
+		if p, ok := strings.CutPrefix(line, remote.DoorUpdatedPrefix); ok {
+			updated = append(updated, p)
+		} else if line == remote.DoorRebootLine {
+			reboot = true
+		}
+	}
+	return updated, reboot
+}
+
+// sayUpdated says each of the door's pieces add wrote again, an earlier devopsy's text
+// replaced by this one's.
+func sayUpdated(l *report.Logger, updated []string) {
+	for _, p := range updated {
+		l.Say(report.InfoLevel, "updated "+p+": an earlier devopsy wrote it otherwise", nil)
+	}
+}
+
 // CI (<who>-ci) as commands, in words too with no address known.
 func sayAdded(l *report.Logger, who, project, entry, ref string, had, keys bool) {
 	msg := "project user " + who + " for " + project + ", its entry in " + entry

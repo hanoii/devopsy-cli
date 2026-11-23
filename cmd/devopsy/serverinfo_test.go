@@ -311,6 +311,14 @@ func TestServerInfoReport(t *testing.T) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "the project users' directory /space is not on a mount with nosuid and nodev"}
 		}, "", "W0002: the project users' directory is not on a mount with nosuid and nodev\nthe project users' directory /space is not on a mount with nosuid and nodev, so the door refuses every request|set the server up for project users:\n$ devopsy @vm1: --project-users setup"},
 		{"door reboot", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", Reboot: true} }, "", "sshd takes the door at the next reboot|reboot it"},
+		// The door's pieces an earlier devopsy wrote: each named, the add that writes them
+		// again, and sshd's reboot after it when its drop-in is among them.
+		{"door pieces stale", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Users: 1, Stale: []string{remote.DoorSudoers, remote.DoorSSHDropIn}, AddProject: "shop"}
+		}, "", "the door's pieces on the host are an earlier devopsy's, not this one's\n" + remote.DoorSudoers + "\n" + remote.DoorSSHDropIn + "\nsshd takes its drop-in at the next reboot after the add|write them again, by an add of a project user there already:\n$ devopsy @vm1: --project-users add shop"},
+		{"door pieces unread", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Users: 1, StaleUnread: "devopsy.internal/util:5 is not here"}
+		}, "", "the door's pieces on the host were not read: devopsy.internal/util:5 is not here|"},
 		{"door listeners", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
 		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},

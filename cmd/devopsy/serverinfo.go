@@ -138,9 +138,10 @@ func toolFix(door bool) report.Remedy {
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
-// waits for a reboot to take it, and the host's listeners from read, the root read of the
-// firewall ("" when none was made).
-func doorFacts(read string) *remote.DoorFacts {
+// waits for a reboot to take it, the host's listeners from read, the root read of the
+// firewall ("" when none was made), and, with pieces, which of its host pieces differ from
+// this devopsy's (doorPiecesStale).
+func doorFacts(read string, pieces bool) *remote.DoorFacts {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
 		return nil
@@ -155,7 +156,58 @@ func doorFacts(read string) *remote.DoorFacts {
 	if read != "" {
 		f.Listeners = remote.DoorListeners(read)
 	}
+	if pieces && len(d.Users) > 0 {
+		f.Stale, f.StaleUnread = doorPiecesStale()
+		for _, u := range slices.Sorted(maps.Keys(d.Users)) {
+			f.AddProject = d.Users[u].Project
+			break
+		}
+	}
 	return f
+}
+
+// doorPiecesStale are the door's host pieces the host has otherwise than this devopsy, its
+// deploy user's, writes them (remote.DoorPieces), read as root where the util image is there
+// already, or why they could not be read: an add on a server upgraded since writes them again.
+func doorPiecesStale() ([]string, string) {
+	me, err := user.Current()
+	if err != nil {
+		return nil, err.Error()
+	}
+	pieces := remote.DoorPieces(me.Username, devopsyPath())
+	var out, errOut bytes.Buffer
+	run := hostRun{Here: true, Script: remote.DoorPiecesRead, Args: remote.DoorPiecesArgs(pieces), Stderr: &errOut}
+	if err := run.runIfReady(context.Background(), &out, func(err error) error {
+		return fmt.Errorf("its run as root: %w %s", err, strings.TrimSpace(errOut.String()))
+	}); err != nil {
+		return nil, err.Error()
+	}
+	stale, err := remote.DoorPiecesStale(pieces, out.String())
+	if err != nil {
+		return nil, err.Error()
+	}
+	return stale, ""
+}
+
+// doorStaleLines is --server-info's warning of the door's pieces stale on the host, each named,
+// and sshd's reboot after the add when its drop-in is among them.
+func doorStaleLines(stale []string) []string {
+	lines := append([]string{"the door's pieces on the host are an earlier devopsy's, not this one's"}, stale...)
+	if slices.Contains(stale, remote.DoorSSHDropIn) {
+		lines = append(lines, "sshd takes its drop-in at the next reboot after the add")
+	}
+	return lines
+}
+
+// doorAddFix is the way to write the door's pieces again: an add of a project user there
+// already, which puts them back as this devopsy writes them.
+func doorAddFix(ref, project string) report.Remedy {
+	cmd := ""
+	if ref != "" && project != "" {
+		cmd = "devopsy @" + ref + " --project-users add " + project
+	}
+	return offer(report.Fix, "write them again, by an add of a project user there already:", cmd,
+		"write them again, by --project-users add of a project user there already, for this server")
 }
 
 // procMounts is the file a host's mounts are read from, /proc's options among them, under the
@@ -366,7 +418,7 @@ func serverFacts() (remote.ServerInfo, error) {
 			read = readChains(&setup.FirewallFact{Loaded: kind}, dockerHere(hd.facts), false)
 		}
 	}
-	info.Door = doorFacts(read)
+	info.Door = doorFacts(read, !asProjectUser())
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	info.Missing = missingTools(anyTool)
 	trees := doorTrees(info.Root)
@@ -1428,6 +1480,12 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
 				rebootFix(ref))
+		}
+		if len(dr.Stale) > 0 {
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: doorStaleLines(dr.Stale), Remedies: []report.Remedy{doorAddFix(ref, dr.AddProject)}})
+		}
+		if dr.StaleUnread != "" {
+			warn("the door's pieces on the host were not read: " + dr.StaleUnread)
 		}
 		if len(dr.Listeners) > 0 {
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),
