@@ -208,6 +208,16 @@ func prepare(g *Grid) {
 		}
 	}
 	walk(g, 0)
+	// A render measures afresh: what an earlier one measured goes.
+	for _, gs := range byDepth {
+		for _, g := range gs {
+			for _, r := range g.Rows {
+				for _, c := range g.widths(r).cols {
+					c.width, c.fitted = 0, 0
+				}
+			}
+		}
+	}
 	for _, gs := range byDepth {
 		for _, g := range gs {
 			for _, r := range g.Rows {

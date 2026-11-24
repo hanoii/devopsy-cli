@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/howto"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
@@ -239,25 +240,22 @@ var ServerScope = names(flagsWhere(func(s Scope) bool { return s == Server || s 
 // helpColumn is where descriptions start in devopsy's help.
 const helpColumn = 36
 
+// helpWidths are help's columns: the scope's prefix right aligned in 6
+// (two spaces and four), one space, what you type up to the description's
+// column, two spaces before it. New for each grid: a render measures into
+// its columns.
+func helpWidths() *layout.Widths {
+	return layout.NewWidths().Fixed(0, 6).Right(0).Gap(0, 1).
+		Fixed(1, helpColumn-6-1-layout.DefaultGap).Overflow(1)
+}
+
 // helpLine is one entry of devopsy's help: the scope's prefix, right
 // aligned, what you type, then the description, on the next line when
-// what you type is too long.
+// what you type is too long, a description of several lines under
+// itself.
 func helpLine(b *strings.Builder, prefix, typed, desc string) {
-	left := fmt.Sprintf("  %4s %s", prefix, typed)
-	lines := strings.Split(desc, "\n")
-	if len(left)+2 > helpColumn {
-		b.WriteString(left + "\n")
-	} else if desc != "" {
-		fmt.Fprintf(b, "%-*s%s\n", helpColumn, left, lines[0])
-		lines = lines[1:]
-	} else {
-		b.WriteString(left + "\n")
-		return
-	}
-	// A description of several lines continues under itself.
-	for _, l := range lines {
-		fmt.Fprintf(b, "%*s%s\n", helpColumn, "", l)
-	}
+	g := &layout.Grid{Widths: helpWidths(), Rows: []layout.Row{{Cells: layout.Cells(prefix, typed, desc)}}}
+	b.WriteString(g.String())
 }
 
 // flagsHelp is the help's list of flags, by group.

@@ -359,3 +359,15 @@ func TestRightLastCell(t *testing.T) {
 		t.Errorf("got:\n%q\nwant:\n%q", got, want)
 	}
 }
+
+// A grid laid out again measures afresh: a row changed or gone since
+// leaves no width behind.
+func TestRenderAgain(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Rows: []Row{{Cells: Cells("a-long-key", "x")}, {Cells: Cells("b", "y")}}}
+	_ = g.Lines()
+	g.Rows = g.Rows[1:]
+	if got := g.String(); got != "b  y\n" {
+		t.Errorf("laid out again: %q", got)
+	}
+}
