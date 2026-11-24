@@ -7,6 +7,8 @@
 // It never picks a color or quotes a word: callers paint and quote their
 // cells (report.Copyable) before they reach it, and it measures them as
 // they show.
+//
+// Rules: the Output conventions in AGENTS.md.
 package layout
 
 import (

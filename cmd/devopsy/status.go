@@ -16,6 +16,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -504,25 +505,26 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 		}
 		return code
 	}
+	// One grid, so the facts before the containers and after them share
+	// their key column.
 	tab := newEntryTable(w, st, r.Entries, "containers")
-	row := tab.row
+	var rows []layout.Row
 	if heading != "" {
-		fmt.Fprintln(w, st.name(report.Copyable(heading)))
+		rows = append(rows, layout.Row{Cells: []layout.Cell{{Text: report.Copyable(heading), Span: true, Paint: st.name}}})
 	} else {
-		fmt.Fprintln(w, row("project", r.Project))
+		rows = append(rows, tab.row("project", r.Project))
 	}
-	tab.print(r.Entries[:r.head])
+	rows = append(rows, tab.rows(r.Entries[:r.head])...)
 	switch {
 	case r.Project == "":
 		// An environment with no release live: no project to list.
 	case len(r.Containers) == 0:
-		fmt.Fprintln(w, row("containers", "none"))
+		rows = append(rows, tab.row("containers", "none"))
 	default:
-		sw := len("service")
-		for _, c := range r.Containers {
-			sw = max(sw, len(c.Service))
-		}
-		fmt.Fprintln(w, "containers")
+		rows = append(rows, tab.row("containers", ""))
+		// The services in a column at least as wide as "service", the
+		// state after it, then compose's status.
+		services := layout.NewWidths().Min(0, 2+len("service"))
 		for _, c := range r.Containers {
 			state := c.State
 			switch {
@@ -538,14 +540,15 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 			if c.Health != "" && c.Status == "" {
 				state += "  " + c.Health
 			}
-			line := fmt.Sprintf("  %-*s  %s", sw, c.Service, state)
+			status := ""
 			if c.Status != "" {
-				line += "  " + strings.ToLower(c.Status[:1]) + c.Status[1:]
+				status = strings.ToLower(c.Status[:1]) + c.Status[1:]
 			}
-			fmt.Fprintln(w, line)
+			rows = append(rows, layout.Row{Widths: services, Indent: 2, Cells: []layout.Cell{{Text: c.Service}, {Text: state, Span: true}, {Text: status}}})
 		}
 	}
-	tab.print(r.Entries[r.head:])
+	rows = append(rows, tab.rows(r.Entries[r.head:])...)
+	tab.write(rows)
 	return code
 }
 

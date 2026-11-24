@@ -8,9 +8,9 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -89,55 +89,53 @@ const reportWidth = 100
 // entryTable prints entries on w in st, their keys in a column two
 // spaces after the longest: one for every section of a report (each
 // section's values start where the others' do), another for the entries
-// with no section, sized on theirs and more.
+// with no section, at least as wide as more.
 type entryTable struct {
-	w    io.Writer
-	st   style
-	col  int
-	cols map[string]int
+	w  io.Writer
+	st style
+	// sections and flat are the key and value columns of the entries in
+	// a section and of those in none.
+	sections, flat *layout.Widths
 	// width is where a section's prose wraps, reportWidth.
 	width int
 }
 
-// newEntryTable is a table whose key columns fit the keys of es, as
-// they show (report.Copyable), more in the column of the entries with no
-// section.
+// newEntryTable is a table whose flat key column is at least as wide as
+// each of more.
 func newEntryTable(w io.Writer, st style, es []remote.StatusEntry, more ...string) entryTable {
-	t := entryTable{w: w, st: st, cols: map[string]int{}, width: reportWidth}
+	t := entryTable{w: w, st: st, sections: layout.NewWidths(), flat: layout.NewWidths(), width: reportWidth}
 	for _, k := range more {
-		t.cols[""] = max(t.cols[""], utf8.RuneCountInString(k)+2)
+		t.flat.Min(0, layout.Width(k))
 	}
-	sections := 0
-	seen := map[string]bool{}
-	for _, l := range layOut(es) {
-		seen[l.section] = true
-		if l.kind == lineEntry && l.key != "" {
-			t.cols[l.section] = max(t.cols[l.section], l.indent+utf8.RuneCountInString(l.key)+2)
-			if l.section != "" {
-				sections = max(sections, t.cols[l.section])
-			}
-		}
-	}
-	// Every section, one with no key of its own too, starts its values at the one column.
-	for sec := range seen {
-		if sec != "" {
-			t.cols[sec] = sections
-		}
-	}
-	t.col = t.cols[""]
 	return t
 }
 
-// row is value under key, padded to the column of the entries with no
-// section, before it is painted.
-func (t entryTable) row(key, value string) string {
-	return strings.TrimRight(pad(key, t.col)+value, " ")
+// row is value under key in the column of the entries with no section.
+func (t entryTable) row(key, value string) layout.Row {
+	return layout.Row{Widths: t.flat, Cells: layout.Cells(key, value)}
 }
 
-// pad is s with spaces after it to n runes.
-func pad(s string, n int) string {
-	return s + strings.Repeat(" ", max(0, n-utf8.RuneCountInString(s)))
+// print prints es as one grid (rows), a blank line first when it starts
+// with a section's heading.
+func (t entryTable) print(es []remote.StatusEntry) { t.write(t.rows(es)) }
+
+// write prints rows as one grid at the table's width, a blank line first
+// when the first row breaks (a section's heading): every row of a report
+// in one grid, so its columns are measured together.
+func (t entryTable) write(rows []layout.Row) {
+	if len(rows) == 0 {
+		return
+	}
+	g := &layout.Grid{Rows: rows, Width: t.width, MinRoom: minWrapRoom}
+	if rows[0].Break {
+		fmt.Fprintln(t.w)
+	}
+	fmt.Fprint(t.w, g.String())
 }
+
+// minWrapRoom is the least room prose wraps into: with less left after
+// its column, it stays whole.
+const minWrapRoom = 40
 
 // The kinds of a laid out line: a section's heading, a project's
 // heading of its own, an entry's line, a line after a bar (a warning's
@@ -159,7 +157,7 @@ type laidLine struct {
 	first   bool   // its entry's first line: a warning's message, the rest its details
 	value   string
 	cells   []string // a row of cells, as they show
-	widths  []int    // a row of cells: its run's widths, of all but its last
+	run     string   // a row of cells: its run, whose rows share their widths
 	hang    int      // a line after a bar: where a part cut from its text goes on
 	level   string
 	group   bool // the key is its project's name, the line its heading's
@@ -178,7 +176,7 @@ type laidLine struct {
 // (sharedLater): one command that fixes several lines is offered once.
 func layOut(es []remote.StatusEntry) []laidLine {
 	var out []laidLine
-	widths := cellWidths(es)
+	runs := cellRuns(es)
 	var prev remote.StatusEntry
 	for i, e := range es {
 		newSection := i == 0 || e.Section != prev.Section
@@ -233,7 +231,7 @@ func layOut(es []remote.StatusEntry) []laidLine {
 				for _, c := range e.Cells {
 					line.cells = append(line.cells, report.Copyable(c))
 				}
-				line.widths = widths[i]
+				line.run = runs[i]
 			}
 			out = append(out, line)
 		}
@@ -245,14 +243,14 @@ func layOut(es []remote.StatusEntry) []laidLine {
 	return out
 }
 
-// cellWidths are the widths of each entry's cells but its last, by its
-// index, as they show: the widest of its run, every row of cells in a
-// section's groups (so environments align across projects), else the
-// rows under one key in a section, whatever lines without cells (a
-// warning) sit between them.
-func cellWidths(es []remote.StatusEntry) map[int][]int {
-	runs := map[string][]int{}
-	var order []string
+// cellRuns are the runs of each entry with cells, by its index: every
+// row of cells in a section's groups (so environments align across
+// projects), else the rows under one key in a section, whatever lines
+// without cells (a warning) sit between them. A run's rows share their
+// columns (each but its last cell measured), and a column empty in all
+// of them is left out.
+func cellRuns(es []remote.StatusEntry) map[int]string {
+	runs := map[int]string{}
 	run := ""
 	for i, e := range es {
 		if i == 0 || e.Key != es[i-1].Key || e.Section != es[i-1].Section || e.Group != es[i-1].Group || e.Instance != es[i-1].Instance {
@@ -261,46 +259,32 @@ func cellWidths(es []remote.StatusEntry) map[int][]int {
 		if len(e.Cells) == 0 {
 			continue
 		}
-		id := run
+		runs[i] = run
 		if e.Group != "" {
-			id = "section\x00" + e.Section
-		}
-		if runs[id] == nil {
-			order = append(order, id)
-		}
-		runs[id] = append(runs[id], i)
-	}
-	widths := map[int][]int{}
-	for _, id := range order {
-		var w []int
-		for _, i := range runs[id] {
-			for j, c := range es[i].Cells[:len(es[i].Cells)-1] {
-				if j == len(w) {
-					w = append(w, 0)
-				}
-				w[j] = max(w[j], utf8.RuneCountInString(report.Copyable(c)))
-			}
-		}
-		for _, i := range runs[id] {
-			widths[i] = w
+			runs[i] = "section\x00" + e.Section
 		}
 	}
-	return widths
+	return runs
 }
 
-// print prints es as layOut lays them out: a section's heading bold
-// after a blank line, a project's name in its color, a warning's
-// message and the lines after a bar colored as devopsy's own lines are
-// (report.Colored, report.PaintBar: the message yellow, the bar dim,
-// its text plain, a command bold), a highlight's lines bold; in a
-// section, prose past the width wraps at a word to its column (wrapAt),
-// a line after a bar each part after one, and a row of cells past it
-// moves its last cell whole to a line of its own at the column
-// (cellRow).
-func (t entryTable) print(es []remote.StatusEntry) {
+// rows are es as layOut lays them out: a section's heading bold after a
+// blank line, a project's name in its color, a warning's message and the
+// lines after a bar colored as devopsy's own lines are (report.Colored,
+// report.PaintBar: the message yellow, the bar dim, its text plain, a
+// command bold), a highlight's lines bold; in a section, prose past the
+// width wraps at a word to its column, a line after a bar each part after
+// one, and a row of cells past it moves its last cell whole to a line of
+// its own at the column. A command never wraps, nor anything in a flat
+// report.
+func (t entryTable) rows(es []remote.StatusEntry) []layout.Row {
+	var out []layout.Row
+	runs := map[string]*layout.Widths{}
 	for _, l := range layOut(es) {
-		col := t.cols[l.section]
-		paint := func(s string) string { return s }
+		keys := t.flat
+		if l.section != "" {
+			keys = t.sections
+		}
+		var paint func(string) string
 		switch {
 		case !t.st.on:
 		case l.level == remote.StatusWarning && l.kind == lineEntry && l.first:
@@ -308,142 +292,55 @@ func (t entryTable) print(es []remote.StatusEntry) {
 		case l.level == remote.StatusHighlight && l.kind == lineEntry:
 			paint = t.st.head
 		}
-		indent := strings.Repeat(" ", l.indent)
 		wrap := l.section != ""
+		prose := layout.Keep
+		if wrap {
+			prose = layout.WrapWords
+		}
 		switch l.kind {
 		case lineSection:
-			fmt.Fprintln(t.w)
-			fmt.Fprintln(t.w, t.st.head(l.value))
+			out = append(out, layout.Row{Widths: keys, Break: true, Cells: []layout.Cell{{Text: l.value, Span: true, Paint: t.st.head}}})
 		case lineGroup:
-			fmt.Fprintln(t.w, indent+t.st.name(l.key))
+			out = append(out, layout.Row{Widths: keys, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}})
 		case lineEntry:
-			key := pad(indent+l.key, col)
+			key := layout.Cell{Text: l.key}
+			value := layout.Cell{Text: l.value, Fit: prose}
+			row := layout.Row{Widths: keys, Indent: l.indent, Paint: paint}
 			if l.group {
 				// The project's name in its color, its facts as any line's.
-				key = indent + t.st.name(l.key) + key[len(indent)+len(l.key):]
+				key.Paint, value.Paint, row.Paint = t.st.name, paint, nil
 			}
-			parts := wrapAt(l.value, col, t.width, 0, wrap)
 			if len(l.cells) > 0 {
-				room := -1
+				w := runs[l.run]
+				if w == nil {
+					w = layout.NewWidths()
+					runs[l.run] = w
+				}
+				fit := layout.Keep
 				if wrap {
-					room = t.width - col
+					fit = layout.MoveLast
 				}
-				parts = cellRow(l.cells, l.widths, room)
+				cells := layout.Cells(l.cells...)
+				cells[len(cells)-1].Span, cells[len(cells)-1].Fit = true, fit
+				value = layout.Cell{Grid: &layout.Grid{Rows: []layout.Row{{Widths: w, Cells: cells}}}, Paint: value.Paint}
 			}
-			for k, part := range parts {
-				if k > 0 {
-					key = strings.Repeat(" ", col)
-				}
-				if l.group && k == 0 {
-					fmt.Fprintln(t.w, strings.TrimRight(key+paint(part), " "))
-					continue
-				}
-				fmt.Fprintln(t.w, paint(strings.TrimRight(key+part, " ")))
-			}
+			row.Cells = []layout.Cell{key, value}
+			out = append(out, row)
 		case lineBar:
 			// Quoted before it is painted (layOut): the quotes are the
 			// command's, inside its bold. A command never wraps.
-			parts := []string{l.value}
-			if _, _, ok := report.SplitCmd(l.value); !ok {
-				parts = wrapAt(l.value, col+len(report.BarMark), t.width, l.hang, wrap)
+			fit := prose
+			if _, _, ok := report.SplitCmd(l.value); ok {
+				fit = layout.Keep
 			}
-			for _, part := range parts {
-				part = strings.TrimRight(part, " ")
-				line := strings.TrimRight(report.BarMark+part, " ")
-				if t.st.on {
-					line = report.PaintBar(part)
-				}
-				fmt.Fprintln(t.w, strings.Repeat(" ", col)+line)
+			bar := layout.Cell{Text: l.value, Prefix: report.BarMark, Hang: l.hang, Fit: fit}
+			if t.st.on {
+				bar.Paint = report.PaintBar
 			}
+			out = append(out, layout.Row{Widths: keys, Cells: []layout.Cell{{}, bar}})
 		}
 	}
-}
-
-// cellRow is a row of cells as its lines: each cell but the last that
-// holds anything padded to its run's width (widths), a column empty in
-// every row of its run left out, nothing after that last; with a room
-// (-1 for none), a cell is padded only while the row still fits it, and
-// a row whose own cells do not fit moves its last whole to a line of
-// its own. A row is never cut at a word.
-func cellRow(cells []string, widths []int, room int) []string {
-	last := len(cells) - 1
-	for last > 0 && cells[last] == "" {
-		last--
-	}
-	shown := func(k int) bool { return k < len(widths) && widths[k] > 0 }
-	// own is the width of cells from..to as they are, two spaces between.
-	own := func(from, to int) int {
-		n := 0
-		for k := from; k <= to; k++ {
-			if k == to || shown(k) {
-				n += utf8.RuneCountInString(cells[k]) + 2
-			}
-		}
-		return max(0, n-2)
-	}
-	move := room >= 0 && last > 0 && own(0, last) > room
-	end := last
-	if move {
-		end = last - 1
-	}
-	var b strings.Builder
-	pos := 0
-	for k := 0; k < last; k++ {
-		if !shown(k) {
-			continue
-		}
-		cell := cells[k]
-		rest := 0
-		if k < end {
-			rest = own(k+1, end) + 2
-		}
-		if room < 0 || pos+widths[k]+rest <= room {
-			cell = pad(cell, widths[k])
-		}
-		b.WriteString(cell + "  ")
-		pos += utf8.RuneCountInString(cell) + 2
-	}
-	if move {
-		return []string{strings.TrimRight(b.String(), " "), cells[last]}
-	}
-	return []string{b.String() + cells[last]}
-}
-
-// wrapAt is line cut at words into parts that fit width from column col
-// on when wrap, whole otherwise, when it fits or too little room is left
-// to wrap into (under 40 columns): the first part keeps the line's
-// leading spaces, the others start at hang or at them, whichever is
-// further; a word longer than the room stays whole.
-func wrapAt(line string, col, width, hang int, wrap bool) []string {
-	body := strings.TrimLeft(line, " ")
-	lead := len(line) - len(body)
-	hang = max(hang, lead)
-	room := width - col - hang
-	if !wrap || room < 40 || col+utf8.RuneCountInString(line) <= width {
-		return []string{line}
-	}
-	var parts []string
-	cur := ""
-	for _, w := range strings.Split(body, " ") {
-		switch {
-		case cur == "":
-			cur = w
-		case utf8.RuneCountInString(cur)+1+utf8.RuneCountInString(w) <= room:
-			cur += " " + w
-		default:
-			parts = append(parts, cur)
-			cur = w
-		}
-	}
-	parts = append(parts, cur)
-	for i := range parts {
-		n := hang
-		if i == 0 {
-			n = lead
-		}
-		parts[i] = strings.Repeat(" ", n) + parts[i]
-	}
-	return parts
+	return out
 }
 
 // sharedLater says whether an entry after es[i], under the same key in
