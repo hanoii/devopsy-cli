@@ -308,6 +308,20 @@ func TestDoorProjectsLife(t *testing.T) {
 	if out, code := doorAs(t, "devopsy-doorlife", "/usr/bin/docker ps"); code == 0 || !strings.Contains(out, "permission denied") {
 		t.Fatalf("the daemon lets a project user in (%d): %s", code, out)
 	}
+	// A checkout of another project addressed as this project user is refused before its
+	// script makes anything in the user's home (ownProjectOnly, --release-settings' first
+	// call): the door alone would refuse it only past a directory left there.
+	stray := project(t, "doorstray", map[string]string{
+		".devopsy/.env":         "DEVOPSY_SERVER=devopsy-doorlife@doorsrv\n",
+		".devopsy/config.yaml":  "project: doorstray\ndefaults:\n  mode: image\n  release: up -d --wait\nenvironments:\n  prod: {}\n",
+		".devopsy/compose.yaml": "services:\n  web:\n" + doorService + "    command: [sleep, infinity]\n",
+	})
+	if out, code := op(t, stray, "devopsy @prod --release"); code == 0 || !saysWords(out, "devopsy-doorlife can only work with environments of project doorlife, not doorstray's") {
+		t.Errorf("another project's release as devopsy-doorlife (%d):\n%s", code, out)
+	}
+	if out, code := doorRoot(t, "ls -A /home/devopsy-doorlife"); code != 0 || strings.Contains(out, "doorstray") {
+		t.Errorf("another project's refused release left in the user's home (%d): %s", code, out)
+	}
 	if out := release("a first release", "--release"); strings.Contains(out, "W0001") {
 		t.Errorf("a first release, the firewall loaded as devopsy loads it, said:\n%s", out)
 	}
