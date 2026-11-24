@@ -15,9 +15,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/uids"
@@ -605,7 +605,8 @@ const goneKeyMax = 12
 func placed(project, key string, lines []string, hint report.Remedy) remote.StatusEntry {
 	instance, key := instanceOf(key)
 	e := remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Instance: instance, Key: key, Lines: lines, Remedies: []report.Remedy{hint}}
-	if utf8.RuneCountInString(key) > goneKeyMax {
+	// As it shows: quoted (report.Copyable), in columns.
+	if layout.Width(report.Copyable(key)) > goneKeyMax {
 		e.Key, e.Name = "gone", key
 		e.Lines = append([]string{key + ": " + strings.TrimPrefix(lines[0], "gone, ")}, lines[1:]...)
 	}
