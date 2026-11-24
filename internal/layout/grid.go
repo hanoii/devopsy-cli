@@ -381,9 +381,12 @@ func (g *Grid) renderRow(r Row, room int) []string {
 				padded = pos+w.size(k)+rest <= room
 			}
 		}
-		if padded {
+		// A right aligned cell is padded on its left wherever it sits, its
+		// row's last too.
+		right := w.col(k).align == Right && !c.Span && !spanned
+		if padded || right {
 			p.pad = w.size(k)
-			p.right = w.col(k).align == Right
+			p.right = right
 			width = max(width, w.size(k))
 		}
 		if c.Span {
@@ -504,4 +507,13 @@ func finish(c Cell, text []string) []string {
 		}
 	}
 	return out
+}
+
+// Cells are a row's cells of plain text, one per string.
+func Cells(texts ...string) []Cell {
+	cs := make([]Cell, len(texts))
+	for i, t := range texts {
+		cs[i] = Cell{Text: t}
+	}
+	return cs
 }

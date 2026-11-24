@@ -27,6 +27,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"golang.org/x/term"
@@ -1691,7 +1692,6 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	if code != 0 {
 		return code
 	}
-	type snap struct{ id, kind, release, taken, size, state, copy string }
 	var snaps []snap
 	mirrored := strings.Contains(out.String(), "mirror\tkept\n")
 	// Lines one by one: a taken snapshot's state is empty, its line
@@ -1717,14 +1717,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			fmt.Println("no snapshots on " + t.Address + " (devopsy @" + targetRef(t) + " --snapshot takes one)")
 			return 0
 		}
-		fmt.Printf("%-15s %-7s %-15s %-21s %s\n", "SNAPSHOT", "KIND", "RELEASE", "TAKEN", "SIZE")
-		for _, s := range snaps {
-			line := fmt.Sprintf("%-15s %-7s %-15s %-21s %s", s.id, s.kind, s.release, s.taken, s.size)
-			if s.state != "" {
-				line += "  " + strings.ToUpper(s.state)
-			}
-			fmt.Println(line)
-		}
+		fmt.Print(snapshotsGrid(snaps).String())
 		// How the last take here copied: an imported snapshot says nothing
 		// of that.
 		last := ""
@@ -2959,4 +2952,23 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		}
 	}
 	return code
+}
+
+// snap is a snapshot as --snapshots lists it.
+type snap struct{ id, kind, release, taken, size, state, copy string }
+
+// snapshotsGrid lays out snaps as --snapshots lists them: a header, a
+// row each, its size to the right and its state in capitals after, each
+// cell quoted as it shows.
+func snapshotsGrid(snaps []snap) *layout.Grid {
+	g := &layout.Grid{Widths: layout.NewWidths().Right(4)}
+	g.Rows = append(g.Rows, layout.Row{Header: true, Cells: layout.Cells("SNAPSHOT", "KIND", "RELEASE", "TAKEN", "SIZE")})
+	for _, s := range snaps {
+		cells := []string{s.id, s.kind, s.release, s.taken, s.size, strings.ToUpper(s.state)}
+		for i := range cells {
+			cells[i] = report.Copyable(cells[i])
+		}
+		g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(cells...)})
+	}
+	return g
 }

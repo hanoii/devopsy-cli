@@ -346,3 +346,16 @@ func TestBox(t *testing.T) {
 		t.Errorf("prose wrapped in its cell: %q in:\n%s", got, b.String())
 	}
 }
+
+// A right aligned column holds its row's last cell to the right too (a
+// header's SIZE over its sizes).
+func TestRightLastCell(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Widths: NewWidths().Right(1), Rows: []Row{
+		{Cells: Cells("ID", "SIZE")},
+		{Cells: Cells("a", "1.2 GiB", "PARTIAL")},
+	}}
+	if got, want := g.String(), "ID     SIZE\na   1.2 GiB  PARTIAL\n"; got != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+}

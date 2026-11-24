@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -1546,10 +1547,31 @@ func ParseReleases(out string) []Release {
 	return rs
 }
 
-// Line is the release as --releases lists it: * for the current one, id,
-// who, mode, branch@commit, a restore's snapshot, and its state in
-// capitals (FAILED, ROLLED BACK, INCOMPLETE, IN PROGRESS, SYNCING, CUT).
-func (r Release) Line() string {
+// State is the release's state as --releases shows it, in capitals
+// (FAILED, ROLLED BACK, INCOMPLETE, IN PROGRESS, SYNCING, CUT), empty for
+// one that is fine.
+func (r Release) State() string {
+	switch {
+	case r.Failed:
+		return "FAILED"
+	case r.RolledBack:
+		return "ROLLED BACK"
+	case r.Incomplete:
+		return "INCOMPLETE"
+	case r.InProgress:
+		return "IN PROGRESS"
+	case r.Syncing:
+		return "SYNCING"
+	case r.Cut:
+		return "CUT"
+	}
+	return ""
+}
+
+// cells are the release as --releases lists it, quoted as they show
+// (report.Copyable): * for the current one and its id, who, mode,
+// branch@commit, a restore's snapshot, and its state.
+func (r Release) cells() []string {
 	mark := " "
 	if r.Current {
 		mark = "*"
@@ -1568,22 +1590,29 @@ func (r Release) Line() string {
 	if r.Record.Restore != "" {
 		src += ", restore of snapshot " + r.Record.Restore
 	}
-	status := ""
-	switch {
-	case r.Failed:
-		status = "  FAILED"
-	case r.RolledBack:
-		status = "  ROLLED BACK"
-	case r.Incomplete:
-		status = "  INCOMPLETE"
-	case r.InProgress:
-		status = "  IN PROGRESS"
-	case r.Syncing:
-		status = "  SYNCING"
-	case r.Cut:
-		status = "  CUT"
+	return []string{report.Copyable(mark + " " + r.ID), report.Copyable(r.Record.By), report.Copyable(src), r.State()}
+}
+
+// ReleasesGrid lays out rs as --releases lists them, in columns, each
+// release's images on the line under it when images is set.
+func ReleasesGrid(rs []Release, images bool) *layout.Grid {
+	g := &layout.Grid{}
+	for _, r := range rs {
+		g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(r.cells()...)})
+		if !images || len(r.Images) == 0 {
+			continue
+		}
+		shown := make([]string, len(r.Images))
+		for i, img := range r.Images {
+			// name=version: the version or short digest the release ran.
+			if ref, v, ok := strings.Cut(img, "="); ok {
+				img = ref + " (" + v + ")"
+			}
+			shown[i] = report.Copyable(img)
+		}
+		g.Rows = append(g.Rows, layout.Row{Indent: 4, Cells: []layout.Cell{{Text: strings.Join(shown, " "), Span: true}}})
 	}
-	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
+	return g
 }
 
 // Left is an image a removal could not remove, from ImagesLeftFile.
@@ -1611,20 +1640,7 @@ func ParseLeft(out string) []Left {
 // images on the line under it, then the project's images left behind.
 func FormatReleases(out string) string {
 	var b strings.Builder
-	for _, r := range ParseReleases(out) {
-		b.WriteString(r.Line() + "\n")
-		if len(r.Images) > 0 {
-			shown := make([]string, len(r.Images))
-			for i, img := range r.Images {
-				// name=version: the version or short digest the release ran.
-				if ref, v, ok := strings.Cut(img, "="); ok {
-					img = ref + " (" + v + ")"
-				}
-				shown[i] = img
-			}
-			b.WriteString("    " + strings.Join(shown, " ") + "\n")
-		}
-	}
+	b.WriteString(ReleasesGrid(ParseReleases(out), true).String())
 	if b.Len() == 0 {
 		b.WriteString("No releases yet.\n")
 	}

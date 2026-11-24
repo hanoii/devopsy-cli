@@ -79,10 +79,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 				Remedies: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --releases "+strings.Join(args, " ")+" --yes")},
 			})
 		}
-		var lines []string
-		for _, r := range chosen {
-			lines = append(lines, r.Line())
-		}
+		lines := remote.ReleasesGrid(chosen, false).Lines()
 		what := "this release"
 		if len(chosen) > 1 {
 			what = fmt.Sprintf("these %d releases", len(chosen))

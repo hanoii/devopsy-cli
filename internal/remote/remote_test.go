@@ -1912,13 +1912,13 @@ exit 0
 	write(t, filepath.Join(root, "app/a/prod/releases/5", FetchingFile), "")
 	for env, want := range map[string]string{"FAKE_UNUSED=1": "FAILED", "FAKE_RELEASE_BUSY=1": "IN PROGRESS"} {
 		out, err := run(ReleasesScript(target("a")), env)
-		if rs := ParseReleases(out); err != nil || len(rs) != 2 || !strings.HasSuffix(rs[0].Line(), "  "+want) {
+		if rs := ParseReleases(out); err != nil || len(rs) != 2 || rs[0].State() != want {
 			t.Errorf("pending release with %s (%v): %+v\n%s", env, err, rs, out)
 		}
 	}
 	// Pending alone, nothing running it: incomplete.
 	os.Remove(filepath.Join(root, "app/a/prod/releases/5", FetchingFile))
-	if out, err := run(ReleasesScript(target("a"))); err != nil || !strings.HasSuffix(ParseReleases(out)[0].Line(), "  INCOMPLETE") {
+	if out, err := run(ReleasesScript(target("a"))); err != nil || ParseReleases(out)[0].State() != "INCOMPLETE" {
 		t.Errorf("pending alone (%v):\n%s", err, out)
 	}
 	os.RemoveAll(filepath.Join(root, "app/a/prod/releases/5"))
@@ -3052,8 +3052,8 @@ func TestSyncStatusLines(t *testing.T) {
 	}
 	release()
 	rs := ParseReleases("20261020000000\tcurrent\tsyncing\t\t{}\n")
-	if len(rs) != 1 || !rs[0].Syncing || !strings.HasSuffix(rs[0].Line(), "  SYNCING") {
-		t.Errorf("a syncing release: %+v %q", rs, rs[0].Line())
+	if len(rs) != 1 || !rs[0].Syncing || rs[0].State() != "SYNCING" {
+		t.Errorf("a syncing release: %+v %q", rs, rs[0].State())
 	}
 }
 
@@ -3890,5 +3890,21 @@ exit 0
 		if !fileExists(filepath.Join(base, f)) {
 			t.Errorf("%s, its script alive, is removed", f)
 		}
+	}
+}
+
+// --releases lines its releases up in columns, who at the widest name's
+// width, and shows a name or a branch another user chose escaped
+// (report.Copyable): it reaches the operator's terminal.
+func TestReleasesGrid(t *testing.T) {
+	t.Parallel()
+	rs := []Release{
+		{ID: "20261005120000", Current: true, Record: Record{By: "ci", Mode: "build", Branch: "main", Commit: "abc1234567890"}},
+		{ID: "20261004120000", Failed: true, Record: Record{By: "somebody\x1b[2J", Mode: "build", Branch: "fe\x1b]8;;x\aat", Commit: "def"}},
+	}
+	want := "* 20261005120000  ci               build main@abc1234567\n" +
+		"  20261004120000  somebody\\x1b[2J  build fe\\x1b]8;;x\\x07at@def  FAILED\n"
+	if got := ReleasesGrid(rs, false).String(); got != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
 	}
 }

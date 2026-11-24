@@ -117,7 +117,7 @@ func TestSnapshotTake(t *testing.T) {
 	// naming none refuses.
 	out, code = s.run(nil, "@prod", "--snapshots")
 	ids := manualSnapshots(snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")})
-	if code != 0 || !strings.HasPrefix(out, "SNAPSHOT        KIND    RELEASE         TAKEN                 SIZE\n"+ids[2]+"  manual  "+rel) || strings.Count(out, " manual ") != 3 {
+	if code != 0 || !regexp.MustCompile(`^SNAPSHOT +KIND +RELEASE +TAKEN +SIZE\n`+ids[2]+`  manual  `+rel).MatchString(out) || strings.Count(out, " manual ") != 3 {
 		t.Errorf("--snapshots (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@prod", "--snapshots", "remove", "1999"); code == 0 || !strings.Contains(out, "has no snapshot 1999: nothing removed") {
@@ -4131,5 +4131,22 @@ func TestRestoreGivesVolumesTheRestoredCodesOwners(t *testing.T) {
 		if own.MatchString(line) {
 			t.Errorf("the restore gave the volume's root the owner of the release it replaces, which the restored code does not name:\n%s", line)
 		}
+	}
+}
+
+// --snapshots lines its snapshots up under a header, the size to the
+// right and the state after it, each field another user could choose
+// shown escaped (report.Copyable).
+func TestSnapshotsGrid(t *testing.T) {
+	t.Parallel()
+	got := snapshotsGrid([]snap{
+		{id: "20261120090100", kind: "full", release: "20261119180200", taken: "2026-11-20 09:01 UTC", size: "1.2 GiB"},
+		{id: "20261122143300", kind: "no-code", release: "rel\x1b[2J", taken: "2026-11-22 14:33 UTC", size: "840 KiB", state: "partial"},
+	}).String()
+	want := "SNAPSHOT        KIND     RELEASE         TAKEN                    SIZE\n" +
+		"20261120090100  full     20261119180200  2026-11-20 09:01 UTC  1.2 GiB\n" +
+		"20261122143300  no-code  rel\\x1b[2J      2026-11-22 14:33 UTC  840 KiB  PARTIAL\n"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
