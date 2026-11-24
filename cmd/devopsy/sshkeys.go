@@ -12,6 +12,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -175,17 +176,19 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return 0
 		}
 		say(whose + " authorized keys (" + where + "):")
+		// One row each: its fingerprint, type, comment and options, in
+		// columns, the comment and options quoted as they show (anyone with
+		// the key chose them).
+		g := &layout.Grid{}
 		for _, k := range keys {
 			fp, _ := k.Fingerprint()
-			line := fp + "  " + strings.TrimPrefix(k.Type, "ssh-")
-			if k.Comment != "" {
-				line += "  " + k.Comment
-			}
+			options := ""
 			if k.Options != "" {
-				line += "  [" + k.Options + "]"
+				options = "[" + k.Options + "]"
 			}
-			fmt.Println(line)
+			g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(fp, strings.TrimPrefix(k.Type, "ssh-"), report.Copyable(k.Comment), report.Copyable(options))})
 		}
+		fmt.Print(g.String())
 		return 0
 
 	case "add":

@@ -1659,7 +1659,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("add a private key (%d):\n%s", code, out)
 	}
 	out, code = run("", "@prod", "--ssh-keys")
-	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server  [restrict]") {
+	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server    [restrict]") {
 		t.Fatalf("list (%d):\n%s", code, out)
 	}
 	// remove by comment, by fingerprint prefix; never the last one.

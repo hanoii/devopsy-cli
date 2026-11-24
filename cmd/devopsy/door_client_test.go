@@ -75,7 +75,7 @@ func TestDoorIsAnsweredBeforeAnyProject(t *testing.T) {
 	syncKey := `restrict,command="/usr/local/bin/devopsy --sync-child 1762600000.0a1b2c /srv/x vm2:x" ` + strings.TrimSuffix(key, "op@laptop") + "devopsy-sync-1762600000.0a1b2c"
 	write(t, filepath.Join(home, "door", "sync-keys", who), syncKey+"\n", 0o600)
 	caller := []string{"DEVOPSY_HOME=" + home, "XDG_CONFIG_HOME=" + home, "SUDO_USER=" + who}
-	if out, code := runDevopsy(t, t.TempDir(), caller, "--project-users-step", "list"); code != 0 || !strings.Contains(out, who+"\tproject review4cgrant") {
+	if out, code := runDevopsy(t, t.TempDir(), caller, "--project-users-step", "list"); code != 0 || !strings.Contains(out, who+"  project review4cgrant") {
 		t.Fatalf("the control: that config names %s a project user (%d):\n%s", who, code, out)
 	}
 	out, code := runDevopsy(t, project, caller, doorFlag, "request", "/nonexistent", "ps")
