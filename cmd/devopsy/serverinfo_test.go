@@ -231,6 +231,40 @@ func TestServerInfoReport(t *testing.T) {
 			t.Errorf("healthy: no %q in:\n%s", want, out)
 		}
 	}
+	// An instance a level under its project, its project uid on its name's line, its
+	// environments under it; a project with none its environments right under it; a project
+	// user's project says whose it is, on the deploy user's report and on that user's own.
+	inst := healthy()
+	inst.Environments = append(inst.Environments,
+		remote.Environment{Path: "bookshop/usa/prod", User: "devopsy-bookshop", Status: "release\t20261027115000\t{\"mode\":\"image\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"},
+		remote.Environment{Path: "bookshop/usa/dev", User: "devopsy-bookshop", Status: "release\t20261027115000\t{\"mode\":\"image\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"},
+		remote.Environment{Path: "bookshop/asia/prod", User: "devopsy-bookshop", Status: "release\t20261027115000\t{\"mode\":\"image\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"})
+	inst.UIDs = []remote.UIDClaim{
+		{Owner: "project:bookshop:usa", UID: 7}, {Owner: "project:bookshop:asia", UID: 8},
+		{Owner: "env:bookshop:usa:prod", UID: 9}, {Owner: "env:bookshop:usa:dev", UID: 10}, {Owner: "env:bookshop:asia:prod", UID: 11},
+		{Owner: "project:traefik", UID: 5}, {Owner: "env:traefik:prod", UID: 6},
+	}
+	inst.DoorProjects = []string{"bookshop"}
+	tree := "\nprojects\n" +
+		"  bookshop   project user devopsy-bookshop\n" +
+		"    asia     project uid 8\n" +
+		"      prod   released 10 min ago by ana                  uid 11\n" +
+		"    usa      project uid 7\n" +
+		"      dev    released 10 min ago by ana                  uid 10\n" +
+		"      prod   released 10 min ago by ana                  uid 9\n" +
+		"  shop\n" +
+		"    prod     released 10 min ago by ana  1 of 3 running\n" +
+		"    Staging  released 1 h ago by ana     1 of 1 running\n" +
+		"  traefik    project uid 5\n" +
+		"    prod     released 24 h ago by ci     1 of 1 running  uid 6\n"
+	if out, _ := serverInfoSays(inst, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, tree) {
+		t.Errorf("instances: no %q in:\n%s", tree, out)
+	}
+	own := inst
+	own.DoorProjects, own.ProjectUser = nil, "devopsy-bookshop"
+	if out, _ := serverInfoSays(own, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "\n  bookshop   project user devopsy-bookshop\n    asia ") {
+		t.Errorf("a project user's own: no mark in:\n%s", out)
+	}
 	// The sections in their order: the server's, devopsy's, the projects.
 	if s, d, p := strings.Index(out, "\nserver\n"), strings.Index(out, "\ndevopsy\n"), strings.Index(out, "\nprojects\n"); s < 0 || d < s || p < d {
 		t.Errorf("healthy: sections out of order:\n%s", out)
@@ -933,7 +967,8 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
 		"  shop       project uid ",
 		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n             | in shop's checkout:\n             | $ devopsy @devopsy@one:dev --status\n",
-		"\n    eu/prod  not released yet\n",
+		// An instance's environments under its name, a level down.
+		"\n    eu\n      prod   not released yet\n",
 		"\n    prod     released just now by ",
 		"\n             warning: db restarting\n",
 		// The server's clock, taken last and compared on arrival.
@@ -1146,6 +1181,31 @@ func TestServerInfoEnvironments(t *testing.T) {
 	}, ownedByMe))
 	if !slices.Contains(got, "app/prod") || !slices.Contains(got, "shop/prod") {
 		t.Errorf("a project user's tree in its own home: %v", got)
+	}
+}
+
+// A project user's report is its project's: another directory in its tree, and a claim of
+// another project, are none of its environments, since the door releases nothing else for it.
+// A claim that does not read stays, said as any is.
+func TestServerInfoOwnView(t *testing.T) {
+	t.Parallel()
+	info := remote.ServerInfo{
+		Environments: []remote.Environment{{Path: "shop/prod"}, {Path: "shop/eu/prod"}, {Path: "blog/prod"}},
+		UIDs: []remote.UIDClaim{
+			{Owner: "env:shop:prod", UID: 1}, {Owner: "project:shop:eu", UID: 2}, {Owner: "project:blog", UID: 3},
+			{Name: "x", Bad: "not a claim"},
+		},
+	}
+	ownView(&info, "devopsy-shop")
+	var paths, owners []string
+	for _, e := range info.Environments {
+		paths = append(paths, e.Path)
+	}
+	for _, c := range info.UIDs {
+		owners = append(owners, cmp.Or(c.Owner, c.Name))
+	}
+	if info.ProjectUser != "devopsy-shop" || !slices.Equal(paths, []string{"shop/prod", "shop/eu/prod"}) || !slices.Equal(owners, []string{"env:shop:prod", "project:shop:eu", "x"}) {
+		t.Errorf("own view: %q, %q, %q", info.ProjectUser, paths, owners)
 	}
 }
 

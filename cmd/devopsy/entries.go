@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ func entriesWarn(es []remote.StatusEntry) bool {
 func copyableEntries(es []remote.StatusEntry) []remote.StatusEntry {
 	out := make([]remote.StatusEntry, 0, len(es))
 	for _, e := range es {
-		e.Key, e.Group = report.Copyable(e.Key), report.Copyable(e.Group)
+		e.Key, e.Group, e.Instance = report.Copyable(e.Key), report.Copyable(e.Group), report.Copyable(e.Instance)
 		e.Lines = slices.Clone(e.Lines)
 		for j := range e.Lines {
 			e.Lines[j] = report.Copyable(e.Lines[j])
@@ -166,7 +167,8 @@ type laidLine struct {
 
 // layOut lays out es in the order print shows them: a section's heading
 // on each change of section, a project's heading on each change of
-// group when its first entry is not one of the heading's (Head), a key
+// group when its first entry is not one of the heading's (Head), an
+// instance's the same way under it, a key
 // on the first line of each run of it, a warning's first line in a
 // section starting with its level's mark (report.WarnLevel.Mark),
 // a row of cells with its run's widths (cellWidths), each key, name,
@@ -184,20 +186,28 @@ func layOut(es []remote.StatusEntry) []laidLine {
 			out = append(out, laidLine{kind: lineSection, section: e.Section, value: e.Section})
 		}
 		newGroup := newSection || e.Group != prev.Group
-		if e.Group != "" && newGroup && !e.Head {
+		if e.Group != "" && newGroup && (!e.Head || e.Instance != "") {
 			out = append(out, laidLine{kind: lineGroup, section: e.Section, indent: 2, key: report.Copyable(e.Group), group: true})
+		}
+		newInstance := newGroup || e.Instance != prev.Instance
+		if e.Instance != "" && newInstance && !e.Head {
+			out = append(out, laidLine{kind: lineGroup, section: e.Section, indent: 4, key: report.Copyable(e.Instance), group: true})
 		}
 		indent := 0
 		switch {
+		case e.Instance != "" && e.Head:
+			indent = 4
+		case e.Instance != "":
+			indent = 6
 		case e.Group != "" && !e.Head:
 			indent = 4
 		case e.Section != "":
 			indent = 2
 		}
-		newKey := newGroup || e.Key != prev.Key || e.Name != prev.Name || e.Head != prev.Head
+		newKey := newInstance || e.Key != prev.Key || e.Name != prev.Name || e.Head != prev.Head
 		key := report.Copyable(e.Key)
 		if e.Head {
-			key = report.Copyable(e.Group)
+			key = report.Copyable(cmp.Or(e.Instance, e.Group))
 		}
 		// The entry as report says a message (report.Rows): a warning's first line its
 		// message, tagged, and its other lines its details; any entry's lines its values,
@@ -245,7 +255,7 @@ func cellWidths(es []remote.StatusEntry) map[int][]int {
 	var order []string
 	run := ""
 	for i, e := range es {
-		if i == 0 || e.Key != es[i-1].Key || e.Section != es[i-1].Section || e.Group != es[i-1].Group {
+		if i == 0 || e.Key != es[i-1].Key || e.Section != es[i-1].Section || e.Group != es[i-1].Group || e.Instance != es[i-1].Instance {
 			run = fmt.Sprintf("run\x00%d", i)
 		}
 		if len(e.Cells) == 0 {
@@ -437,7 +447,7 @@ func wrapAt(line string, col, width, hang int, wrap bool) []string {
 }
 
 // sharedLater says whether an entry after es[i], under the same key in
-// the same section and group with no other key between, holds the same
+// the same section, group and instance with no other key between, holds the same
 // remedies as es[i].
 func sharedLater(es []remote.StatusEntry, i int) bool {
 	if len(es[i].Remedies) == 0 {
@@ -445,7 +455,7 @@ func sharedLater(es []remote.StatusEntry, i int) bool {
 	}
 	lines := report.RemedyLines(es[i].Remedies)
 	for _, e := range es[i+1:] {
-		if e.Key != es[i].Key || e.Group != es[i].Group || e.Section != es[i].Section {
+		if e.Key != es[i].Key || e.Group != es[i].Group || e.Instance != es[i].Instance || e.Section != es[i].Section {
 			return false
 		}
 		if slices.Equal(report.RemedyLines(e.Remedies), lines) {

@@ -53,8 +53,10 @@ const StatusNoContainer = "none"
 // at a level (StatusInfo, StatusHighlight, StatusWarning), with the
 // ways to act on it. Section and Group place it in a report laid out in
 // parts (--server-info's server, projects, leftovers; a project in
-// projects), empty in a flat one; Head marks a line of its group's
-// heading, shown under the group's name; Name is what a row is of when
+// projects), empty in a flat one; Instance places it under its group's
+// instance (an environment's row, a claim's, what is left of one), shown
+// under the instance's name; Head marks a line of its group's heading,
+// or of its instance's with Instance, shown on the name's line; Name is what a row is of when
 // its key does not say it (a gone environment's long name, keyed gone),
 // a row of its own apart from another of the same key; Cells are its first line's
 // cells, a row aligned with the others of its run, Lines[0] holding them
@@ -63,6 +65,7 @@ type StatusEntry struct {
 	Level    string          `json:"level"`
 	Section  string          `json:"section,omitempty"`
 	Group    string          `json:"group,omitempty"`
+	Instance string          `json:"instance,omitempty"`
 	Head     bool            `json:"head,omitempty"`
 	Key      string          `json:"key"`
 	Name     string          `json:"name,omitempty"`

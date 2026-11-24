@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -435,11 +436,27 @@ func serverFacts() (remote.ServerInfo, error) {
 		info.EnvironmentsUnread = err.Error()
 	}
 	info.UIDsDir, info.UIDs = uidFacts(info.Root)
-	if !asProjectUser() {
+	if asProjectUser() {
+		ownView(&info, currentLogin().name)
+	} else {
 		d, _ := remote.ServerDoor()
 		leftFacts(&info, r, d, trees)
 	}
 	return info, nil
+}
+
+// ownView keeps of info, read as the project user user, what is its project's: the door
+// releases nothing else for it, so another directory in its tree is none of its environments.
+func ownView(info *remote.ServerInfo, user string) {
+	info.ProjectUser = user
+	project := door.ProjectOfUser(user)
+	info.Environments = slices.DeleteFunc(info.Environments, func(e remote.Environment) bool {
+		return !envPathIn(project, e.Path)
+	})
+	info.UIDs = slices.DeleteFunc(info.UIDs, func(c remote.UIDClaim) bool {
+		o, err := uids.ParseOwner(c.Owner)
+		return c.Bad == "" && err == nil && o.Project != project
+	})
 }
 
 // releaseDirs are where a release's compose project works: the release root, by its path and
@@ -1724,28 +1741,53 @@ func nameChunk(s string) (chunk, rest string) {
 }
 
 // projectRows are a project's entries in the order it shows them: its
-// heading's first, then each row by its key's name, what is left of a
-// gone environment among the live ones, each row's entries (its warning,
-// what is left beside it) kept together and in their order.
+// heading's first, then each row and each instance by name, an
+// instance's heading first in it and its rows by name, what is left of
+// a gone environment among the live ones, each row's entries (its
+// warning, what is left beside it) kept together and in their order.
 func projectRows(es []remote.StatusEntry) []remote.StatusEntry {
-	// A row is its name's, else its key's.
+	// A row is its name's, else its key's, in its instance.
 	rowOf := func(e remote.StatusEntry) string { return cmp.Or(e.Name, e.Key) }
+	// A block is an instance's (its heading and rows), else one row of no instance's.
+	type block struct {
+		instance bool
+		name     string // the instance's, else the row's
+		heads    []remote.StatusEntry
+		rows     [][]remote.StatusEntry
+	}
 	var head []remote.StatusEntry
-	var rows [][]remote.StatusEntry
+	var blocks []*block
+	blockOf := func(e remote.StatusEntry) *block {
+		in, name := e.Instance != "", cmp.Or(e.Instance, rowOf(e))
+		if i := slices.IndexFunc(blocks, func(b *block) bool { return b.instance == in && b.name == name }); i >= 0 {
+			return blocks[i]
+		}
+		blocks = append(blocks, &block{instance: in, name: name})
+		return blocks[len(blocks)-1]
+	}
 	for _, e := range es {
-		if e.Head {
+		if e.Head && e.Instance == "" {
 			head = append(head, e)
 			continue
 		}
-		if i := slices.IndexFunc(rows, func(r []remote.StatusEntry) bool { return rowOf(r[0]) == rowOf(e) }); i >= 0 {
-			rows[i] = append(rows[i], e)
+		b := blockOf(e)
+		if e.Head {
+			b.heads = append(b.heads, e)
 			continue
 		}
-		rows = append(rows, []remote.StatusEntry{e})
+		if i := slices.IndexFunc(b.rows, func(r []remote.StatusEntry) bool { return rowOf(r[0]) == rowOf(e) }); i >= 0 {
+			b.rows[i] = append(b.rows[i], e)
+			continue
+		}
+		b.rows = append(b.rows, []remote.StatusEntry{e})
 	}
-	slices.SortStableFunc(rows, func(a, b []remote.StatusEntry) int { return byName(rowOf(a[0]), rowOf(b[0])) })
-	for _, r := range rows {
-		head = append(head, r...)
+	slices.SortStableFunc(blocks, func(a, b *block) int { return byName(a.name, b.name) })
+	for _, b := range blocks {
+		head = append(head, b.heads...)
+		slices.SortStableFunc(b.rows, func(x, y []remote.StatusEntry) int { return byName(rowOf(x[0]), rowOf(y[0])) })
+		for _, r := range b.rows {
+			head = append(head, r...)
+		}
 	}
 	return head
 }
@@ -1873,7 +1915,9 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 	// The uid claims: a project's on its heading, an environment's on its row, one whose
 	// environment is gone in its project, one that does not read the section's.
 	envUID := map[string]remote.UIDClaim{}
-	projectUIDs := map[string][]string{}
+	// A project's claim on its heading, an instance's on its instance's (by project, then
+	// instance, "" for the project's own).
+	projectUIDs := map[string]map[string][]string{}
 	staleProject := map[string][]remote.StatusEntry{}
 	for _, c := range info.UIDs {
 		rm := func(kind func(string, ...string) report.Remedy) report.Remedy {
@@ -1897,18 +1941,17 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		if o.Env != "" {
 			envUID[o.ComposeName()] = c
 		} else {
-			words := "project uid " + uid
-			if o.Instance != "" {
-				words += " for " + o.Instance
+			if projectUIDs[o.Project] == nil {
+				projectUIDs[o.Project] = map[string][]string{}
 			}
-			projectUIDs[o.Project] = append(projectUIDs[o.Project], words)
+			projectUIDs[o.Project][o.Instance] = append(projectUIDs[o.Project][o.Instance], "project uid "+uid)
 		}
 		// A claim left harms nothing: its uid stays reserved, and only freeing it could hand
 		// its files to another environment. An environment's is what is left of it
 		// (leftEntries); a project's is said under its heading.
 		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" && o.Env == "" {
 			e := entry(remote.StatusInfo, o.Project, o.Project, []string{c.Owner + "'s uid claim " + uid + " is left: " + why}, rm(report.Hint))
-			e.Head = true
+			e.Head, e.Instance = true, o.Instance
 			staleProject[o.Project] = append(staleProject[o.Project], e)
 		}
 	}
@@ -1921,6 +1964,7 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 	}
 	for _, env := range info.Environments {
 		project, rest, _ := strings.Cut(env.Path, "/")
+		instance, name := instanceOf(rest)
 		h := parseStatus(env.Status)
 		h.busy = h.busy && !noFlock
 		// A first release that failed is its warning's to say.
@@ -1975,8 +2019,8 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		case h.busy:
 			cells[3] = "an operation running"
 		}
-		e := entry(remote.StatusInfo, project, rest, []string{remote.CellsJoined(cells...)})
-		e.Cells = cells
+		e := entry(remote.StatusInfo, project, name, []string{remote.CellsJoined(cells...)})
+		e.Instance, e.Cells = instance, cells
 		if roles := held[compose]; len(roles) > 0 {
 			e.Lines = append(e.Lines, roleLine(compose, roles))
 		}
@@ -1995,7 +2039,9 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		// A warning per problem, its message and its details, each with the --status that
 		// shows them, said once after the last (sharedLater).
 		for _, lines := range problems {
-			groups[project] = append(groups[project], entry(remote.StatusWarning, project, rest, lines, statusHint(host, info.Root, env)))
+			w := entry(remote.StatusWarning, project, name, lines, statusHint(host, info.Root, env))
+			w.Instance = instance
+			groups[project] = append(groups[project], w)
 		}
 	}
 	// An environment claim with no row of its own and none of what is left (a project user's
@@ -2016,13 +2062,50 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		e.Remedies = nil
 		groups[project] = append(groups[project], e)
 	}
-	// Each project's heading first, its project uid claims, and under it those left.
-	for p, words := range projectUIDs {
-		head := entry(remote.StatusInfo, p, p, []string{strings.Join(words, ", ")})
-		head.Head = true
-		groups[p] = append(append([]remote.StatusEntry{head}, staleProject[p]...), groups[p]...)
+	// Each project's heading first, whose project user it is and its project uid claim, each
+	// instance's its own, and under them those left.
+	users := map[string]string{}
+	for _, p := range info.DoorProjects {
+		users[p] = door.UserOf(p)
+	}
+	if p := door.ProjectOfUser(info.ProjectUser); p != "" {
+		users[p] = info.ProjectUser
+	}
+	headed := mergeKeys(projectUIDs)
+	for p := range users {
+		headed[p] = true
+	}
+	for p := range headed {
+		var heads []remote.StatusEntry
+		head := func(instance string, words []string) {
+			if len(words) > 0 {
+				e := entry(remote.StatusInfo, p, p, []string{strings.Join(words, ", ")})
+				e.Head, e.Instance = true, instance
+				heads = append(heads, e)
+			}
+		}
+		var own []string
+		if u := users[p]; u != "" {
+			own = append(own, "project user "+u)
+		}
+		head("", append(own, projectUIDs[p][""]...))
+		for _, i := range slices.SortedFunc(maps.Keys(projectUIDs[p]), byName) {
+			if i != "" {
+				head(i, projectUIDs[p][i])
+			}
+		}
+		groups[p] = append(append(heads, staleProject[p]...), groups[p]...)
 	}
 	return groups, top
+}
+
+// instanceOf is an environment's path in its project, [<instance>/]<environment>, as its
+// instance ("" for none) and its environment.
+func instanceOf(rest string) (instance, env string) {
+	if i, e, ok := strings.Cut(rest, "/"); ok {
+		return i, e
+	}
+	return "", rest
 }
 
 // oneLine is text, an error's lines joined (errors.Join), on one line.

@@ -27,7 +27,11 @@ func leftSays(info remote.ServerInfo, host, ref string) []string {
 		es = append(es, groups[p]...)
 	}
 	for _, e := range append(es, leftovers...) {
-		s := e.Key + ": " + strings.Join(e.Lines, "\n")
+		key := e.Key
+		if e.Instance != "" {
+			key = e.Instance + "/" + key
+		}
+		s := key + ": " + strings.Join(e.Lines, "\n")
 		if e.Group != "" {
 			s = e.Group + " " + s
 		}

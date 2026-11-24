@@ -87,6 +87,8 @@ type ServerInfo struct {
 	// DoorProjects are the projects of the door's users, whose environments come from a read
 	// of their trees that may give none (a tree that does not answer in time).
 	DoorProjects []string `json:"door_projects,omitempty"`
+	// ProjectUser is the project user the facts were read as, "" for the deploy user.
+	ProjectUser string `json:"project_user,omitempty"`
 
 	// What may be dead or gone, read by the deploy user alone (none for a project user), each
 	// read's failure in its *Unread: unknown, never none.
