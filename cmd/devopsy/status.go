@@ -493,6 +493,9 @@ func containerTrouble(state, health string, exitCode int) string {
 // print shows r on w in st under heading (none without a target), or
 // prints it as JSON: statusWarned when something needs attention.
 func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+	// The warnings after their facts, in the text and in --json, each half
+	// apart: none moves across the containers.
+	r.Entries = append(orderWarnings(r.Entries[:r.head:r.head]), orderWarnings(r.Entries[r.head:])...)
 	r.Attention = entriesWarn(r.Entries) || slices.ContainsFunc(r.Containers, func(c remote.StatusContainer) bool { return c.Level == remote.StatusWarning })
 	code := 0
 	if r.Attention {
@@ -507,24 +510,32 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 	}
 	// One grid, so the facts before the containers and after them share
 	// their key column.
-	tab := newEntryTable(w, st, r.Entries, "containers")
+	tab := newEntryTable(w, st, r.Entries)
 	var rows []layout.Row
 	if heading != "" {
 		rows = append(rows, layout.Row{Cells: []layout.Cell{{Text: report.Copyable(heading), Span: true, Paint: st.name}}})
 	} else {
 		rows = append(rows, tab.row("project", r.Project))
 	}
-	rows = append(rows, tab.rows(r.Entries[:r.head])...)
+	before, pending := tab.rows(r.Entries[:r.head])
+	if len(before) > 0 {
+		// Nothing breaks right under the heading.
+		before[0].Break = false
+	}
+	rows = append(rows, before...)
 	switch {
 	case r.Project == "":
 		// An environment with no release live: no project to list.
 	case len(r.Containers) == 0:
-		rows = append(rows, tab.row("containers", "none"))
+		row := tab.row("containers", "none")
+		row.Break = pending
+		rows = append(rows, row)
+		pending = false
 	default:
-		rows = append(rows, tab.row("containers", ""))
-		// The services in a column at least as wide as "service", the
-		// state after it, then compose's status.
-		services := layout.NewWidths().Min(0, 2+len("service"))
+		// The containers a table under their key: the service, its state,
+		// compose's status (or the health alone); a blank line around it
+		// when it has more than one row.
+		sub := &layout.Grid{}
 		for _, c := range r.Containers {
 			state := c.State
 			switch {
@@ -537,17 +548,21 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 			}
 			// compose's Status already ends in the health, when there is
 			// one: "Up 3 hours (healthy)".
-			if c.Health != "" && c.Status == "" {
-				state += "  " + c.Health
-			}
-			status := ""
+			status := c.Health
 			if c.Status != "" {
 				status = strings.ToLower(c.Status[:1]) + c.Status[1:]
 			}
-			rows = append(rows, layout.Row{Widths: services, Indent: 2, Cells: []layout.Cell{{Text: c.Service}, {Text: state, Span: true}, {Text: status}}})
+			sub.Rows = append(sub.Rows, layout.Row{Cells: layout.Cells(c.Service, state, status)})
 		}
+		many := len(r.Containers) > 1
+		rows = append(rows, layout.Row{Widths: tab.flat, Break: pending || many, Cells: []layout.Cell{{Text: "containers"}, {Grid: sub}}})
+		pending = many
 	}
-	rows = append(rows, tab.rows(r.Entries[r.head:])...)
+	after, _ := tab.rows(r.Entries[r.head:])
+	if len(after) > 0 && pending {
+		after[0].Break = true
+	}
+	rows = append(rows, after...)
 	tab.write(rows)
 	return code
 }

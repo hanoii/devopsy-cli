@@ -27,7 +27,8 @@ func TestEntryTableQuotesBeforePainting(t *testing.T) {
 	}
 }
 
-// A report in sections: a section's heading after a blank line, one key
+// A report in sections: a section's title underlined between blank lines,
+// a blank line around a key of several lines and a project, one key
 // column for every section, so each section's values start where the
 // others' do; a project's heading, its rows indented under it, their
 // cells aligned across projects; a warning's first line starting with
@@ -74,24 +75,35 @@ func TestEntryTableSections(t *testing.T) {
 	newEntryTable(&b, style{}, es).print(es)
 	want := `
 server
+------
+
   system     Linux
   disks      /  xfs
+
              warning: / is 95% full
              | to fix it:
              | $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
+
   setup      a line long enough to wrap at a word once it runs past the report's width, which it
              does here
 
 projects
+--------
+
   app        project uid 1
     prod     released just now by ci          1 of 1 running  uid 2
+
   shop       project uid 3
     staging  released 2 days ago by somebody  1 of 2 running  uid 4
+
              warning: app restarting
+
   web
     dev      gone                             x
 
 leftovers
+---------
+
   images     busybox:1.37  4.3 MB
              alpine:3      8.0 MB
              no release holds them
@@ -137,7 +149,7 @@ func TestEntryTableEscapesKeysAndNames(t *testing.T) {
 }
 
 // Rows of cells under one key align with each other whatever lines sit between them, a full
-// disk's warning between two disks' rows.
+// disk's warning between two disks' rows, under its disk's row with a blank line after it.
 func TestEntryCellsAlignAcrossAWarning(t *testing.T) {
 	t.Parallel()
 	row := func(cells ...string) remote.StatusEntry {
@@ -152,8 +164,11 @@ func TestEntryCellsAlignAcrossAWarning(t *testing.T) {
 	newEntryTable(&b, style{}, es).print(es)
 	want := `
 server
+------
+
   disks  /            ext4  releases
          warning: / is 94% full
+
          /mnt/backup  ext4  snapshots
 `
 	if b.String() != want {
@@ -186,4 +201,132 @@ func TestEntryWrappedRemedyKeepsItsIndent(t *testing.T) {
 		}
 	}
 	t.Fatalf("no numbered fix:\n%s", b.String())
+}
+
+// A run's warnings bound to no row come after its facts, in their order,
+// in what prints and in --json alike: a warning under a row of cells stays
+// under it, a note under its line, nothing moves across runs, and moving
+// them again changes nothing.
+func TestOrderWarnings(t *testing.T) {
+	t.Parallel()
+	e := func(level, key string, line string) remote.StatusEntry {
+		return remote.StatusEntry{Level: level, Section: "server", Key: key, Lines: []string{line}}
+	}
+	row := e(remote.StatusInfo, "disks", "/")
+	row.Cells = []string{"/", "xfs"}
+	note := e(remote.StatusInfo, "docker", "its noProxy leaves ::1")
+	note.Remedies = []report.Remedy{report.Hint("add it")}
+	es := []remote.StatusEntry{
+		e(remote.StatusInfo, "system", "Linux"),
+		e(remote.StatusWarning, "system", "reboot"),
+		e(remote.StatusInfo, "system", "clock: synchronized"),
+		e(remote.StatusWarning, "system", "kexec"),
+		e(remote.StatusInfo, "docker", "29.9.1"),
+		e(remote.StatusInfo, "docker", "containers' proxy: x"),
+		note,
+		e(remote.StatusInfo, "docker", "data: /var/lib/docker"),
+		row,
+		e(remote.StatusWarning, "disks", "/ is full"),
+		e(remote.StatusInfo, "disks", "/mnt"),
+	}
+	lines := func(es []remote.StatusEntry) string {
+		var out []string
+		for _, e := range es {
+			out = append(out, e.Lines[0])
+		}
+		return strings.Join(out, "|")
+	}
+	want := "Linux|clock: synchronized|reboot|kexec|29.9.1|containers' proxy: x|its noProxy leaves ::1|data: /var/lib/docker|/|/ is full|/mnt"
+	got := orderWarnings(es)
+	if lines(got) != want {
+		t.Errorf("ordered:\n%s\nwant:\n%s", lines(got), want)
+	}
+	if again := orderWarnings(got); lines(again) != want {
+		t.Errorf("ordered again:\n%s", lines(again))
+	}
+}
+
+// Blank lines in a report, the same at any width: a section's title
+// underlined between blank lines; around a key of several lines; around a
+// warning bound to nothing, a run of them together; after a warning under
+// a row of cells (none before it) and after a note under its line; before
+// each project; in a project, after an entry's bar lines; none between a
+// project's rows otherwise, nor between keys of one line.
+func TestReportBlankLines(t *testing.T) {
+	t.Parallel()
+	info := func(section, group, key string, lines ...string) remote.StatusEntry {
+		return remote.StatusEntry{Level: remote.StatusInfo, Section: section, Group: group, Key: key, Lines: lines}
+	}
+	warn := func(section, group, key, line string, fixes ...report.Remedy) remote.StatusEntry {
+		e := info(section, group, key, line)
+		e.Level, e.Remedies = remote.StatusWarning, fixes
+		return e
+	}
+	row := func(section, group, key string, cells ...string) remote.StatusEntry {
+		e := info(section, group, key, remote.CellsJoined(cells...))
+		e.Cells = cells
+		return e
+	}
+	note := info("server", "", "docker", "its noProxy leaves ::1")
+	note.Remedies = []report.Remedy{report.Hint("add it:", "devopsy --server-setup-howto proxy")}
+	gone := row("projects", "shop", "pr-1", "gone", "a uid claim")
+	gone.Remedies = []report.Remedy{report.Hint("remove it:", "devopsy @vm1: --gc")}
+	es := []remote.StatusEntry{
+		info("server", "", "system", "Linux"),
+		info("server", "", "arch", "amd64"),
+		info("server", "", "docker", "29.9.1"),
+		info("server", "", "docker", "containers' proxy: x"),
+		note,
+		warn("server", "", "docker", "no apparmor_parser"),
+		warn("server", "", "docker", "logs grow"),
+		row("server", "", "disks", "/", "xfs"),
+		warn("server", "", "disks", "/ is full", report.Fix("", "devopsy @vm1: --gc")),
+		row("server", "", "disks", "/mnt", "ext4"),
+		row("projects", "shop", "prod", "released", "1 of 1 running"),
+		gone,
+		row("projects", "shop", "dev", "released", "1 of 1 running"),
+		row("projects", "web", "prod", "released", "1 of 1 running"),
+	}
+	var b bytes.Buffer
+	newEntryTable(&b, style{}, es).print(es)
+	want := `
+server
+------
+
+  system  Linux
+  arch    amd64
+
+  docker  29.9.1
+          containers' proxy: x
+          its noProxy leaves ::1
+          | add it:
+          | $ devopsy --server-setup-howto proxy
+
+          warning: no apparmor_parser
+          warning: logs grow
+
+  disks   /     xfs
+          warning: / is full
+          | to fix it:
+          | $ devopsy @vm1: --gc
+
+          /mnt  ext4
+
+projects
+--------
+
+  shop
+    prod  released  1 of 1 running
+    pr-1  gone      a uid claim
+          | remove it:
+          | $ devopsy @vm1: --gc
+
+    dev   released  1 of 1 running
+
+  web
+    prod  released  1 of 1 running
+`
+	if b.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
+	}
 }

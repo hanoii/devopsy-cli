@@ -2911,12 +2911,12 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 [ -z "${FAKE_SHOW:-}" ] || printf "$FAKE_SHOW"
 `, 0o755)
 	out, code := s.run([]string{"FAKE_DB_DOWN=1"}, "--status")
-	if code != 0 || !strings.HasPrefix(out, "project     shop\ncontainers\n") || !strings.Contains(out, "  app ") || !strings.Contains(out, "  db       exited\n") ||
+	if code != 0 || !strings.HasPrefix(out, "project     shop\n\ncontainers  app ") || !strings.Contains(out, "  db   exited\n") ||
 		!strings.Contains(out, "url         https://shop.example\n            https://www.shop.example\n") || !strings.Contains(out, "running     app\n") {
 		t.Fatalf("local status (%d):\n%s", code, out)
 	}
 	// A service with no container is listed as such.
-	if out, code := s.run([]string{"FAKE_ABSENT=db"}, "--status"); code != 0 || !strings.Contains(out, "  db       no container\n") || strings.Count(out, "  db ") != 1 {
+	if out, code := s.run([]string{"FAKE_ABSENT=db"}, "--status"); code != 0 || !strings.Contains(out, "  db   no container\n") || strings.Count(out, "  db ") != 1 {
 		t.Errorf("a service with no container (%d):\n%s", code, out)
 	}
 	// A project compose cannot read lists its containers all the same,
@@ -2925,7 +2925,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 		t.Errorf("a project compose config fails on (%d):\n%s", code, out)
 	}
 	// A container restarting needs attention.
-	if out, code := s.run([]string{"FAKE_DB_RESTARTING=1"}, "--status"); code != statusWarned || !strings.Contains(out, "  db       restarting\n") {
+	if out, code := s.run([]string{"FAKE_DB_RESTARTING=1"}, "--status"); code != statusWarned || !strings.Contains(out, "  db   restarting\n") {
 		t.Errorf("a container restarting (%d):\n%s", code, out)
 	}
 	// The capability's warning, its fix under it, every key aligned on
@@ -2946,7 +2946,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 		len(r.Entries) != 2 || r.Entries[0].Key != "url" || strings.Join(r.Entries[0].Lines, " ") != "https://shop.example https://www.shop.example" {
 		t.Errorf("--status --json (%d, %v): %+v\n%s%s", code, err, r, stdout, stderr)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet\n") || !regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !regexp.MustCompile(`\nrelease +none: not released yet\n`).MatchString(out) || !regexp.MustCompile(`\ndisks +\S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
 		t.Fatalf("unreleased status (%d):\n%s", code, out)
 	}
 	// A current that is a directory (a failed release's containers
@@ -2955,7 +2955,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	if err := os.MkdirAll(filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "mnt", "storage"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "release     none: not released yet\n") || strings.Contains(out, "containers") {
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !regexp.MustCompile(`\nrelease +none: not released yet\n`).MatchString(out) || strings.Contains(out, "containers") {
 		t.Fatalf("a current that is a directory (%d):\n%s", code, out)
 	}
 	os.RemoveAll(filepath.Join(s.root, "shop", "prod", "current"))
@@ -3974,7 +3974,7 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 		t.Errorf("the failed first release's containers stay:\n%s", docker)
 	}
 	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
-	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || len(entries) != 1 || !strings.Contains(out, "release     warning: none: "+entries[0].Name()+" failed\n            | see why:\n            | $ devopsy @devopsy@one:dev --log\n") {
+	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || len(entries) != 1 || !strings.Contains(out, "release  warning: none: "+entries[0].Name()+" failed\n         | see why:\n         | $ devopsy @devopsy@one:dev --log\n") {
 		t.Errorf("--status after a failed first release (%d):\n%s", code, out)
 	}
 	// The command it names copies as shown, a server in brackets quoted.

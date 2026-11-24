@@ -1310,7 +1310,7 @@ type serverReport struct {
 	Host   string            `json:"host,omitempty"`
 	Facts  remote.ServerInfo `json:"facts"`
 	// Entries are what --server-info shows of the facts, in order, each
-	// warning after the line it is about, under its key.
+	// warning under its key, after its facts (orderWarnings) or under the row it is about.
 	Entries []remote.StatusEntry `json:"entries"`
 	// Attention says something is at StatusWarning: it exits 3.
 	Attention bool `json:"attention"`
@@ -1319,6 +1319,8 @@ type serverReport struct {
 // print shows r on w in st under heading, or prints it as JSON:
 // serverInfoWarned when something needs attention.
 func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+	// The warnings after their facts, in the text and in --json.
+	r.Entries = orderWarnings(r.Entries)
 	r.Attention = entriesWarn(r.Entries)
 	code := 0
 	if r.Attention {
@@ -1431,6 +1433,33 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		hw = append(hw, "up "+duration(time.Duration(info.Uptime*float64(time.Second))))
 	}
 	more(strings.Join(hw, ", "))
+	// Against the operator's clock, which a laptop or CI keeps
+	// synchronized: off by the way's one-way time at most.
+	clock := map[string]string{"yes": "synchronized", "no": "not synchronized"}[info.NTP]
+	off := ""
+	if info.Time != 0 {
+		off = clockOffset(time.Unix(0, info.Time).Sub(now))
+		clock = strings.TrimPrefix(clock+", "+off, ", ")
+	}
+	if clock != "" {
+		more("clock: " + clock)
+	}
+	if info.NTP == "no" {
+		why := "certificates and logs need it synchronized"
+		if off != "" {
+			why = off + ": " + why
+		}
+		fixes := []report.Remedy{report.Fix("as root:", "timedatectl set-ntp true")}
+		if info.NTPService == "yes" {
+			// Its time service runs and no server answers it: a network
+			// that blocks NTP (UDP 123) out.
+			fixes = []report.Remedy{
+				report.Hint("its time service runs and no time server answers (UDP 123 blocked out?); what it tried:", "timedatectl timesync-status"),
+				report.Fix("name one the network has, NTP=<host> in /etc/systemd/timesyncd.conf.d/ (or chrony's sources), as root"),
+			}
+		}
+		forAdmin(report.ClockUnsynced, []string{why}, fixes...)
+	}
 	// Memory the kernel keeps from the rest, which MemTotal leaves out
 	// (kdump's) or counts (Kexec HandOver's).
 	var kept []string
@@ -1459,33 +1488,6 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			why += ", for " + strings.Join(info.RebootPackages, ", ")
 		}
 		forAdmin(report.RebootNeeded, []string{why}, rebootFix(ref))
-	}
-	// Against the operator's clock, which a laptop or CI keeps
-	// synchronized: off by the way's one-way time at most.
-	clock := map[string]string{"yes": "synchronized", "no": "not synchronized"}[info.NTP]
-	off := ""
-	if info.Time != 0 {
-		off = clockOffset(time.Unix(0, info.Time).Sub(now))
-		clock = strings.TrimPrefix(clock+", "+off, ", ")
-	}
-	if clock != "" {
-		more("clock " + clock)
-	}
-	if info.NTP == "no" {
-		why := "certificates and logs need it synchronized"
-		if off != "" {
-			why = off + ": " + why
-		}
-		fixes := []report.Remedy{report.Fix("as root:", "timedatectl set-ntp true")}
-		if info.NTPService == "yes" {
-			// Its time service runs and no server answers it: a network
-			// that blocks NTP (UDP 123) out.
-			fixes = []report.Remedy{
-				report.Hint("its time service runs and no time server answers (UDP 123 blocked out?); what it tried:", "timedatectl timesync-status"),
-				report.Fix("name one the network has, NTP=<host> in /etc/systemd/timesyncd.conf.d/ (or chrony's sources), as root"),
-			}
-		}
-		forAdmin(report.ClockUnsynced, []string{why}, fixes...)
 	}
 
 	if dr := info.Door; dr != nil {
@@ -1545,7 +1547,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		// Docker lists apparmor whenever the kernel has it, and then loads
 		// its profile with apparmor_parser: without it no container
 		// starts ("the docker-default profile could not be loaded").
-		security := "security " + strings.Join(d.Security, " ")
+		security := "security: " + strings.Join(d.Security, " ")
 		if !info.AppArmor {
 			security += " (no AppArmor in this kernel)"
 		}
@@ -1554,7 +1556,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			warn("the kernel has AppArmor and the server has no apparmor_parser: Docker cannot load its profile, so containers fail to start",
 				report.Fix("install the apparmor package, as root"))
 		}
-		logs := "logs " + d.LogDriver
+		logs := "logs: " + d.LogDriver
 		if d.LogOptsKnown {
 			for _, k := range sortedKeysOf(d.LogOpts) {
 				logs += " " + k + "=" + d.LogOpts[k]
@@ -1569,14 +1571,30 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			warn("containers' logs grow without a limit (json-file without max-size) until the disk is full",
 				report.Fix(`"log-opts": {"max-size": "20m", "max-file": "5"} in /etc/docker/daemon.json, then restart Docker, as root: containers created after it get it`))
 		}
+		// Where Docker keeps its data, which disks then names alone: before the proxies, whose
+		// notes end the key's facts.
+		var data []string
+		for _, disk := range info.Disks {
+			for _, p := range disk.Paths {
+				switch what, path, _ := strings.Cut(p, "="); what {
+				case "docker":
+					data = append(data, "data: "+path)
+				case "containerd":
+					data = append(data, what+": "+path)
+				}
+			}
+		}
+		if len(data) > 0 {
+			more(strings.Join(data, ", "))
+		}
 		if d.Proxy != "" {
-			more("proxy " + d.Proxy)
+			more("proxy: " + d.Proxy)
 		}
 		// The proxy containers get, and the loopback a request to the container itself would send
 		// there: curl and libcurl do unless noProxy names it (an app calling itself on localhost).
 		// A note, not a warning: Go and most checks never do, and nothing devopsy runs needs it.
 		for _, p := range d.ClientProxies {
-			line := "containers' proxy " + p.Proxy
+			line := "containers' proxy: " + p.Proxy
 			if p.For != "default" {
 				line += " (for " + p.For + ")"
 			}
@@ -1598,21 +1616,6 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		case d.Proxy == "" && containers:
 			warn("the deploy user's containers get a proxy and Docker's daemon none: its pulls go direct",
 				stepsFix("give Docker's daemon the proxy, as root", howto.Proxy))
-		}
-		// Where Docker keeps its data, which disks then names alone.
-		var data []string
-		for _, disk := range info.Disks {
-			for _, p := range disk.Paths {
-				switch what, path, _ := strings.Cut(p, "="); what {
-				case "docker":
-					data = append(data, "data "+path)
-				case "containerd":
-					data = append(data, what+" "+path)
-				}
-			}
-		}
-		if len(data) > 0 {
-			more(strings.Join(data, ", "))
 		}
 	}
 
@@ -1881,15 +1884,16 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 	for _, env := range info.Environments {
 		envNames[composeNameOf(env.Path)] = true
 	}
-	// roleLine is what compose name holds: its roles and what it exports.
-	roleLine := func(name string, roles []string) string {
-		line := "role " + strings.Join(roles, ", ")
+	// roleLine is what compose name holds: its roles and what it exports,
+	// after what it is (a sub-label).
+	roleLine := func(label, name string, roles []string) string {
+		line := label + ": " + strings.Join(roles, ", ")
 		var ex []string
 		for _, k := range sortedKeysOf(exports[name]) {
 			ex = append(ex, k+"="+exports[name][k])
 		}
 		if len(ex) > 0 {
-			line += ", exports " + strings.Join(ex, ", ")
+			line += ", exports: " + strings.Join(ex, ", ")
 		}
 		return line
 	}
@@ -1908,7 +1912,7 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 	// A role held by no environment (the admin's own compose project) is the section's.
 	for _, p := range sortedKeysOf(held) {
 		if !envNames[p] {
-			topAdd(remote.StatusInfo, "roles", p+": "+roleLine(p, held[p]))
+			topAdd(remote.StatusInfo, "roles", roleLine(p, p, held[p]))
 		}
 	}
 
@@ -2022,7 +2026,7 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		e := entry(remote.StatusInfo, project, name, []string{remote.CellsJoined(cells...)})
 		e.Instance, e.Cells = instance, cells
 		if roles := held[compose]; len(roles) > 0 {
-			e.Lines = append(e.Lines, roleLine(compose, roles))
+			e.Lines = append(e.Lines, roleLine("role", compose, roles))
 		}
 		groups[project] = append(groups[project], e)
 		// --status's warnings (envState.entries), whose fixes --status

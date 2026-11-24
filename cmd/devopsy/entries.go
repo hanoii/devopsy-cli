@@ -100,14 +100,9 @@ type entryTable struct {
 	width int
 }
 
-// newEntryTable is a table whose flat key column is at least as wide as
-// each of more.
-func newEntryTable(w io.Writer, st style, es []remote.StatusEntry, more ...string) entryTable {
-	t := entryTable{w: w, st: st, sections: layout.NewWidths(), flat: layout.NewWidths(), width: reportWidth}
-	for _, k := range more {
-		t.flat.Min(0, layout.Width(k))
-	}
-	return t
+// newEntryTable is a table for es.
+func newEntryTable(w io.Writer, st style, es []remote.StatusEntry) entryTable {
+	return entryTable{w: w, st: st, sections: layout.NewWidths(), flat: layout.NewWidths(), width: reportWidth}
 }
 
 // row is value under key in the column of the entries with no section.
@@ -116,21 +111,83 @@ func (t entryTable) row(key, value string) layout.Row {
 }
 
 // print prints es as one grid (rows), a blank line first when it starts
-// with a section's heading.
-func (t entryTable) print(es []remote.StatusEntry) { t.write(t.rows(es)) }
+// with a section's title.
+func (t entryTable) print(es []remote.StatusEntry) {
+	rows, _ := t.rows(es)
+	t.write(rows)
+}
 
 // write prints rows as one grid at the table's width, a blank line first
-// when the first row breaks (a section's heading): every row of a report
-// in one grid, so its columns are measured together.
+// when the first is a section's title: every row of a report in one grid,
+// so its columns are measured together.
 func (t entryTable) write(rows []layout.Row) {
 	if len(rows) == 0 {
 		return
 	}
 	g := &layout.Grid{Rows: rows, Width: t.width, MinRoom: minWrapRoom}
-	if rows[0].Break {
+	if rows[0].Break && rows[0].Underline {
 		fmt.Fprintln(t.w)
 	}
 	fmt.Fprint(t.w, g.String())
+}
+
+// sameRun says whether a and b are one run of a report: the entries
+// under one key that layOut shows as one, in one section, group and
+// instance.
+func sameRun(a, b remote.StatusEntry) bool {
+	return a.Section == b.Section && a.Group == b.Group && a.Instance == b.Instance && a.Key == b.Key && a.Name == b.Name && a.Head == b.Head
+}
+
+// blocks says of each of es whether it is a block, a message with lines
+// of its own (a warning, or a note: an entry with remedies that does not
+// start its run), and whether a block is bound to what is above it: a
+// note always, a warning when the nearest entry before it in its run that
+// is no block has cells (a disk's, an environment's row). The answer is
+// the same before and after the warnings move (orderWarnings).
+func blocks(es []remote.StatusEntry) (block, bound []bool) {
+	block, bound = make([]bool, len(es)), make([]bool, len(es))
+	for i, e := range es {
+		starts := i == 0 || !sameRun(es[i-1], e)
+		switch {
+		case e.Level == remote.StatusWarning:
+			block[i] = true
+			j := i - 1
+			for j >= 0 && sameRun(es[j], e) && block[j] {
+				j--
+			}
+			bound[i] = j >= 0 && sameRun(es[j], e) && len(es[j].Cells) > 0
+		case len(e.Remedies) > 0 && !starts:
+			block[i], bound[i] = true, true
+		}
+	}
+	return block, bound
+}
+
+// orderWarnings is es with each run's warnings that are bound to no row
+// after its facts, in their order: a warning reads after what it is about,
+// the facts of its key together above it. Notes stay under their line,
+// and a warning under a row of cells under its row. Run on what a report
+// prints and on its --json alike.
+func orderWarnings(es []remote.StatusEntry) []remote.StatusEntry {
+	_, bound := blocks(es)
+	out := make([]remote.StatusEntry, 0, len(es))
+	for i := 0; i < len(es); {
+		j := i
+		for j < len(es) && sameRun(es[i], es[j]) {
+			j++
+		}
+		var moved []remote.StatusEntry
+		for k := i; k < j; k++ {
+			if es[k].Level == remote.StatusWarning && !bound[k] {
+				moved = append(moved, es[k])
+				continue
+			}
+			out = append(out, es[k])
+		}
+		out = append(out, moved...)
+		i = j
+	}
+	return out
 }
 
 // minWrapRoom is the least room prose wraps into: with less left after
@@ -151,6 +208,7 @@ const (
 // words as they show (report.Copyable).
 type laidLine struct {
 	kind    int
+	entry   int // the entry it is of, -1 for a section's or a group's heading
 	section string
 	indent  int
 	key     string // shown on this line only
@@ -181,15 +239,15 @@ func layOut(es []remote.StatusEntry) []laidLine {
 	for i, e := range es {
 		newSection := i == 0 || e.Section != prev.Section
 		if newSection && e.Section != "" {
-			out = append(out, laidLine{kind: lineSection, section: e.Section, value: e.Section})
+			out = append(out, laidLine{kind: lineSection, entry: -1, section: e.Section, value: e.Section})
 		}
 		newGroup := newSection || e.Group != prev.Group
 		if e.Group != "" && newGroup && (!e.Head || e.Instance != "") {
-			out = append(out, laidLine{kind: lineGroup, section: e.Section, indent: 2, key: report.Copyable(e.Group), group: true})
+			out = append(out, laidLine{kind: lineGroup, entry: -1, section: e.Section, indent: 2, key: report.Copyable(e.Group), group: true})
 		}
 		newInstance := newGroup || e.Instance != prev.Instance
 		if e.Instance != "" && newInstance && !e.Head {
-			out = append(out, laidLine{kind: lineGroup, section: e.Section, indent: 4, key: report.Copyable(e.Instance), group: true})
+			out = append(out, laidLine{kind: lineGroup, entry: -1, section: e.Section, indent: 4, key: report.Copyable(e.Instance), group: true})
 		}
 		indent := 0
 		switch {
@@ -220,7 +278,7 @@ func layOut(es []remote.StatusEntry) []laidLine {
 		}
 		rows := report.Rows(level, strings.Join(values[:min(len(values), 1)], ""), details, remedies)
 		for j, l := range values {
-			line := laidLine{kind: lineEntry, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level, first: j == 0}
+			line := laidLine{kind: lineEntry, entry: i, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level, first: j == 0}
 			if j == 0 {
 				line.value = rows[0].Text
 			}
@@ -236,7 +294,7 @@ func layOut(es []remote.StatusEntry) []laidLine {
 			out = append(out, line)
 		}
 		for _, r := range rows[1:] {
-			out = append(out, laidLine{kind: lineBar, section: e.Section, indent: indent, value: r.Text, hang: r.Hang, level: e.Level})
+			out = append(out, laidLine{kind: lineBar, entry: i, section: e.Section, indent: indent, value: r.Text, hang: r.Hang, level: e.Level})
 		}
 		prev = e
 	}
@@ -267,8 +325,9 @@ func cellRuns(es []remote.StatusEntry) map[int]string {
 	return runs
 }
 
-// rows are es as layOut lays them out: a section's heading bold after a
-// blank line, a project's name in its color, a warning's message and the
+// rows are es as layOut lays them out, their warnings ordered
+// (orderWarnings): a section's title bold and underlined, a blank line
+// before and after it, a project's name in its color, a warning's message and the
 // lines after a bar colored as devopsy's own lines are (report.Colored,
 // report.PaintBar: the message yellow, the bar dim, its text plain, a
 // command bold), a highlight's lines bold; in a section, prose past the
@@ -276,10 +335,61 @@ func cellRuns(es []remote.StatusEntry) map[int]string {
 // one, and a row of cells past it moves its last cell whole to a line of
 // its own at the column. A command never wraps, nor anything in a flat
 // report.
-func (t entryTable) rows(es []remote.StatusEntry) []layout.Row {
-	var out []layout.Row
+//
+// Blank lines, the same at any width: before and after a block that is
+// bound to nothing (blocks), after one that is, a run of blocks that
+// stack together as one; before and after a run of
+// more than one line outside a group; before a project; in a group, after
+// an entry's bar lines. pending says the row after the last one breaks.
+func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending bool) {
+	es = orderWarnings(es)
+	block, bound := blocks(es)
+	laid := layOut(es)
+	// Each entry's run, by its first entry, and the lines each run shows.
+	start := make([]int, len(es))
+	for i := range es {
+		if i > 0 && sameRun(es[i-1], es[i]) {
+			start[i] = start[i-1]
+		} else {
+			start[i] = i
+		}
+	}
+	shown := map[int]int{}
+	for _, l := range laid {
+		if l.entry >= 0 {
+			shown[start[l.entry]]++
+		}
+	}
+	long := func(i int) bool { return shown[start[i]] > 1 && es[start[i]].Group == "" }
+	// stacks says es[i] goes on under the block before it with no blank
+	// line: a bound block under its row's, or a warning under a warning
+	// bound to nothing (a run of them together, as --server-setup's).
+	stacks := func(i int) bool {
+		return i > 0 && sameRun(es[i-1], es[i]) && block[i-1] && block[i] && (bound[i] || !bound[i-1])
+	}
 	runs := map[string]*layout.Widths{}
-	for _, l := range layOut(es) {
+	for j, l := range laid {
+		brk := pending
+		pending = false
+		first := l.entry >= 0 && (j == 0 || laid[j-1].entry != l.entry)
+		last := l.entry >= 0 && (j+1 == len(laid) || laid[j+1].entry != l.entry)
+		switch {
+		case l.kind == lineSection:
+			brk, pending = true, true
+		case l.group && l.indent == 2 && (l.kind == lineGroup || l.key != ""):
+			// A project's heading, with facts of its own or none.
+			brk = true
+		case first:
+			i := l.entry
+			brk = brk || (block[i] && !bound[i] && !stacks(i)) || (start[i] == i && long(i))
+		}
+		if last {
+			i := l.entry
+			next := i + 1
+			pending = (block[i] && !(next < len(es) && stacks(next))) ||
+				(long(i) && (next == len(es) || start[next] == next)) ||
+				(es[i].Group != "" && l.kind == lineBar)
+		}
 		keys := t.flat
 		if l.section != "" {
 			keys = t.sections
@@ -299,13 +409,13 @@ func (t entryTable) rows(es []remote.StatusEntry) []layout.Row {
 		}
 		switch l.kind {
 		case lineSection:
-			out = append(out, layout.Row{Widths: keys, Break: true, Cells: []layout.Cell{{Text: l.value, Span: true, Paint: t.st.head}}})
+			out = append(out, layout.Row{Widths: keys, Break: true, Underline: true, Cells: []layout.Cell{{Text: l.value, Span: true, Paint: t.st.head}}})
 		case lineGroup:
-			out = append(out, layout.Row{Widths: keys, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}})
+			out = append(out, layout.Row{Widths: keys, Break: brk, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}})
 		case lineEntry:
 			key := layout.Cell{Text: l.key}
 			value := layout.Cell{Text: l.value, Fit: prose}
-			row := layout.Row{Widths: keys, Indent: l.indent, Paint: paint}
+			row := layout.Row{Widths: keys, Break: brk, Indent: l.indent, Paint: paint}
 			if l.group {
 				// The project's name in its color, its facts as any line's.
 				key.Paint, value.Paint, row.Paint = t.st.name, paint, nil
@@ -337,10 +447,10 @@ func (t entryTable) rows(es []remote.StatusEntry) []layout.Row {
 			if t.st.on {
 				bar.Paint = report.PaintBar
 			}
-			out = append(out, layout.Row{Widths: keys, Cells: []layout.Cell{{}, bar}})
+			out = append(out, layout.Row{Widths: keys, Break: brk, Cells: []layout.Cell{{}, bar}})
 		}
 	}
-	return out
+	return out, pending
 }
 
 // sharedLater says whether an entry after es[i], under the same key in

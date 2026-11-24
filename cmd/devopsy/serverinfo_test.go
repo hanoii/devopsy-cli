@@ -214,18 +214,18 @@ func TestServerInfoReport(t *testing.T) {
 	out, warnings := serverInfoSays(healthy(), "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{
 		// The server's own, then devopsy's install, each its own section.
-		"\ndevopsy\n  version    0.53.0\n  releases   /home/devopsy, keep 5 (at most 5)\n",
+		"\ndevopsy\n-------\n\n  version    0.53.0\n  releases   /home/devopsy, keep 5 (at most 5)\n",
 		"  snapshots  in each environment's directory, keep at most 5",
-		"\nserver\n  system     Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
+		"\nserver\n------\n\n  system     Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
 		"2 CPUs, 4.3 GB memory (2.1 GB available), no swap, load 0.10 0.20 0.30, up 3 days",
-		"             clock synchronized\n",
+		"             clock: synchronized\n",
 		"  docker     29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
-		"security apparmor seccomp",
-		"logs json-file max-file=5 max-size=20m",
-		"             data /var/lib/docker\n",
+		"security: apparmor seccomp",
+		"logs: json-file max-file=5 max-size=20m",
+		"             data: /var/lib/docker\n",
 		"  disks      /  xfs  40.0 GB free of 80.0 GB  50% used  reflinks  releases, docker\n",
-		"\nprojects\n  shop\n    prod     released 10 min ago by ana  1 of 3 running\n    Staging  released 1 h ago by ana     1 of 1 running\n" +
-			"  traefik\n    prod     released 24 h ago by ci     1 of 1 running\n             role proxy, exports BASE_DOMAIN=vm1.example.com\n",
+		"\nprojects\n--------\n\n  shop\n    prod     released 10 min ago by ana  1 of 3 running\n    Staging  released 1 h ago by ana     1 of 1 running\n" +
+			"\n  traefik\n    prod     released 24 h ago by ci     1 of 1 running\n             role: proxy, exports: BASE_DOMAIN=vm1.example.com\n",
 	} {
 		if !strings.Contains(out+"\n", want) {
 			t.Errorf("healthy: no %q in:\n%s", want, out)
@@ -245,17 +245,17 @@ func TestServerInfoReport(t *testing.T) {
 		{Owner: "project:traefik", UID: 5}, {Owner: "env:traefik:prod", UID: 6},
 	}
 	inst.DoorProjects = []string{"bookshop"}
-	tree := "\nprojects\n" +
+	tree := "\nprojects\n--------\n\n" +
 		"  bookshop   project user devopsy-bookshop\n" +
 		"    asia     project uid 8\n" +
 		"      prod   released 10 min ago by ana                  uid 11\n" +
 		"    usa      project uid 7\n" +
 		"      dev    released 10 min ago by ana                  uid 10\n" +
 		"      prod   released 10 min ago by ana                  uid 9\n" +
-		"  shop\n" +
+		"\n  shop\n" +
 		"    prod     released 10 min ago by ana  1 of 3 running\n" +
 		"    Staging  released 1 h ago by ana     1 of 1 running\n" +
-		"  traefik    project uid 5\n" +
+		"\n  traefik    project uid 5\n" +
 		"    prod     released 24 h ago by ci     1 of 1 running  uid 6\n"
 	if out, _ := serverInfoSays(inst, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, tree) {
 		t.Errorf("instances: no %q in:\n%s", tree, out)
@@ -275,7 +275,7 @@ func TestServerInfoReport(t *testing.T) {
 	// No project on the server: the section says none as its value.
 	empty := healthy()
 	empty.Environments, empty.Containers = nil, nil
-	if out, _ := serverInfoSays(empty, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "\nprojects\n             none\n") {
+	if out, _ := serverInfoSays(empty, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "\nprojects\n--------\n\n             none\n") {
 		t.Errorf("no project:\n%s", out)
 	}
 	// A count says one in the singular.
@@ -291,7 +291,7 @@ func TestServerInfoReport(t *testing.T) {
 	proxied.Docker.ClientProxies = []remote.ClientProxy{{For: "default", File: "/home/devopsy/.docker/config.json",
 		Proxy: "http://proxy.example.com:3128", NoProxy: "localhost,10.0.0.0/8"}}
 	out, ws := serverInfoSays(proxied, "vm1", "vm1:", "0.53.0", now)
-	if !strings.Contains(out, "             containers' proxy http://proxy.example.com:3128\n") ||
+	if !strings.Contains(out, "             containers' proxy: http://proxy.example.com:3128\n") ||
 		!strings.Contains(out, "its noProxy leaves 127.0.0.1, ::1 to the proxy") {
 		t.Errorf("a proxy leaving loopback to it:\n%s", out)
 	}
@@ -548,7 +548,7 @@ func TestServerInfoReport(t *testing.T) {
 	}
 	info0 := healthy()
 	info0.Time = now.Add(42 * time.Second).UnixNano()
-	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "clock synchronized, about 42 s ahead of "+vocab.Operator.Poss) {
+	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "clock: synchronized, about 42 s ahead of "+vocab.Operator.Poss) {
 		t.Errorf("clock ahead: %+v\n%s", warnings, out)
 	}
 
@@ -807,7 +807,7 @@ func TestServerInfoReport(t *testing.T) {
 	info = healthy()
 	info.Docker.Security, info.AppArmor, info.AppArmorParser = []string{"seccomp"}, false, false
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-	if len(warnings) != 0 || !strings.Contains(out, "security seccomp (no AppArmor in this kernel)") {
+	if len(warnings) != 0 || !strings.Contains(out, "security: seccomp (no AppArmor in this kernel)") {
 		t.Errorf("no AppArmor in the kernel: %+v\n%s", warnings, out)
 	}
 
@@ -961,10 +961,10 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	for _, want := range []string{
 		"@devopsy@one:\n",
 		"  releases   " + s.root,
-		"containerd /var/lib/containerd",
+		"containerd: /var/lib/containerd",
 		"  docker     29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
 		"  disks      /  ",
-		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
+		"  roles      traefik-prod: proxy, exports: BASE_DOMAIN=vm1.example.com\n",
 		"  shop       project uid ",
 		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n             | in shop's checkout:\n             | $ devopsy @devopsy@one:dev --status\n",
 		// An instance's environments under its name, a level down.
@@ -972,12 +972,14 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"\n    prod     released just now by ",
 		"\n             warning: db restarting\n",
 		// The server's clock, taken last and compared on arrival.
-		"clock not synchronized, ",
+		"clock: not synchronized, ",
 		"$ timedatectl timesync-status",
 		// The setup as --server-setup judges it, with its fixes: no systemd here refuses every
 		// step, so --server-setup is offered only past that refusal, once after the last line
-		// it fixes. A server never set up says the first setup records the login it runs as.
-		"  setup      warning: never set up by devopsy: --upgrade applies nothing here\n             no deploy user recorded yet: the first --server-setup records the login it runs as",
+		// it fixes. A server never set up says the first setup records the login it runs as, its
+		// warnings after that fact.
+		"  setup      no deploy user recorded yet: the first --server-setup records the login it runs as",
+		"\n\n             warning: never set up by devopsy: --upgrade applies nothing here\n",
 		"(its instance's credentials)\n             | to fix it:\n             | fix what refuses every step of the setup first, then run --server-setup\n",
 		"             warning: Docker: systemd is not this host's init",
 		"             warning: daemon.json: logs: none, devopsy's",
@@ -1049,7 +1051,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	for _, want := range []string{
 		"this machine (",
 		"  releases   " + s.root,
-		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
+		"  roles      traefik-prod: proxy, exports: BASE_DOMAIN=vm1.example.com\n",
 		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n",
 		"$ cd " + filepath.Join(s.root, "shop", "dev", "current") + " && devopsy --status",
 	} {

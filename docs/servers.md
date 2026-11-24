@@ -405,11 +405,16 @@ project that is no environment is a line of its own. A project user's
 
 `leftovers`, what may be dead or gone on the server, described below.
 
+Each part's title is underlined, a blank line before and after it. A key
+of several lines, a project and a warning get a blank line around them,
+a warning about a row (a disk's, an environment's) a blank line after it
+only, and several warnings in a row stay together. A fact that names
+what it is says it first (`clock: synchronized`, `logs: json-file`).
 Prose wraps at 100 columns, a command never, and a row of cells moves
 its last cell whole to a line of its own instead.
 
-What needs attention is a warning under the line it is about, its first
-line starting with `warning: `, its details and its fix after a `| `, as
+What needs attention is a warning under its key, after the key's facts,
+or under the row it is about, its first line starting with `warning: `, its details and its fix after a `| `, as
 devopsy's own lines show them; a fix that serves several lines in a row
 (`--server-setup` for the setup's items) comes once, after the last of
 them:
