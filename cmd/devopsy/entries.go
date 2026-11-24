@@ -15,22 +15,37 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
+// reportMode is how a report prints: as text, as JSON, or as text in
+// boxes.
+type reportMode int
+
+const (
+	textReport reportMode = iota
+	jsonReport
+	boxedReport
+)
+
 // reportArgs reads the arguments of a report flag (--status,
-// --server-info): whether --json, and code, the exit code when that is
-// all (its help, a usage error), else -1.
-func reportArgs(flag string, args []string, usage string) (asJSON bool, code int) {
+// --server-info): how it prints (--json, --borders, never both), and
+// code, the exit code when that is all (its help, a usage error), else -1.
+func reportArgs(flag string, args []string, usage string) (mode reportMode, code int) {
 	for _, a := range args {
 		switch a {
 		case "--help", "-h":
 			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[flag]))
-			return false, 0
-		case "--json":
-			asJSON = true
+			return textReport, 0
+		case "--json", "--borders":
+			m := map[string]reportMode{"--json": jsonReport, "--borders": boxedReport}[a]
+			if mode != textReport && mode != m {
+				report.Say(report.ErrorLevel, flag+" takes --json or --borders, never both", []string{usage})
+				return textReport, 1
+			}
+			mode = m
 		default:
-			return false, fail(usage)
+			return textReport, fail(usage)
 		}
 	}
-	return asJSON, -1
+	return mode, -1
 }
 
 // entriesWarn says whether any of es is a warning.
@@ -98,6 +113,10 @@ type entryTable struct {
 	sections, flat *layout.Widths
 	// width is where a section's prose wraps, reportWidth.
 	width int
+	// borders draws each section, or a flat report, in a box: a rule
+	// between its keys and before each project, where blank lines go
+	// without.
+	borders bool
 }
 
 // newEntryTable is a table for es.
@@ -125,10 +144,55 @@ func (t entryTable) write(rows []layout.Row) {
 		return
 	}
 	g := &layout.Grid{Rows: rows, Width: t.width, MinRoom: minWrapRoom}
+	if t.borders {
+		g = t.boxed(rows)
+	}
 	if rows[0].Break && rows[0].Underline {
 		fmt.Fprintln(t.w)
 	}
 	fmt.Fprint(t.w, g.String())
+}
+
+// boxed is rows with each section's in a box under its title (bold, no
+// underline, the box right under it), a flat report's after its heading in
+// one, the boxes sharing their columns.
+func (t entryTable) boxed(rows []layout.Row) *layout.Grid {
+	root := &layout.Grid{Width: t.width, MinRoom: minWrapRoom}
+	var box *layout.Grid
+	for i, r := range rows {
+		switch {
+		case r.Underline:
+			r.Underline = false
+			root.Rows = append(root.Rows, r)
+			box = nil
+		case i == 0 && spans(r):
+			// The report's own heading.
+			root.Rows = append(root.Rows, r)
+		default:
+			if box == nil {
+				box = &layout.Grid{Border: layout.Box, Width: t.width, MinRoom: minWrapRoom}
+				root.Rows = append(root.Rows, layout.Row{Cells: []layout.Cell{{Grid: box}}})
+			}
+			if spans(r) {
+				// A project's heading in the key column, so the box's column
+				// line runs on.
+				r.Cells = append([]layout.Cell(nil), r.Cells...)
+				r.Cells[0].Span = false
+			}
+			box.Rows = append(box.Rows, r)
+		}
+	}
+	return root
+}
+
+// spans says whether every cell of r spans: a heading's row.
+func spans(r layout.Row) bool {
+	for _, c := range r.Cells {
+		if !c.Span {
+			return false
+		}
+	}
+	return len(r.Cells) > 0
 }
 
 // sameRun says whether a and b are one run of a report: the entries
@@ -373,15 +437,19 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		pending = false
 		first := l.entry >= 0 && (j == 0 || laid[j-1].entry != l.entry)
 		last := l.entry >= 0 && (j+1 == len(laid) || laid[j+1].entry != l.entry)
+		// A key's first line outside a group, or a project's heading: where
+		// a box draws its rule.
+		keyStart := false
 		switch {
 		case l.kind == lineSection:
-			brk, pending = true, true
+			brk, pending = true, !t.borders
 		case l.group && l.indent == 2 && (l.kind == lineGroup || l.key != ""):
 			// A project's heading, with facts of its own or none.
-			brk = true
+			brk, keyStart = true, true
 		case first:
 			i := l.entry
 			brk = brk || (block[i] && !bound[i] && !stacks(i)) || (start[i] == i && long(i))
+			keyStart = start[i] == i && es[i].Group == ""
 		}
 		if last {
 			i := l.entry
@@ -448,6 +516,19 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 				bar.Paint = report.PaintBar
 			}
 			out = append(out, layout.Row{Widths: keys, Break: brk, Cells: []layout.Cell{{}, bar}})
+		}
+		if t.borders && l.kind != lineSection {
+			// In a box: a rule at each key and project, an empty row where a
+			// blank line goes inside a key, a section's keys at its edge.
+			r := &out[len(out)-1]
+			blank := r.Break && !keyStart
+			r.Break = keyStart
+			if l.section != "" {
+				r.Indent = max(0, r.Indent-2)
+			}
+			if blank {
+				out = append(out[:len(out)-1], layout.Row{Widths: keys}, *r)
+			}
 		}
 	}
 	return out, pending

@@ -1238,7 +1238,7 @@ func envPathIn(project, path string) bool {
 // target, each with what needs attention in it, warned with its fix;
 // serverInfoWarned when anything was.
 func runServerInfo(t *remote.Target, args []string) int {
-	asJSON, code := reportArgs("--server-info", args, "usage: devopsy [@<server>] --server-info [--json]")
+	mode, code := reportArgs("--server-info", args, "usage: devopsy [@<server>] --server-info [--json | --borders]")
 	if code >= 0 {
 		return code
 	}
@@ -1260,7 +1260,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 			head += " (" + name + ")"
 			r.Host = name
 		}
-		return r.print(os.Stdout, styleFor(os.Stdout), head, asJSON)
+		return r.print(os.Stdout, styleFor(os.Stdout), head, mode)
 	}
 	// The facts' first byte is when the server's clock is compared: the
 	// session's end comes after.
@@ -1283,7 +1283,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 		head += " (" + t.Host + ")"
 	}
 	r := serverReport{Server: ref, Host: t.Host, Facts: info, Entries: serverInfoReport(info, t.Host, ref, version, out.at)}
-	return r.print(os.Stdout, styleFor(os.Stdout), head, asJSON)
+	return r.print(os.Stdout, styleFor(os.Stdout), head, mode)
 }
 
 // firstWrite is a buffer that keeps when its first write came. The buffer
@@ -1318,7 +1318,7 @@ type serverReport struct {
 
 // print shows r on w in st under heading, or prints it as JSON:
 // serverInfoWarned when something needs attention.
-func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+func (r *serverReport) print(w io.Writer, st style, heading string, mode reportMode) int {
 	// The warnings after their facts, in the text and in --json.
 	r.Entries = orderWarnings(r.Entries)
 	r.Attention = entriesWarn(r.Entries)
@@ -1326,7 +1326,7 @@ func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool)
 	if r.Attention {
 		code = serverInfoWarned
 	}
-	if asJSON {
+	if mode == jsonReport {
 		r.Entries = copyableEntries(r.Entries)
 		if err := printJSON(w, r); err != nil {
 			return failErr(err)
@@ -1334,7 +1334,9 @@ func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool)
 		return code
 	}
 	fmt.Fprintln(w, st.name(report.Copyable(heading)))
-	newEntryTable(w, st, r.Entries).print(r.Entries)
+	tab := newEntryTable(w, st, r.Entries)
+	tab.borders = mode == boxedReport
+	tab.print(r.Entries)
 	return code
 }
 

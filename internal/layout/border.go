@@ -153,7 +153,9 @@ func (g *Grid) renderBox(room int) []string {
 		switch {
 		case prev == nil:
 			out = append(out, rule("╭", "┬", "╮", false, cols))
-		case r.Break || prev.Header:
+		case r.Break || prev.Header || spanRow(*prev) == cols:
+			// A rule at a break, under a header, and where the box goes
+			// from a span row to columns or back, so its lines join.
 			out = append(out, rule("├", "┼", "┤", !spanRow(*prev), cols))
 		}
 		out = append(out, g.boxRow(r, widths, inner, room)...)

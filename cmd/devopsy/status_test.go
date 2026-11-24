@@ -113,7 +113,7 @@ func TestStatusPrint(t *testing.T) {
 		},
 	}, "vm1:")
 	var out bytes.Buffer
-	code := r.print(&out, style{}, "@vm1:prod (vm1:shop/prod)", false)
+	code := r.print(&out, style{}, "@vm1:prod (vm1:shop/prod)", textReport)
 	want := `@vm1:prod (vm1:shop/prod)
 release      20261107000000  just now
 
@@ -270,11 +270,11 @@ func TestStatusJSONCopyable(t *testing.T) {
 		Disks:   []remote.Disk{{Paths: []string{"docker=/var/lib/docker"}, Type: "xfs", Size: 100e9, Free: 2e9, Used: 98e9}},
 	}, "devopsy@[::1]:22:")
 	var text, js strings.Builder
-	r.print(&text, style{}, "", false)
+	r.print(&text, style{}, "", textReport)
 	if !strings.Contains(text.String(), "$ devopsy @'devopsy@[::1]:22:' --gc") {
 		t.Fatalf("the text's command is not quoted:\n%s", text.String())
 	}
-	r.print(&js, style{}, "", true)
+	r.print(&js, style{}, "", jsonReport)
 	var got statusReport
 	if err := json.Unmarshal([]byte(js.String()), &got); err != nil {
 		t.Fatal(err)
@@ -353,7 +353,7 @@ func TestStatusPrintColors(t *testing.T) {
 	var out bytes.Buffer
 	// A warning as devopsy's own lines show one: its message yellow and tagged, its details
 	// and its remedies after a dim bar, their texts plain, their commands bold.
-	code := r.print(&out, style{on: true}, "@vm1:prod (vm1:shop/prod)", false)
+	code := r.print(&out, style{on: true}, "@vm1:prod (vm1:shop/prod)", textReport)
 	want := "\033[0;36m@vm1:prod (vm1:shop/prod)\033[0m\n" +
 		"\033[0;33mrelease      warning: the release of 1 was cut off\033[0m\n" +
 		"\n" +
@@ -373,13 +373,13 @@ func TestStatusPrintColors(t *testing.T) {
 		t.Errorf("--status in color (%d):\n%q\nwant:\n%q", code, out.String(), want)
 	}
 	out.Reset()
-	if code := r.print(&out, style{on: true}, "", true); code != statusWarned || bytes.Contains(out.Bytes(), []byte("\033")) {
+	if code := r.print(&out, style{on: true}, "", jsonReport); code != statusWarned || bytes.Contains(out.Bytes(), []byte("\033")) {
 		t.Errorf("--json (%d):\n%s", code, out.String())
 	}
 	// A highlight alone needs no attention.
 	h := statusReport{}
 	h.addFacts(remote.StatusFacts{Entries: []remote.StatusEntry{{Level: remote.StatusHighlight, Key: "url", Lines: []string{"https://shop.example"}}}}, "")
-	if code := h.print(&bytes.Buffer{}, style{}, "", false); code != 0 {
+	if code := h.print(&bytes.Buffer{}, style{}, "", textReport); code != 0 {
 		t.Errorf("a highlight exits %d", code)
 	}
 }

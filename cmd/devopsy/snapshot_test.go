@@ -4142,11 +4142,28 @@ func TestSnapshotsGrid(t *testing.T) {
 	got := snapshotsGrid([]snap{
 		{id: "20261120090100", kind: "full", release: "20261119180200", taken: "2026-11-20 09:01 UTC", size: "1.2 GiB"},
 		{id: "20261122143300", kind: "no-code", release: "rel\x1b[2J", taken: "2026-11-22 14:33 UTC", size: "840 KiB", state: "partial"},
-	}).String()
+	}, false).String()
 	want := "SNAPSHOT        KIND     RELEASE         TAKEN                    SIZE\n" +
 		"20261120090100  full     20261119180200  2026-11-20 09:01 UTC  1.2 GiB\n" +
 		"20261122143300  no-code  rel\\x1b[2J      2026-11-22 14:33 UTC  840 KiB  PARTIAL\n"
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// --borders draws a list, so it goes with the list form alone: with a
+// word that acts it is refused, the word named, before any session.
+func TestBordersListsOnly(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	for _, args := range [][]string{
+		{"@prod", "--releases", "remove", "failed", "--borders"},
+		{"@prod", "--snapshots", "remove", "1999", "--borders"},
+		{"@prod", "--snapshots", "--borders", "restore", "1999"},
+	} {
+		out, code := s.run(nil, args...)
+		if code == 0 || !strings.Contains(out, "takes no --borders") || !strings.Contains(out, "usage: devopsy @") {
+			t.Errorf("%q (%d):\n%s", args, code, out)
+		}
 	}
 }

@@ -18,16 +18,16 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// runReleases implements devopsy @<target> --releases [remove
-// <id|failed>... [--yes]]: the list, or releases removed with the images only they
+// runReleases implements devopsy @<target> --releases [--borders | remove
+// <id|failed>... [--yes]]: the list (in a box with --borders), or releases removed with the images only they
 // hold. Ids are exact or a unique prefix, failed is every failed or
 // rolled-back release,
 // and every word is resolved before anything is asked or removed: one that
 // names nothing, or the current release, refuses them all. Asks [y/N] at a
 // terminal unless --yes; without one, --yes is required.
 func runReleases(t *remote.Target, projectName string, args []string, color bool) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --releases [remove <id|failed>... [--yes]]"
-	yes := false
+	usage := "usage: devopsy @" + targetRef(t) + " --releases [--borders | remove <id|failed>... [--yes]]"
+	yes, borders := false, false
 	var words []string
 	for _, a := range args {
 		switch a {
@@ -36,6 +36,8 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 			return 0
 		case "--yes", "-y":
 			yes = true
+		case "--borders":
+			borders = true
 		default:
 			if strings.HasPrefix(a, "-") {
 				report.Error(usage)
@@ -48,6 +50,9 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 		report.Error(usage)
 		return 1
 	}
+	if borders && len(words) > 0 {
+		return takesNo(1, "--releases remove", "--borders", usage)
+	}
 
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.ReleasesScript(t), bytes.NewReader(nil), &out, false)
@@ -58,7 +63,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 		return code
 	}
 	if len(words) == 0 {
-		fmt.Print(remote.FormatReleases(out.String()))
+		fmt.Print(remote.FormatReleases(out.String(), borders))
 		return 0
 	}
 
@@ -79,7 +84,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 				Remedies: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --releases "+strings.Join(args, " ")+" --yes")},
 			})
 		}
-		lines := remote.ReleasesGrid(chosen, false).Lines()
+		lines := remote.ReleasesGrid(chosen, false, false).Lines()
 		what := "this release"
 		if len(chosen) > 1 {
 			what = fmt.Sprintf("these %d releases", len(chosen))

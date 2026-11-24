@@ -7,7 +7,7 @@ uses most:
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps; the one left is marked rolled back
 devopsy @vm1:prod --reload       # the release again with its variables and imports as they are now, then its reload: step
-devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one
+devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one; --borders in a box
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
@@ -21,7 +21,7 @@ devopsy @vm1:prod --snapshot     # a snapshot: every service with data stopped f
 devopsy @vm1:prod --snapshots    # list them; restore, remove, export or import one
 devopsy @vm1:prod --snapshots restore <id>   # its data, code and images back, as a new release (--no-code: the data alone)
 devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   # a snapshot off the server
-devopsy @vm1:prod --status       # the release there, a sync running into or from it, the disks, its containers, images held or moved, the project's own lines; exit 3 when something needs attention, --json for fields
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, the disks, its containers, images held or moved, the project's own lines; exit 3 when something needs attention, --json for fields, --borders in a box
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -479,7 +479,9 @@ A warning only the server's admin can fix carries its
 code to pass on and no fix, and leaves out what only the admin can do
 (the hint to free what kdump keeps, data on XFS).
 
-`--json` prints the facts and the same lines for scripts and agents, each
+`--borders` draws each part in a box under its title, its keys between
+rules, every box's columns at one width. `--json` prints the facts and
+the same lines for scripts and agents, never with `--borders`, each
 warning with its own fix, each line with its `section`, its project
 (`group`), a line of a project's heading (`head`), a row's `cells`, and
 the name of what a row is of when its key does not say it (`name`). Its

@@ -1614,8 +1614,8 @@ func startStops(cwd string, names []string) error {
 // runSnapshots implements devopsy @<target> --snapshots [remove
 // <id>... [--yes]]: the snapshots there, or some removed.
 func runSnapshots(t *remote.Target, projectName string, args []string, color bool) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [remove <id>... [--yes] | restore <id> [--no-code [--accept-image <service>]] [--with-env] [--yes]]"
-	yes := false
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [--borders | remove <id>... [--yes] | restore <id> [--no-code [--accept-image <service>]] [--with-env] [--yes]]"
+	yes, borders := false, false
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -1627,6 +1627,8 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			return 0
 		case "--yes", "-y":
 			yes = true
+		case "--borders":
+			borders = true
 		case "--no-code", "--with-env":
 		default:
 			if strings.HasPrefix(a, "-") {
@@ -1635,6 +1637,9 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			}
 			words = append(words, a)
 		}
+	}
+	if borders && len(words) > 0 {
+		return takesNo(2, "--snapshots "+words[0], "--borders", usage)
 	}
 	if len(words) > 0 && words[0] == "restore" {
 		return runRestore(t, projectName, args)
@@ -1717,7 +1722,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			fmt.Println("no snapshots on " + t.Address + " (devopsy @" + targetRef(t) + " --snapshot takes one)")
 			return 0
 		}
-		fmt.Print(snapshotsGrid(snaps).String())
+		fmt.Print(snapshotsGrid(snaps, borders).String())
 		// How the last take here copied: an imported snapshot says nothing
 		// of that.
 		last := ""
@@ -2959,9 +2964,12 @@ type snap struct{ id, kind, release, taken, size, state, copy string }
 
 // snapshotsGrid lays out snaps as --snapshots lists them: a header, a
 // row each, its size to the right and its state in capitals after, each
-// cell quoted as it shows.
-func snapshotsGrid(snaps []snap) *layout.Grid {
+// cell quoted as it shows; in a box with borders.
+func snapshotsGrid(snaps []snap, borders bool) *layout.Grid {
 	g := &layout.Grid{Widths: layout.NewWidths().Right(4)}
+	if borders {
+		g.Border = layout.Box
+	}
 	g.Rows = append(g.Rows, layout.Row{Header: true, Cells: layout.Cells("SNAPSHOT", "KIND", "RELEASE", "TAKEN", "SIZE")})
 	for _, s := range snaps {
 		cells := []string{s.id, s.kind, s.release, s.taken, s.size, strings.ToUpper(s.state)}

@@ -37,7 +37,7 @@ const statusShowFormat = `<level>\t<key>\t<value>[\t<fix>]`
 // none), then the project's own entries (capabilities/status/show). In a
 // release on a server, its images and the server's disks too.
 func runStatus(cwd string, args []string, color bool) int {
-	asJSON, code := reportArgs("--status", args, "usage: devopsy --status [--json]")
+	mode, code := reportArgs("--status", args, "usage: devopsy --status [--json | --borders]")
 	if code >= 0 {
 		return code
 	}
@@ -51,7 +51,7 @@ func runStatus(cwd string, args []string, color bool) int {
 	}
 	var r statusReport
 	r.addFacts(facts, "")
-	return r.print(os.Stdout, styleFor(os.Stdout), "", asJSON)
+	return r.print(os.Stdout, styleFor(os.Stdout), "", mode)
 }
 
 // runStatusFacts implements the hidden --status-facts on a server: the
@@ -87,7 +87,7 @@ func runStatusFacts(cwd string, args []string) int {
 // or running), then the facts of its current release there, formatted
 // here.
 func runRemoteStatus(t *remote.Target, args []string, color bool) int {
-	asJSON, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json]")
+	mode, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json | --borders]")
 	if code >= 0 {
 		return code
 	}
@@ -110,7 +110,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	r := statusReport{Target: targetRef(t), Server: t.Host + ":" + t.Path}
 	r.addHeader(parseStatus(header), t)
 	r.addFacts(facts, remote.ServerRef(t))
-	return r.print(os.Stdout, styleFor(os.Stdout), fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), asJSON)
+	return r.print(os.Stdout, styleFor(os.Stdout), fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), mode)
 }
 
 // statusFacts are the facts of the project at cwd (projectDir its
@@ -492,7 +492,7 @@ func containerTrouble(state, health string, exitCode int) string {
 
 // print shows r on w in st under heading (none without a target), or
 // prints it as JSON: statusWarned when something needs attention.
-func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+func (r *statusReport) print(w io.Writer, st style, heading string, mode reportMode) int {
 	// The warnings after their facts, in the text and in --json, each half
 	// apart: none moves across the containers.
 	r.Entries = append(orderWarnings(r.Entries[:r.head:r.head]), orderWarnings(r.Entries[r.head:])...)
@@ -501,7 +501,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 	if r.Attention {
 		code = statusWarned
 	}
-	if asJSON {
+	if mode == jsonReport {
 		r.Entries = copyableEntries(r.Entries)
 		if err := printJSON(w, r); err != nil {
 			return failErr(err)
@@ -511,6 +511,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 	// One grid, so the facts before the containers and after them share
 	// their key column.
 	tab := newEntryTable(w, st, r.Entries)
+	tab.borders = mode == boxedReport
 	var rows []layout.Row
 	if heading != "" {
 		rows = append(rows, layout.Row{Cells: []layout.Cell{{Text: report.Copyable(heading), Span: true, Paint: st.name}}})
@@ -528,7 +529,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 		// An environment with no release live: no project to list.
 	case len(r.Containers) == 0:
 		row := tab.row("containers", "none")
-		row.Break = pending
+		row.Break = pending || tab.borders
 		rows = append(rows, row)
 		pending = false
 	default:
@@ -555,7 +556,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 			sub.Rows = append(sub.Rows, layout.Row{Cells: layout.Cells(c.Service, state, status)})
 		}
 		many := len(r.Containers) > 1
-		rows = append(rows, layout.Row{Widths: tab.flat, Break: pending || many, Cells: []layout.Cell{{Text: "containers"}, {Grid: sub}}})
+		rows = append(rows, layout.Row{Widths: tab.flat, Break: pending || many || tab.borders, Cells: []layout.Cell{{Text: "containers"}, {Grid: sub}}})
 		pending = many
 	}
 	after, _ := tab.rows(r.Entries[r.head:])

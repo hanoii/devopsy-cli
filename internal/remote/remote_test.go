@@ -671,7 +671,7 @@ func TestFormatReleases(t *testing.T) {
 		"left\t1760000000\tapp-prod\t20261001000000\tjq:1.8\tsha256:j\t" + images.ToolKeeps + "\n" +
 		"20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
 		"20261004120000\t-\tfailed\t\t\n"
-	got := FormatReleases(out)
+	got := FormatReleases(out, false)
 	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11 (11.8.9)\n  20261004120000", "FAILED",
 		"Images the project's removals left (each pruning retries):\n  mariadb:11  app-prod, release 20261001000000, ", "\n    a container of app-prod uses its image\n",
 		"Names the project's removals kept for a release's tool (each pruning removes them once no tool runs by them):\n  jq:1.8  app-prod, release 20261001000000, "} {
@@ -679,7 +679,7 @@ func TestFormatReleases(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
-	if FormatReleases("") != "No releases yet.\n" {
+	if FormatReleases("", false) != "No releases yet.\n" {
 		t.Error("empty output")
 	}
 }
@@ -1902,7 +1902,7 @@ exit 0
 	if rs := ParseReleases(out); len(rs) != 1 || strings.Join(rs[0].Images, " ") != "registry/app:abc=1.2 mariadb:11=sha256:0123456789ab app-a-prod-x" {
 		t.Errorf("images with versions: %+v", rs)
 	}
-	if f := FormatReleases(out); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
+	if f := FormatReleases(out, false); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
 		t.Errorf("formatted:\n%s", f)
 	}
 	// A release never made current, cut off mid-fetch: in progress while
@@ -3904,7 +3904,7 @@ func TestReleasesGrid(t *testing.T) {
 	}
 	want := "* 20261005120000  ci               build main@abc1234567\n" +
 		"  20261004120000  somebody\\x1b[2J  build fe\\x1b]8;;x\\x07at@def  FAILED\n"
-	if got := ReleasesGrid(rs, false).String(); got != want {
+	if got := ReleasesGrid(rs, false, false).String(); got != want {
 		t.Errorf("got:\n%q\nwant:\n%q", got, want)
 	}
 }

@@ -330,3 +330,76 @@ projects
 		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
 	}
 }
+
+// A report flag prints as text, as JSON or in boxes, never as two of
+// them: --json with --borders is a usage error naming both.
+func TestReportArgs(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args []string
+		mode reportMode
+		code int
+	}{
+		{nil, textReport, -1},
+		{[]string{"--json"}, jsonReport, -1},
+		{[]string{"--borders"}, boxedReport, -1},
+		{[]string{"--json", "--json"}, jsonReport, -1},
+		{[]string{"--json", "--borders"}, textReport, 1},
+		{[]string{"--borders", "--json"}, textReport, 1},
+		{[]string{"--yaml"}, textReport, 1},
+	} {
+		if mode, code := reportArgs("--status", c.args, "usage: devopsy --status [--json | --borders]"); mode != c.mode || code != c.code {
+			t.Errorf("%q: %d, %d, want %d, %d", c.args, mode, code, c.mode, c.code)
+		}
+	}
+}
+
+// With borders, each section is a box under its title, every box's
+// columns at one width: a rule between its keys and before each project,
+// an empty row where a blank line goes inside a key, a project's heading
+// in the key column, its keys at the box's edge.
+func TestReportBoxed(t *testing.T) {
+	t.Parallel()
+	info := func(section, group, key string, lines ...string) remote.StatusEntry {
+		return remote.StatusEntry{Level: remote.StatusInfo, Section: section, Group: group, Key: key, Lines: lines}
+	}
+	row := func(section, group, key string, cells ...string) remote.StatusEntry {
+		e := info(section, group, key, remote.CellsJoined(cells...))
+		e.Cells = cells
+		return e
+	}
+	warn := info("server", "", "system", "reboot")
+	warn.Level = remote.StatusWarning
+	es := []remote.StatusEntry{
+		info("server", "", "system", "Linux", "clock: synchronized"),
+		warn,
+		info("server", "", "docker", "29.9.1"),
+		row("projects", "shop", "prod", "released", "1 of 1 running"),
+		row("projects", "shop", "staging", "released", "0 of 1 running"),
+	}
+	var b bytes.Buffer
+	tab := newEntryTable(&b, style{}, es)
+	tab.borders = true
+	tab.print(es)
+	want := `
+server
+╭───────────┬──────────────────────────╮
+│ system    │ Linux                    │
+│           │ clock: synchronized      │
+│           │                          │
+│           │ warning: reboot          │
+├───────────┼──────────────────────────┤
+│ docker    │ 29.9.1                   │
+╰───────────┴──────────────────────────╯
+
+projects
+╭───────────┬──────────────────────────╮
+│ shop      │                          │
+│   prod    │ released  1 of 1 running │
+│   staging │ released  0 of 1 running │
+╰───────────┴──────────────────────────╯
+`
+	if b.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
+	}
+}

@@ -284,7 +284,8 @@ func TestNested(t *testing.T) {
 
 // A box: a line between its columns, under its header and at a break,
 // every cell padded so its right side holds, a span row across it with no
-// column lines (the last column widened to hold it), a row with no cells
+// column lines (the last column widened to hold it) and a rule where it
+// meets columns, so the lines join, a row with no cells
 // an empty line, a grid in a cell without a box of its own, boxes sharing
 // columns drawn at one width, and prose wrapped inside its cell.
 func TestBox(t *testing.T) {
@@ -300,7 +301,9 @@ func TestBox(t *testing.T) {
 │ SNAPSHOT │ SIZE              │
 ├──────────┼───────────────────┤
 │ s1       │ 1.2 GiB           │
+├──────────┴───────────────────┤
 │   images: app:1 db:2 cache:3 │
+├──────────┬───────────────────┤
 │          │                   │
 ├──────────┼───────────────────┤
 │ s2       │ 840 MiB           │
