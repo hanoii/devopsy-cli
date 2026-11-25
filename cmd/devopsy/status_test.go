@@ -514,3 +514,31 @@ func TestStatusHeaderFixesHintAddress(t *testing.T) {
 		}
 	}
 }
+
+// --status with no heading (in a project, or in a release on a server)
+// starts with the project's row, a key as any other: a key of several
+// lines after it gets its blank line, and in a box its rule.
+func TestStatusBreaksAfterTheProjectRow(t *testing.T) {
+	t.Parallel()
+	r := statusReport{}
+	r.addFacts(remote.StatusFacts{
+		Project:    "shop-prod",
+		Disks:      []remote.Disk{{Paths: []string{"releases=/home/devopsy", "/=/"}, Type: "xfs", Size: 80e9, Free: 1e9, Used: 79e9}},
+		Containers: []remote.StatusContainer{{Service: "app", State: "running"}},
+	}, "")
+	var plain, boxed bytes.Buffer
+	r.print(&plain, style{}, "", textReport)
+	if !strings.Contains(plain.String(), "warning: / is 99% full") {
+		t.Fatalf("the control: the disk's key has several lines:\n%s", plain.String())
+	}
+	if !strings.Contains(plain.String(), "shop-prod\n\ndisks") {
+		t.Errorf("no blank line before a key of several lines, after the project's row:\n%s", plain.String())
+	}
+	r.print(&boxed, style{}, "", boxedReport)
+	lines := strings.Split(boxed.String(), "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, "│ disks") && !strings.HasPrefix(lines[i-1], "├") {
+			t.Errorf("no rule between the project's row and the next key:\n%s", boxed.String())
+		}
+	}
+}

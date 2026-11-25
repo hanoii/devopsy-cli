@@ -867,7 +867,7 @@ func serverInfoSays(info remote.ServerInfo, host, ref, local string, now time.Ti
 	var b strings.Builder
 	// Unwrapped: what wraps is the formatter's to test (TestEntryTableSections), a line's
 	// words this one's.
-	tab := newEntryTable(&b, style{}, es)
+	tab := newEntryTable(&b, style{})
 	tab.width = 1 << 20
 	tab.print(es)
 	var ws []said
@@ -1509,7 +1509,7 @@ func releasedAt(paths []string, owners ...string) remote.ServerInfo {
 func reportAt(info remote.ServerInfo) string {
 	es := serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC))
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	return b.String()
 }
 

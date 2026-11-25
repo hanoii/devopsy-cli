@@ -97,7 +97,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	// The differences and the refusals together: a refusal stops only the steps that need
 	// what it refuses (setup.Facts.Goes), the rest applied.
 	es := setupEntries(f, targetRef(t), !answered)
-	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
+	newEntryTable(os.Stdout, styleFor(os.Stdout)).print(es)
 	said := sayRefusals(f, report.ErrorLevel, nil, true)
 	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, ask)

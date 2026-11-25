@@ -493,16 +493,15 @@ func containerTrouble(state, health string, exitCode int) string {
 // print shows r on w in st under heading (none without a target), or
 // prints it as JSON: statusWarned when something needs attention.
 func (r *statusReport) print(w io.Writer, st style, heading string, mode reportMode) int {
-	// The warnings after their facts, in the text and in --json, each half
-	// apart: none moves across the containers.
-	r.Entries = append(orderWarnings(r.Entries[:r.head:r.head]), orderWarnings(r.Entries[r.head:])...)
 	r.Attention = entriesWarn(r.Entries) || slices.ContainsFunc(r.Containers, func(c remote.StatusContainer) bool { return c.Level == remote.StatusWarning })
 	code := 0
 	if r.Attention {
 		code = statusWarned
 	}
 	if mode == jsonReport {
-		r.Entries = copyableEntries(r.Entries)
+		// In the order the text prints them (ordered), each half apart:
+		// none moves across the containers.
+		r.Entries = copyableEntries(append(orderWarnings(r.Entries[:r.head:r.head]), orderWarnings(r.Entries[r.head:])...))
 		if err := printJSON(w, r); err != nil {
 			return failErr(err)
 		}
@@ -510,7 +509,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, mode reportM
 	}
 	// One grid, so the facts before the containers and after them share
 	// their key column.
-	tab := newEntryTable(w, st, r.Entries)
+	tab := newEntryTable(w, st)
 	tab.borders = mode == boxedReport
 	var rows []layout.Row
 	if heading != "" {
@@ -519,8 +518,9 @@ func (r *statusReport) print(w io.Writer, st style, heading string, mode reportM
 		rows = append(rows, tab.row("project", r.Project))
 	}
 	before, pending := tab.rows(r.Entries[:r.head])
-	if len(before) > 0 {
-		// Nothing breaks right under the heading.
+	if len(before) > 0 && heading != "" {
+		// Nothing breaks right under the heading; the project's row is no
+		// heading, and the key after it breaks as any.
 		before[0].Break = false
 	}
 	rows = append(rows, before...)

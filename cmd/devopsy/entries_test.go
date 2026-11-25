@@ -18,7 +18,7 @@ func TestEntryTableQuotesBeforePainting(t *testing.T) {
 	es := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "sync", Lines: []string{"none"},
 		Remedies: []report.Remedy{report.Hint("from its parent:", "devopsy @dev --sync --from @[2001:db8::1]:prod")}}}
 	var b bytes.Buffer
-	newEntryTable(&b, style{on: true}, es).print(es)
+	newEntryTable(&b, style{on: true}).print(es)
 	want := "sync  none\n" +
 		"      \033[2m| \033[0mfrom its parent:\n" +
 		"      \033[2m| \033[0m\033[1m$ devopsy @dev --sync --from @'[2001:db8::1]:prod'\033[0m\n"
@@ -72,7 +72,7 @@ func TestEntryTableSections(t *testing.T) {
 		img1, img2,
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	want := `
 server
 ------
@@ -130,7 +130,7 @@ func TestEntryTableEscapesKeysAndNames(t *testing.T) {
 		{Level: remote.StatusInfo, Section: "projects", Group: "ap\x1b[2Jp", Key: "ap\x1b[2Jp", Lines: []string{"project uid 1"}},
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	if strings.Contains(b.String(), "\x1b") {
 		t.Errorf("a key or a heading reaches the terminal with its escape:\n%q", b.String())
 	}
@@ -142,7 +142,7 @@ func TestEntryTableEscapesKeysAndNames(t *testing.T) {
 	// A flat report's key too, as before the layout (the whole row went through Copyable).
 	flat := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "k\x1b[2Jk", Lines: []string{"v"}}}
 	b.Reset()
-	newEntryTable(&b, style{}, flat).print(flat)
+	newEntryTable(&b, style{}).print(flat)
 	if strings.Contains(b.String(), "\x1b") {
 		t.Errorf("a flat report's key: %q", b.String())
 	}
@@ -161,7 +161,7 @@ func TestEntryCellsAlignAcrossAWarning(t *testing.T) {
 		row("/mnt/backup", "ext4", "snapshots"),
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	want := `
 server
 ------
@@ -184,7 +184,7 @@ func TestEntryWrappedRemedyKeepsItsIndent(t *testing.T) {
 	es := []remote.StatusEntry{{Level: remote.StatusWarning, Section: "server", Key: "disks", Lines: []string{"full"},
 		Remedies: []report.Remedy{report.Fix("first\n" + long), report.Fix("second")}}}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	lines := strings.Split(b.String(), "\n")
 	at := func(l string) int {
 		if !strings.HasPrefix(strings.TrimLeft(l, " "), report.BarMark) {
@@ -288,7 +288,7 @@ func TestReportBlankLines(t *testing.T) {
 		row("projects", "web", "prod", "released", "1 of 1 running"),
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	want := `
 server
 ------
@@ -378,7 +378,7 @@ func TestReportBoxed(t *testing.T) {
 		row("projects", "shop", "staging", "released", "0 of 1 running"),
 	}
 	var b bytes.Buffer
-	tab := newEntryTable(&b, style{}, es)
+	tab := newEntryTable(&b, style{})
 	tab.borders = true
 	tab.print(es)
 	want := `
@@ -401,5 +401,32 @@ projects
 `
 	if b.String() != want {
 		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
+// Whether a warning is bound to a row is decided on the order the report
+// built its entries, and moves with it (ordered): one about a line with no
+// cells (a disk that did not read) that moves after a row of cells in its
+// key is still no row's, a blank line between them.
+func TestMovedWarningStaysUnbound(t *testing.T) {
+	t.Parallel()
+	row := remote.StatusEntry{Level: remote.StatusInfo, Section: "server", Key: "disks", Cells: []string{"/mnt", "ext4"}, Lines: []string{remote.CellsJoined("/mnt", "ext4")}}
+	es := []remote.StatusEntry{
+		{Level: remote.StatusInfo, Section: "server", Key: "disks", Lines: []string{"releases /home/devopsy: it did not answer"}},
+		{Level: remote.StatusWarning, Section: "server", Key: "disks", Lines: []string{"the release root's filesystem makes no reflinks"}},
+		row,
+	}
+	_, before := blocks(es)
+	moved, _, after := ordered(es)
+	if moved[2].Level != remote.StatusWarning {
+		t.Fatalf("the control: the warning moves after its key's facts: %v", moved)
+	}
+	if before[1] || after[2] != before[1] {
+		t.Errorf("the warning bound to a row: %v before the move, %v after", before[1], after[2])
+	}
+	var b bytes.Buffer
+	newEntryTable(&b, style{}).print(es)
+	if !strings.Contains(b.String(), "/mnt  ext4\n\n") {
+		t.Errorf("no blank line between a row and a warning that is not about it:\n%s", b.String())
 	}
 }

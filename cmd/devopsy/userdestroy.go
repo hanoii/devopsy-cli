@@ -488,7 +488,7 @@ func (x *userDestroy) print(f destroyFound, m destroyMark) int {
 	if uid != "" {
 		line("Unix user", []string{x.who + " (uid " + uid + ")"})
 	}
-	newEntryTable(os.Stdout, style{}, es).print(es)
+	newEntryTable(os.Stdout, style{}).print(es)
 	report.Info("no destroy: step of "+x.project+"'s runs, nor anything of its user's: what it holds is removed as it is", destroyLeaves...)
 	return 0
 }

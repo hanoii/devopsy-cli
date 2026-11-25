@@ -68,7 +68,7 @@ func runProjectUsersSetup(t *remote.Target, args []string) int {
 		return fail("the server's facts for project users: " + err.Error())
 	}
 	es := doorSetupEntries(f)
-	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
+	newEntryTable(os.Stdout, styleFor(os.Stdout)).print(es)
 	said := sayRefusalsOf(f.Refusals, nil, "", report.ErrorLevel, nil, false)
 	refused := len(f.Refused()) > 0
 	if !f.Applies() {

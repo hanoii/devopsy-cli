@@ -1319,22 +1319,22 @@ type serverReport struct {
 // print shows r on w in st under heading, or prints it as JSON:
 // serverInfoWarned when something needs attention.
 func (r *serverReport) print(w io.Writer, st style, heading string, mode reportMode) int {
-	// The warnings after their facts, in the text and in --json.
-	r.Entries = orderWarnings(r.Entries)
 	r.Attention = entriesWarn(r.Entries)
 	code := 0
 	if r.Attention {
 		code = serverInfoWarned
 	}
 	if mode == jsonReport {
-		r.Entries = copyableEntries(r.Entries)
+		// In the order the text prints them (ordered), which orders the
+		// entries as the report built them.
+		r.Entries = copyableEntries(orderWarnings(r.Entries))
 		if err := printJSON(w, r); err != nil {
 			return failErr(err)
 		}
 		return code
 	}
 	fmt.Fprintln(w, st.name(report.Copyable(heading)))
-	tab := newEntryTable(w, st, r.Entries)
+	tab := newEntryTable(w, st)
 	tab.borders = mode == boxedReport
 	tab.print(r.Entries)
 	return code
