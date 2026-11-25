@@ -1233,12 +1233,13 @@ func envPathIn(project, path string) bool {
 	return remote.ValidEnvName(parts[len(parts)-1])
 }
 
-// runServerInfo implements devopsy [@<server>] --server-info [--json]:
+// runServerInfo implements devopsy [@<server>] --server-info [--json |
+// --borders | --no-borders]:
 // the facts the server's devopsy reports, or this machine's without a
 // target, each with what needs attention in it, warned with its fix;
 // serverInfoWarned when anything was.
 func runServerInfo(t *remote.Target, args []string) int {
-	mode, code := reportArgs("--server-info", args, "usage: devopsy [@<server>] --server-info [--json | --borders]")
+	mode, code := reportArgs("--server-info", args, "usage: devopsy [@<server>] --server-info [--json | --borders | --no-borders]", os.Stdout)
 	if code >= 0 {
 		return code
 	}

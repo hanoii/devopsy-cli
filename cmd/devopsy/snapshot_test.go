@@ -4152,9 +4152,10 @@ func TestSnapshotsGrid(t *testing.T) {
 	}
 }
 
-// --borders draws a list, so it goes with the list form alone: with a
-// word that acts it is refused, the word named, before any session; a
-// word that is none is a usage error as without it.
+// --borders and --no-borders draw a list, so they go with the list form
+// alone: with a word that acts either is refused, named, before any
+// session, and so are both together; a word that is none is a usage error
+// as without them.
 func TestBordersListsOnly(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -4162,10 +4163,22 @@ func TestBordersListsOnly(t *testing.T) {
 		{"@prod", "--releases", "remove", "failed", "--borders"},
 		{"@prod", "--snapshots", "remove", "1999", "--borders"},
 		{"@prod", "--snapshots", "--borders", "restore", "1999"},
+		{"@prod", "--releases", "remove", "failed", "--no-borders"},
+		{"@prod", "--snapshots", "--no-borders", "restore", "1999"},
 	} {
+		flag := args[len(args)-1]
+		if args[2] == "--borders" || args[2] == "--no-borders" {
+			flag = args[2]
+		}
 		out, code := s.run(nil, args...)
-		if code == 0 || !strings.Contains(out, "takes no --borders") || !strings.Contains(out, "usage: devopsy @") {
+		if code == 0 || !strings.Contains(out, "takes no "+flag+"\n") || !strings.Contains(out, "usage: devopsy @") {
 			t.Errorf("%q (%d):\n%s", args, code, out)
+		}
+	}
+	for _, list := range []string{"--releases", "--snapshots"} {
+		out, code := s.run(nil, "@prod", list, "--borders", "--no-borders")
+		if code == 0 || !strings.Contains(out, list+" takes --borders or --no-borders, never both") {
+			t.Errorf("%s with both (%d):\n%s", list, code, out)
 		}
 	}
 	// A word that is no subcommand is a usage error, with --borders as

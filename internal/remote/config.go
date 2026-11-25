@@ -537,6 +537,7 @@ type configFile struct {
 	defaultsNulls map[string]bool
 	environments  map[string]*Target
 	aliases       map[string]Alias
+	borders       bool
 }
 
 // readConfigFile reads a project's (user false) or the user-level (user
@@ -686,6 +687,10 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				t.nulls = nulls
 				t.File = file
 				f.environments[name] = t
+			}
+		case key == "borders" && user:
+			if err := node.Decode(&f.borders); err != nil {
+				return nil, fmt.Errorf("%s: borders: true or false", file)
 			}
 		case key == "aliases" && user:
 			if err := node.Decode(&f.aliases); err != nil {
@@ -1068,6 +1073,9 @@ type Config struct {
 	Defaults *Target
 	// Aliases are the user-level config's.
 	Aliases map[string]Alias
+	// Borders is the user-level config's borders:, the reports and lists
+	// in boxes at a terminal.
+	Borders bool
 	// Files are the files read.
 	Files []string
 }
@@ -1084,7 +1092,7 @@ func LoadConfig(projectDir string) (*Config, error) {
 		}
 		if f != nil {
 			c.Files = append(c.Files, file)
-			c.Aliases = f.aliases
+			c.Aliases, c.Borders = f.aliases, f.borders
 		}
 	}
 	if projectDir == "" {

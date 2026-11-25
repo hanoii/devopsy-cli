@@ -331,3 +331,17 @@ Inside a project, an environment of the same name wins over an alias. An
 alias does not read a project's `.env`, and its instance comes from its
 `to:`, not from `DEVOPSY_INSTANCE`. With `project:`, a `to:` that names an
 instance marks the project as having instances.
+
+## Boxes by default
+
+`borders: true` in your `~/.config/devopsy/config.yaml` draws
+`--status`, `--server-info`, `--releases` and `--snapshots` in boxes at a
+terminal, as `--borders` does:
+
+```yaml
+borders: true
+```
+
+`--no-borders` draws one without them, and `--json` prints JSON as
+always. In a pipe or a file the plain lines stay, whatever the setting
+says; `--borders` still draws boxes there.

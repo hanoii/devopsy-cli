@@ -1940,7 +1940,7 @@ func TestReleasesRemove(t *testing.T) {
 	if out, code := run(nil, "@prod", "--releases", "remove", "1999", "--yes"); code == 0 || !strings.Contains(out, "devopsy@server:prod has no release 1999: nothing removed") {
 		t.Errorf("an unknown id (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@prod", "--releases", "drop", first); code == 0 || !strings.Contains(out, "usage: devopsy @devopsy@server:prod --releases [--borders | remove <id|failed>... [--yes]]") {
+	if out, code := run(nil, "@prod", "--releases", "drop", first); code == 0 || !strings.Contains(out, "usage: devopsy @devopsy@server:prod --releases [--borders | --no-borders | remove <id|failed>... [--yes]]") {
 		t.Errorf("another word (%d):\n%s", code, out)
 	}
 	if got := releases(); len(got) != 5 {

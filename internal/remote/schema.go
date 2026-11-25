@@ -158,6 +158,10 @@ environments:
 const UserSchema = `# ~/.config/devopsy/config.yaml (or $DEVOPSY_HOME/config.yaml): this
 # machine's devopsy config. Unknown keys are errors.
 
+# The reports and lists (--status, --server-info, --releases, --snapshots)
+# in boxes at a terminal, as with --borders; --no-borders draws one plain.
+borders: true
+
 # Shortcuts for targets, usable from any directory: devopsy @vm1-traefik ...
 # to: a target, @[<server>:][<instance>/]<environment> without the @.
 # source: the project's local checkout: its config gives the project, its

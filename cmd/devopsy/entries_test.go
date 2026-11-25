@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -333,8 +334,9 @@ projects
 	}
 }
 
-// A report flag prints as text, as JSON or in boxes, never as two of
-// them: --json with --borders is a usage error naming both.
+// A report flag prints as text, as JSON or in boxes, by one of --json,
+// --borders and --no-borders, never two of them; with none of them, away
+// from a terminal, as text.
 func TestReportArgs(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -345,12 +347,15 @@ func TestReportArgs(t *testing.T) {
 		{nil, textReport, -1},
 		{[]string{"--json"}, jsonReport, -1},
 		{[]string{"--borders"}, boxedReport, -1},
+		{[]string{"--no-borders"}, textReport, -1},
 		{[]string{"--json", "--json"}, jsonReport, -1},
 		{[]string{"--json", "--borders"}, textReport, 1},
 		{[]string{"--borders", "--json"}, textReport, 1},
+		{[]string{"--json", "--no-borders"}, textReport, 1},
+		{[]string{"--borders", "--no-borders"}, textReport, 1},
 		{[]string{"--yaml"}, textReport, 1},
 	} {
-		if mode, code := reportArgs("--status", c.args, "usage: devopsy --status [--json | --borders]"); mode != c.mode || code != c.code {
+		if mode, code := reportArgs("--status", c.args, "usage: devopsy --status [--json | --borders | --no-borders]", &bytes.Buffer{}); mode != c.mode || code != c.code {
 			t.Errorf("%q: %d, %d, want %d, %d", c.args, mode, code, c.mode, c.code)
 		}
 	}
@@ -525,5 +530,50 @@ func TestFlatBoxWidensNoFurtherThanTheTerminal(t *testing.T) {
 	}
 	if w := layout.Width(lines[0]); w > 80 {
 		t.Errorf("on an 80-column terminal the box is %d wide for one line it cannot wrap:\n%s", w, b.String())
+	}
+}
+
+// With neither --borders nor --no-borders, the reports and lists are
+// boxed as the user's config says, at a terminal only: a pipe gets the
+// plain lines without the config being read, and a config that does not
+// parse fails there.
+func TestBordersDefault(t *testing.T) {
+	t.Parallel()
+	loads := 0
+	load := func(c *remote.Config, err error) func(string) (*remote.Config, error) {
+		return func(dir string) (*remote.Config, error) {
+			if dir != "" {
+				t.Errorf("read the config of %q, not the user's alone", dir)
+			}
+			loads++
+			return c, err
+		}
+	}
+	for _, c := range []struct {
+		terminal, borders, want bool
+		err                     error
+	}{
+		{terminal: true, borders: true, want: true},
+		{terminal: true},
+		{borders: true},
+		{terminal: true, err: errors.New("config.yaml: borders: true or false")},
+	} {
+		loads = 0
+		got, err := bordersDefault(c.terminal, load(&remote.Config{Borders: c.borders}, c.err))
+		if got != c.want || (err != nil) != (c.err != nil) {
+			t.Errorf("%+v: %v, %v", c, got, err)
+		}
+		if !c.terminal && loads > 0 {
+			t.Errorf("%+v: the config read away from a terminal", c)
+		}
+	}
+	// What is given wins over the default, and reads no config.
+	for a, want := range map[string]bool{"--borders": true, "--no-borders": false} {
+		if got, err := (bordersArg{a}).on(&bytes.Buffer{}); got != want || err != nil {
+			t.Errorf("%s: %v, %v", a, got, err)
+		}
+	}
+	if b := (bordersArg{}); !b.take("--borders") || !b.take("--borders") || b.take("--no-borders") {
+		t.Error("take: the same flag twice is fine, the other after it refused")
 	}
 }

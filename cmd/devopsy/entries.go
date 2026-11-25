@@ -27,26 +27,78 @@ const (
 )
 
 // reportArgs reads the arguments of a report flag (--status,
-// --server-info): how it prints (--json, --borders, never both), and
-// code, the exit code when that is all (its help, a usage error), else -1.
-func reportArgs(flag string, args []string, usage string) (mode reportMode, code int) {
+// --server-info) printing to w: how it prints (--json, --borders or
+// --no-borders, one of them, else as bordersDefault says), and code, the
+// exit code when that is all (its help, a usage error, a config that does
+// not parse), else -1.
+func reportArgs(flag string, args []string, usage string, w io.Writer) (mode reportMode, code int) {
+	given := ""
 	for _, a := range args {
 		switch a {
 		case "--help", "-h":
 			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[flag]))
 			return textReport, 0
-		case "--json", "--borders":
-			m := map[string]reportMode{"--json": jsonReport, "--borders": boxedReport}[a]
-			if mode != textReport && mode != m {
-				report.Say(report.ErrorLevel, flag+" takes --json or --borders, never both", []string{usage})
+		case "--json", "--borders", "--no-borders":
+			if given != "" && given != a {
+				report.Say(report.ErrorLevel, flag+" takes one of --json, --borders and --no-borders", []string{usage})
 				return textReport, 1
 			}
-			mode = m
+			given = a
 		default:
 			return textReport, fail(usage)
 		}
 	}
-	return mode, -1
+	if given == "--json" {
+		return jsonReport, -1
+	}
+	boxed, err := bordersArg{given}.on(w)
+	switch {
+	case err != nil:
+		return textReport, fail(err.Error())
+	case boxed:
+		return boxedReport, -1
+	}
+	return textReport, -1
+}
+
+// bordersArg is --borders or --no-borders as given to a report or a list,
+// neither for its default.
+type bordersArg struct{ given string }
+
+// take reads a, --borders or --no-borders; false when the other one came
+// before it.
+func (b *bordersArg) take(a string) bool {
+	if b.given != "" && b.given != a {
+		return false
+	}
+	b.given = a
+	return true
+}
+
+// on says whether what prints to w is drawn in boxes: as given, else as
+// bordersDefault says.
+func (b bordersArg) on(w io.Writer) (bool, error) {
+	if b.given != "" {
+		return b.given == "--borders", nil
+	}
+	f, ok := w.(*os.File)
+	return bordersDefault(ok && term.IsTerminal(int(f.Fd())), remote.LoadConfig)
+}
+
+// bordersDefault says whether a report or a list is drawn in boxes when
+// neither --borders nor --no-borders is given: as borders: in the user's
+// config (load, remote.LoadConfig), at a terminal only, so a pipe reads
+// the plain lines whatever the config says. A config that does not parse
+// fails.
+func bordersDefault(terminal bool, load func(string) (*remote.Config, error)) (bool, error) {
+	if !terminal {
+		return false, nil
+	}
+	c, err := load("")
+	if err != nil {
+		return false, err
+	}
+	return c.Borders, nil
 }
 
 // entriesWarn says whether any of es is a warning.
