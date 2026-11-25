@@ -122,3 +122,28 @@ func TestReview5BoxedSnapshotsHeaderKeepsItsColumn(t *testing.T) {
 		}
 	}
 }
+
+// Bug (review 5): with borders, one command wider than the report's 100
+// columns (leftovers' docker rmi of every image no release holds) widens its
+// box, and with it every box sharing its columns: the server's and devopsy's
+// boxes, whose lines all fit, are drawn as wide as that command, each line
+// padded to it, so a terminal narrower than the command wraps every line of
+// every box. Without borders only the command's own line is long.
+func TestReview5BoxedLongCommandWidensOnlyItsBox(t *testing.T) {
+	t.Parallel()
+	info := healthyServerInfo()
+	for i := range 8 {
+		info.Images = append(info.Images, remote.HostImage{ID: "i" + string(rune('a'+i)), Tags: []string{"registry.example.com/team/app-" + string(rune('a'+i)) + ":2026-11-14-build"}, Size: 1e6})
+	}
+	out := review5Report(info, true)
+	if !strings.Contains(out, "docker rmi") {
+		t.Fatalf("the control: no docker rmi in:\n%s", out)
+	}
+	// The server's box: from its title to the next.
+	server := out[strings.Index(out, "server\n"):strings.Index(out, "devopsy\n")]
+	for _, l := range strings.Split(server, "\n") {
+		if w := layout.Width(l); w > reportWidth {
+			t.Fatalf("the server's box drawn %d wide for leftovers' command, past its %d:\n%s", w, reportWidth, l)
+		}
+	}
+}
