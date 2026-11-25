@@ -45,9 +45,10 @@ type column struct {
 	gap      int
 	gapSet   bool
 	overflow bool
-	// width is the widest cell measured; fitted the widest a bordered
-	// grid's last column holds once fitted.
-	width  int
+	// text is the widest text cell measured, nest the widest grid in a
+	// cell; fitted what a box's cells take once laid out as drawn.
+	text   int
+	nest   int
 	fitted int
 }
 
@@ -66,7 +67,8 @@ func (w *Widths) Right(i int) *Widths { w.col(i).align = Right; return w }
 
 // Fixed makes column i n columns wide, whatever its cells: a wider one
 // pushes its own row's next cells (or moves them to the next line, with
-// Overflow).
+// Overflow); in a box it grows to its widest cell, so the box's side
+// holds.
 func (w *Widths) Fixed(i, n int) *Widths { w.col(i).fixed = n; return w }
 
 // Min makes column i at least n columns wide.
@@ -86,7 +88,7 @@ func (w *Widths) size(i int) int {
 	if c.fixed > 0 {
 		return c.fixed
 	}
-	return max(c.width, c.min)
+	return max(c.text, c.nest, c.min)
 }
 
 // shown says whether column i holds anything in any row naming it.
@@ -104,7 +106,8 @@ func (w *Widths) gap(i int) int {
 type Cell struct {
 	Text string
 	// Grid is a grid laid out in the cell (a sub-table), at the cell's
-	// column, in the room left of the row's.
+	// column, in the room left of the row's. In a box's cell it draws no
+	// box of its own.
 	Grid *Grid
 	Fit  Fit
 	// Hang is where a wrapped cell's later lines start, after its
@@ -119,7 +122,8 @@ type Cell struct {
 	Paint func(string) string
 	// Span leaves the cell out of its column's width: it runs free (a
 	// title, a group's heading, the last cell of a row of cells), and
-	// the cells after it follow at their gap, in no column.
+	// the cells after it follow at their gap, in no column; in a box it
+	// runs from its column to the box's side.
 	Span bool
 }
 
@@ -134,7 +138,8 @@ type Row struct {
 	// Break puts a blank line before the row (a rule line in a box),
 	// unless it is the grid's first.
 	Break bool
-	// Underline puts a line of - under the row, as wide as its text.
+	// Underline puts a line of - under the row, as wide as its text; a
+	// box draws none.
 	Underline bool
 	// Header marks a header row: a box draws a line under it.
 	Header bool
@@ -158,20 +163,19 @@ type Grid struct {
 	// Border draws the grid in a box.
 	Border Border
 
-	// fit is the room a box is fitted to before it is drawn (prepare):
-	// its parent's room less its cell's start, at most its own Width; -1
-	// for none.
-	fit int
+	// What prepare works out: fit is the room the grid is laid out in,
+	// its parent's room less its cell's start, at most its own Width, -1
+	// for none; natural how wide it draws in that room; inBox that its
+	// cell is a box's, where it draws no box of its own.
+	fit     int
+	natural int
+	inBox   bool
 }
 
 // Lines are the grid's lines, laid out.
 func (g *Grid) Lines() []string {
 	prepare(g)
-	room := -1
-	if g.Width > 0 {
-		room = g.Width
-	}
-	return g.render(room)
+	return g.render(g.fit)
 }
 
 // String is the grid's lines, each ended by a newline.
@@ -193,82 +197,111 @@ func (g *Grid) widths(r Row) *Widths {
 	return g.Widths
 }
 
-// prepare measures every grid of the tree under g, the deepest first:
-// text cells everywhere, then each nested grid at its natural width into
-// its parent's column.
-func prepare(g *Grid) {
+// boxed says whether g draws a box: a box in a box's cell draws none.
+func (g *Grid) boxed() bool { return g.Border != NoBorder && !g.inBox }
+
+// prepare measures every grid of the tree under g before any is drawn:
+// the text cells everywhere; each grid's room, from its parent's and
+// where its cell starts (place); each nested grid, the deepest first,
+// at the width it draws in that room into its parent's column; then the
+// boxes, fitted to their rooms (fitBoxes), and the nested grids measured
+// again, a box now at its fitted width.
+func prepare(root *Grid) {
 	byDepth := [][]*Grid{}
-	var walk func(g *Grid, d int)
-	walk = func(g *Grid, d int) {
+	var walk func(g *Grid, d int, inBox bool)
+	walk = func(g *Grid, d int, inBox bool) {
 		for len(byDepth) <= d {
 			byDepth = append(byDepth, nil)
 		}
+		g.inBox = inBox
 		byDepth[d] = append(byDepth[d], g)
 		for _, r := range g.Rows {
 			for _, c := range r.Cells {
 				if c.Grid != nil {
-					walk(c.Grid, d+1)
+					walk(c.Grid, d+1, inBox || g.boxed())
 				}
 			}
 		}
 	}
-	walk(g, 0)
+	walk(root, 0, false)
+	all := func(f func(g *Grid)) {
+		for _, gs := range byDepth {
+			for _, g := range gs {
+				f(g)
+			}
+		}
+	}
 	// A render measures afresh: what an earlier one measured goes.
-	for _, gs := range byDepth {
-		for _, g := range gs {
+	all(func(g *Grid) {
+		for _, r := range g.Rows {
+			for _, c := range g.widths(r).cols {
+				c.text, c.nest, c.fitted = 0, 0, 0
+			}
+		}
+	})
+	all(func(g *Grid) {
+		for _, r := range g.Rows {
+			w := g.widths(r)
+			for k, c := range measured(r) {
+				if c.Grid == nil {
+					col := w.col(k)
+					col.text = max(col.text, cellWidth(c, indentOf(r, k)))
+				}
+			}
+		}
+	})
+	root.fit = roomOf(root.Width, -1, 0)
+	nested := func() {
+		all(func(g *Grid) {
 			for _, r := range g.Rows {
 				for _, c := range g.widths(r).cols {
-					c.width, c.fitted = 0, 0
+					c.nest = 0
 				}
 			}
-		}
-	}
-	for _, gs := range byDepth {
-		for _, g := range gs {
-			for _, r := range g.Rows {
-				w := g.widths(r)
-				for k, c := range measured(r) {
-					if c.Grid != nil {
-						continue
+		})
+		for d := len(byDepth) - 1; d >= 0; d-- {
+			for _, g := range byDepth[d] {
+				for _, r := range g.Rows {
+					w := g.widths(r)
+					for k, c := range measured(r) {
+						if c.Grid != nil {
+							col := w.col(k)
+							col.nest = max(col.nest, indentOf(r, k)+c.Grid.natural)
+						}
 					}
-					col := w.col(k)
-					col.width = max(col.width, cellWidth(c, indentOf(r, k)))
 				}
 			}
 		}
 	}
-	for d := len(byDepth) - 1; d >= 0; d-- {
-		for _, g := range byDepth[d] {
-			for _, r := range g.Rows {
-				w := g.widths(r)
-				for k, c := range measured(r) {
-					if c.Grid == nil {
-						continue
-					}
-					col := w.col(k)
-					col.width = max(col.width, indentOf(r, k)+linesWidth(c.Grid.render(-1)))
-				}
+	// Each grid's room from where its row places it, then each nested
+	// grid's natural width in it, the deepest first, into its parent's
+	// column; twice, as a grid's room hangs on the widths of the grids
+	// before it in its row.
+	rooms := func() {
+		for _, gs := range byDepth {
+			for _, g := range gs {
+				g.roomsBelow()
 			}
 		}
-	}
-	// Each box's room, from its parent's, then the boxes fitted to it, in
-	// phases across every box so those sharing columns draw them at one
-	// width.
-	g.fit = roomOf(g.Width, -1, 0)
-	for _, gs := range byDepth {
-		for _, g := range gs {
-			g.roomsBelow()
+		for d := len(byDepth) - 1; d >= 1; d-- {
+			for _, g := range byDepth[d] {
+				g.natural = linesWidth(g.render(g.fit))
+			}
+			nested()
 		}
 	}
+	rooms()
+	rooms()
 	var boxes []*Grid
-	for _, gs := range byDepth {
-		for _, g := range gs {
-			if g.Border != NoBorder {
-				boxes = append(boxes, g)
-			}
+	all(func(g *Grid) {
+		if g.boxed() {
+			boxes = append(boxes, g)
 		}
+	})
+	if len(boxes) > 0 {
+		fitBoxes(boxes)
+		rooms()
 	}
-	fitBoxes(boxes)
 }
 
 // measured are the cells of r its columns measure, by their index: those
@@ -298,26 +331,32 @@ func roomOf(own, room, start int) int {
 	return sub
 }
 
-// roomsBelow gives each grid in g's cells its room (fit), from g's and
-// where its cell starts, laid out as renderRow lays it.
+// roomsBelow gives each grid in g's cells its room (fit): where its row
+// places it (place), as it is drawn, or in a box's cell where the box
+// lays it (cells).
 func (g *Grid) roomsBelow() {
-	for _, r := range g.Rows {
-		if g.Border != NoBorder {
-			for _, c := range r.Cells {
-				if c.Grid != nil {
-					c.Grid.fit = roomOf(c.Grid.Width, -1, 0)
+	if g.boxed() {
+		s := g.shapeOf()
+		for _, r := range g.Rows {
+			for i, k := range s.cols {
+				if k < len(r.Cells) && r.Cells[k].Grid != nil {
+					c := r.Cells[k]
+					c.Grid.fit = roomOf(c.Grid.Width, insideRoom(g.fit), s.start(i)+indentOf(r, k))
 				}
 			}
-			continue
 		}
-		w := g.widths(r)
-		pos := 0
-		for k, c := range r.Cells {
-			if c.Grid != nil {
-				c.Grid.fit = roomOf(c.Grid.Width, g.fit, pos+indentOf(r, k))
+		return
+	}
+	for _, r := range g.Rows {
+		p := g.place(r, g.fit)
+		for _, at := range p.cells {
+			if c := r.Cells[at.k]; c.Grid != nil {
+				c.Grid.fit = roomOf(c.Grid.Width, g.fit, at.at+indentOf(r, at.k))
 			}
-			if !c.Span && (w.shown(k) || c.Grid != nil) {
-				pos += w.size(k) + w.gap(k)
+		}
+		if p.moved >= 0 {
+			if c := r.Cells[p.moved]; c.Grid != nil {
+				c.Grid.fit = roomOf(c.Grid.Width, g.fit, 0)
 			}
 		}
 	}
@@ -331,8 +370,11 @@ func indentOf(r Row, k int) int {
 }
 
 // cellWidth is c's natural width, its lines unwrapped, its prefix and
-// an indent before it.
+// an indent before it; a grid's, as prepare measured it.
 func cellWidth(c Cell, indent int) int {
+	if c.Grid != nil {
+		return indent + c.Grid.natural
+	}
 	n := 0
 	for _, l := range textLines(c) {
 		n = max(n, Width(l))
@@ -356,10 +398,21 @@ func linesWidth(lines []string) int {
 
 func empty(c Cell) bool { return c.Text == "" && c.Grid == nil && c.Prefix == "" }
 
+// lastShown is the index of r's last cell that holds anything, its
+// trailing empty cells left (0 when none holds anything, -1 with no
+// cells).
+func lastShown(r Row) int {
+	last := len(r.Cells) - 1
+	for last > 0 && empty(r.Cells[last]) {
+		last--
+	}
+	return last
+}
+
 // render lays out g's rows in room columns from its origin (-1 for
 // none).
 func (g *Grid) render(room int) []string {
-	if g.Border != NoBorder {
+	if g.boxed() {
 		return g.renderBox(room)
 	}
 	var out []string
@@ -393,38 +446,51 @@ func (g *Grid) render(room int) []string {
 	return out
 }
 
-// placed is one cell of a row as it is written: its lines, unpainted
-// and painted, at a column.
-type placed struct {
-	at    int
-	lines []string
-	// pad is the width the cell is padded to on its lines (0: none).
-	pad   int
-	right bool
+// slot is one cell of a row as its row places it: the cell, its column
+// from the grid's origin, the width it is padded to (0: none, right for
+// on its left), the line of the row it is on (a cell wider than its fixed
+// column with Overflow ends one), and whether it is the row's last,
+// fitted to the room.
+type slot struct {
+	k, at, pad int
+	right      bool
+	line       int
+	last       bool
 }
 
-// renderRow lays out one row without borders, each line trimmed on its
-// right.
-func (g *Grid) renderRow(r Row, room int) []string {
+// rowPlace is where a row's cells go: the cells it shows, and the cell
+// its row moves to a line of its own (MoveLast), -1 for none.
+type rowPlace struct {
+	cells []slot
+	moved int
+}
+
+// place lays out where r's cells go in room (-1 for none), from their
+// widths as measured: what renderRow draws and roomsBelow gives each grid
+// in a cell its room by, so the two never differ.
+func (g *Grid) place(r Row, room int) rowPlace {
+	p := rowPlace{moved: -1}
 	w := g.widths(r)
-	last := len(r.Cells) - 1
-	for last > 0 && empty(r.Cells[last]) {
-		last--
-	}
+	last := lastShown(r)
 	if last < 0 {
-		return []string{""}
+		return p
 	}
-	shownCell := func(k int) bool {
-		c := r.Cells[k]
-		return k == last || (c.Span && !empty(c)) || w.shown(k) || c.Grid != nil
+	// Shown: a cell in a column something holds, a grid, the row's last,
+	// a span cell holding anything, and any cell after one, in no column.
+	shown := make([]bool, len(r.Cells))
+	spanned := false
+	for k, c := range r.Cells {
+		shown[k] = k == last || c.Grid != nil || (spanned || c.Span) && !empty(c) || !spanned && w.shown(k)
+		spanned = spanned || c.Span
 	}
 	// The row's own last cell says how it fits, an empty one too.
 	move := r.Cells[len(r.Cells)-1].Fit == MoveLast && room >= 0 && last > 0
-	// own is the width of cells from..to as they are, their gaps between.
+	// own is the width of shown cells from..to as they are, their gaps
+	// between.
 	own := func(from, to int) int {
 		n, any := 0, false
 		for k := from; k <= to; k++ {
-			if k == to || shownCell(k) {
+			if shown[k] {
 				n += cellWidth(r.Cells[k], indentOf(r, k)) + w.gap(k)
 				any = true
 			}
@@ -434,83 +500,98 @@ func (g *Grid) renderRow(r Row, room int) []string {
 		}
 		return n - w.gap(to)
 	}
-	moved := move && own(0, last) > room
 	end := last
-	if moved {
-		end = last - 1
+	if move && own(0, last) > room {
+		p.moved, end = last, last-1
 	}
-
-	var cells []placed
-	var lines [][]placed // a new line after an overflowing cell
-	pos := 0
-	spanned := false
+	pos, line := 0, 0
+	spanned = false
 	for k := 0; k <= end; k++ {
 		c := r.Cells[k]
-		if !shownCell(k) {
+		if !shown[k] {
 			continue
 		}
-		indent := indentOf(r, k)
-		var text []string
-		if k == last {
-			text = g.fitCell(c, pos+indent, room)
-		} else {
-			text = cellLines(c, room, pos+indent)
-		}
-		for j := range text {
-			text[j] = strings.Repeat(" ", indent) + text[j]
-		}
-		p := placed{at: pos, lines: text}
-		width := linesWidth(text)
+		s := slot{k: k, at: pos, line: line, last: k == last}
+		width := cellWidth(c, indentOf(r, k))
+		inColumn := !c.Span && !spanned
 		// Every cell but the last is padded to its column; in a row that
 		// may move its last, only while the row still fits with it padded
-		// (its next cells counted as they are).
-		padded := false
-		if k < last && !c.Span && !spanned {
-			padded = true
-			if move {
-				rest := 0
-				if k < end {
-					rest = own(k+1, end) + w.gap(k)
-				}
-				padded = pos+w.size(k)+rest <= room
+		// (its next cells counted as they are). A right aligned cell is
+		// padded on its left wherever it sits, its row's last too.
+		padded := k < last && inColumn
+		if padded && move {
+			rest := 0
+			if k < end {
+				rest = own(k+1, end) + w.gap(k)
 			}
+			padded = pos+w.size(k)+rest <= room
 		}
-		// A right aligned cell is padded on its left wherever it sits, its
-		// row's last too.
-		right := w.col(k).align == Right && !c.Span && !spanned
+		right := inColumn && w.col(k).align == Right
 		if padded || right {
-			p.pad = w.size(k)
-			p.right = right
+			s.pad, s.right = w.size(k), right
 			width = max(width, w.size(k))
 		}
-		if c.Span {
-			spanned = true
-		}
-		cells = append(cells, p)
+		spanned = spanned || c.Span
+		p.cells = append(p.cells, s)
 		pos += width + w.gap(k)
 		// A cell wider than its fixed column ends its line: the next
 		// cells go on the next line, at their columns.
-		if col := w.col(k); col.fixed > 0 && col.overflow && linesWidth(text) > col.fixed && k < end {
-			cells[len(cells)-1].pad = 0
-			lines = append(lines, cells)
-			cells = nil
+		if col := w.col(k); col.fixed > 0 && col.overflow && cellWidth(c, indentOf(r, k)) > col.fixed && k < end {
+			p.cells[len(p.cells)-1].pad = 0
+			line++
 			pos = 0
 			for j := 0; j <= k; j++ {
-				if shownCell(j) {
+				if shown[j] {
 					pos += w.size(j) + w.gap(j)
 				}
 			}
 		}
 	}
-	lines = append(lines, cells)
+	return p
+}
+
+// renderRow lays out one row without borders where place puts its
+// cells, each line trimmed on its right.
+func (g *Grid) renderRow(r Row, room int) []string {
+	p := g.place(r, room)
+	if len(p.cells) == 0 && p.moved < 0 {
+		return []string{""}
+	}
+	var lines [][]placed
+	for _, s := range p.cells {
+		c := r.Cells[s.k]
+		indent := indentOf(r, s.k)
+		var text []string
+		if s.last {
+			text = g.fitCell(c, s.at+indent, room)
+		} else {
+			text = cellLines(c, room, s.at+indent)
+		}
+		for j := range text {
+			text[j] = strings.Repeat(" ", indent) + text[j]
+		}
+		for len(lines) <= s.line {
+			lines = append(lines, nil)
+		}
+		lines[s.line] = append(lines[s.line], placed{at: s.at, lines: text, pad: s.pad, right: s.right})
+	}
 	var out []string
 	for _, cs := range lines {
 		out = append(out, compose(cs)...)
 	}
-	if moved {
-		out = append(out, g.fitCell(r.Cells[last], 0, room)...)
+	if p.moved >= 0 {
+		out = append(out, g.fitCell(r.Cells[p.moved], 0, room)...)
 	}
 	return out
+}
+
+// placed is one cell of a row as it is written: its lines at a column,
+// padded to a width.
+type placed struct {
+	at    int
+	lines []string
+	pad   int
+	right bool
 }
 
 // compose writes placed cells as lines, each trimmed on its right.

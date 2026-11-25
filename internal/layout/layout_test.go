@@ -564,3 +564,226 @@ func TestBoxLeavesOutEmptyColumns(t *testing.T) {
 		t.Errorf("a box drew a middle column empty in every row:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// prose is prose long enough to wrap in any room these tests give.
+const prose = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+
+func wrapped(s string) Cell { return Cell{Text: s, Fit: WrapWords} }
+
+// inRoom fails when a line of lines is wider than room.
+func inRoom(t *testing.T, name string, lines []string, room int) {
+	t.Helper()
+	for _, l := range lines {
+		if Width(l) > room {
+			t.Errorf("%s: a line of %d columns in a room of %d:\n%s", name, Width(l), room, strings.Join(lines, "\n"))
+			return
+		}
+	}
+}
+
+// Rows whose last cells sit in different columns, both prose: the box's
+// right side holds.
+func TestBoxLastCellsInTwoColumns(t *testing.T) {
+	t.Parallel()
+	for name, rows := range map[string][]Row{
+		"the short row first": {
+			{Cells: []Cell{text("k"), wrapped(prose)}},
+			{Cells: []Cell{text("k"), text("v"), wrapped(prose)}},
+		},
+		"the short row last": {
+			{Cells: []Cell{text("k"), text("v"), wrapped(prose)}},
+			{Cells: []Cell{text("k"), wrapped(prose)}},
+		},
+		"a row of one cell over a key and its prose": {
+			{Indent: 4, Cells: []Cell{wrapped(prose)}},
+			{Indent: 2, Cells: []Cell{text("k"), wrapped(prose)}},
+		},
+	} {
+		square(t, name, boxOf(&Grid{Width: 40, Rows: rows}).Lines())
+	}
+}
+
+// A row's last shown cell before a trailing empty one is fitted in the
+// first phase as it is drawn: the box stays in its room.
+func TestBoxTrailingEmptyCellInItsRoom(t *testing.T) {
+	t.Parallel()
+	g := boxOf(&Grid{Width: 40, Rows: []Row{
+		{Header: true, Cells: Cells("a", "b", "c")},
+		{Cells: []Cell{text("x"), wrapped(prose), text("")}},
+	}})
+	lines := g.Lines()
+	if len(lines) < 6 {
+		t.Fatalf("the control: the prose wraps:\n%s", strings.Join(lines, "\n"))
+	}
+	inRoom(t, "prose before a trailing empty cell", lines, 40)
+}
+
+// A box with a fixed column keeps its right side, under a span row wider
+// than its columns and beside a cell wider than the fixed width.
+func TestBoxFixedColumnKeepsItsSide(t *testing.T) {
+	t.Parallel()
+	square(t, "a span row over a fixed last column", boxOf(&Grid{Widths: NewWidths().Fixed(1, 3), Rows: []Row{
+		{Cells: []Cell{{Text: "a long title of the box", Span: true}}},
+		{Cells: Cells("k", "v")},
+	}}).Lines())
+	square(t, "a cell wider than its fixed column", boxOf(&Grid{Widths: NewWidths().Fixed(0, 3), Rows: []Row{
+		{Cells: Cells("abcdefgh", "v")},
+		{Cells: Cells("a", "v")},
+	}}).Lines())
+}
+
+// An empty row in a box whose other rows are span rows is as wide as the
+// box.
+func TestBoxEmptyRowUnderSpanRows(t *testing.T) {
+	t.Parallel()
+	square(t, "an empty row under a span row", boxOf(&Grid{Rows: []Row{
+		{Cells: []Cell{{Text: "a title of the box", Span: true}}},
+		{},
+	}}).Lines())
+}
+
+// A box in a cell is fitted to the room its row leaves it as renderRow
+// lays the row out: after a span cell, after a cell wider than its fixed
+// column, and moved to a line of its own.
+func TestBoxFittedWhereItsRowPutsIt(t *testing.T) {
+	t.Parallel()
+	box := func() *Grid {
+		return boxOf(&Grid{Rows: []Row{{Cells: []Cell{text("a"), wrapped(prose)}}}})
+	}
+	for name, g := range map[string]*Grid{
+		"after a span cell": {Width: 40, Rows: []Row{
+			{Cells: []Cell{{Text: "a spanning title", Span: true}, {Grid: box()}}},
+		}},
+		"after a cell wider than its fixed column": {Width: 40, Widths: NewWidths().Fixed(0, 3), Rows: []Row{
+			{Cells: []Cell{text("wider than three"), {Grid: box()}}},
+		}},
+	} {
+		inRoom(t, name, g.Lines(), 40)
+	}
+	// Moved to a line of its own, the box has the whole room: 40 columns
+	// hold it (the control: alone in a grid of 40 it is 40 wide or less).
+	alone := (&Grid{Width: 40, Rows: []Row{{Cells: []Cell{{Grid: box()}}}}}).Lines()
+	inRoom(t, "the control, a box alone", alone, 40)
+	moved := (&Grid{Width: 40, Rows: []Row{
+		{Cells: []Cell{text("a first cell that is wider than the room it has"), {Grid: box(), Fit: MoveLast}}},
+	}}).Lines()
+	if len(moved) < 2 || !strings.HasPrefix(moved[1], "╭") {
+		t.Fatalf("the control: the box moves to a line of its own:\n%s", strings.Join(moved, "\n"))
+	}
+	inRoom(t, "a box moved to its own line", moved[1:], 40)
+}
+
+// A grid with a Width of its own, in a cell, takes the columns it is
+// drawn in: the row's next cell follows it at its gap.
+func TestNestedGridMeasuredAtItsOwnWidth(t *testing.T) {
+	t.Parallel()
+	for name, sub := range map[string]*Grid{
+		"plain": {Width: 20, Rows: []Row{{Cells: []Cell{wrapped(prose)}}}},
+		"a box": boxOf(&Grid{Width: 20, Rows: []Row{{Cells: []Cell{wrapped(prose)}}}}),
+	} {
+		g := &Grid{Rows: []Row{{Cells: []Cell{{Grid: sub}, text("next")}}}}
+		lines := g.Lines()
+		if len(lines) < 3 {
+			t.Fatalf("%s: the control: the nested grid wraps in its width:\n%s", name, strings.Join(lines, "\n"))
+		}
+		at := Width(lines[0][:strings.Index(lines[0], "next")])
+		if at > 20+DefaultGap {
+			t.Errorf("%s: the next cell starts at column %d, after a grid 20 wide at most:\n%s", name, at, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// A box stays in its room: in another box's cell, sharing its columns
+// with a box that has more room, and under a span row of prose.
+func TestBoxStaysInItsRoom(t *testing.T) {
+	t.Parallel()
+	shared := NewWidths()
+	sharing := func() *Grid {
+		return boxOf(&Grid{Rows: []Row{{Widths: shared, Cells: []Cell{text("k"), wrapped(prose)}}}})
+	}
+	for _, c := range []struct {
+		name string
+		room int
+		g    *Grid
+	}{
+		{"a box in a box's cell", 40, boxOf(&Grid{Width: 40, Rows: []Row{
+			{Cells: []Cell{text("k"), {Grid: boxOf(&Grid{Rows: []Row{{Cells: []Cell{text("a"), wrapped(prose)}}}})}}},
+		}})},
+		{"boxes sharing columns in different rooms", 50, &Grid{Width: 50, Rows: []Row{
+			{Cells: []Cell{{Grid: sharing()}}},
+			{Indent: 10, Cells: []Cell{{Grid: sharing()}}},
+		}}},
+		{"a span row of prose", 40, boxOf(&Grid{Width: 40, Rows: []Row{
+			{Cells: []Cell{{Text: prose, Span: true, Fit: WrapWords}}},
+			{Cells: Cells("k", "v")},
+		}})},
+	} {
+		inRoom(t, c.name, c.g.Lines(), c.room)
+	}
+}
+
+// A span cell after a key in a box runs free of the columns: it widens
+// none for the other rows, and no column line crosses it.
+func TestBoxSpanCellAfterAKey(t *testing.T) {
+	t.Parallel()
+	g := boxOf(&Grid{Rows: []Row{
+		{Cells: Cells("k", "v", "z")},
+		{Cells: []Cell{text("k"), {Text: "a spanning cell here", Span: true}, text("after")}},
+	}})
+	lines := g.Lines()
+	square(t, "a span cell after a key", lines)
+	if len(lines) != 4 {
+		t.Fatalf("the box's lines:\n%s", strings.Join(lines, "\n"))
+	}
+	if !strings.HasPrefix(lines[1], "│ k │ v │ z") {
+		t.Errorf("a span cell widened its column for another row:\n%s", strings.Join(lines, "\n"))
+	}
+	if n := strings.Count(lines[2], boxSide); n != 3 {
+		t.Errorf("%d lines in a row with a span cell after its key, want its sides and the key's line:\n%s", n, strings.Join(lines, "\n"))
+	}
+}
+
+// A span cell after an empty key starts where the box's value column
+// does, as it does without borders.
+func TestBoxSpanStartsAtItsColumn(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Rows: []Row{
+		{Cells: Cells("key", "value")},
+		{Cells: []Cell{text(""), {Text: "span", Span: true}}},
+	}}
+	plain := g.Lines()
+	at := func(line, word string) int { return Width(line[:strings.Index(line, word)]) }
+	if at(plain[0], "value") != at(plain[1], "span") {
+		t.Fatalf("the control, without borders:\n%s", strings.Join(plain, "\n"))
+	}
+	g.Border = Box
+	lines := g.Lines()
+	if len(lines) != 5 {
+		t.Fatalf("the box's lines:\n%s", strings.Join(lines, "\n"))
+	}
+	if v, s := at(lines[1], "value"), at(lines[3], "span"); v != s {
+		t.Errorf("the span starts at column %d, the value column at %d:\n%s", s, v, strings.Join(lines, "\n"))
+	}
+}
+
+// A cell after a span cell shows at its gap whatever the other rows hold,
+// between the span and the row's last, as without the span it would.
+func TestCellAfterASpanAlwaysShows(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		g    *Grid
+		want string
+	}{
+		{"before the row's last", &Grid{Rows: []Row{
+			{Cells: []Cell{{Text: "a"}, {Text: "x", Span: true}, {Text: "mid"}, {Text: "z"}}},
+		}}, "a  x  mid  z\n"},
+		{"before a trailing empty cell", &Grid{Rows: []Row{
+			{Cells: []Cell{{Text: "a"}, {Text: "x", Span: true}, {Text: "mid"}, {Text: "end"}, {}}},
+		}}, "a  x  mid  end\n"},
+	} {
+		if got := c.g.String(); got != c.want {
+			t.Errorf("%s: a cell after a span is missing:\n%q\nwant:\n%q", c.name, got, c.want)
+		}
+	}
+}

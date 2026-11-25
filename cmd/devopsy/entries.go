@@ -368,7 +368,8 @@ func layOut(es []remote.StatusEntry) []laidLine {
 // projects), else the rows under one key in a section, whatever lines
 // without cells (a warning) sit between them. A run's rows share their
 // columns (each but its last cell measured), and a column empty in all
-// of them is left out.
+// of them is left out. Wider than sameRun's: rows a Name tells apart (a
+// gone environment's, keyed gone) align with the rest of their key.
 func cellRuns(es []remote.StatusEntry) map[int]string {
 	runs := map[int]string{}
 	run := ""
