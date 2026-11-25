@@ -102,8 +102,21 @@ func (l *Lock) KeepAcrossExec() error {
 	return err
 }
 
-// Close lets the lock go and closes its file.
-func (l *Lock) Close() error { return l.f.Close() }
+// Close lets the lock go and closes its file (Release).
+func (l *Lock) Close() error { return Release(l.f) }
+
+// Release lets f's lock go and closes f. A flock is the open file's, held while any
+// descriptor of it is open, and a fork in flight anywhere in the process holds a copy of
+// every descriptor until its exec: closing alone could leave the lock held after its
+// holder let go. Never for a lock a command it started is to keep holding (exec.Cmd's
+// ExtraFiles), which the unlock would take from it.
+func Release(f *os.File) error {
+	unlock := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return unlock
+}
 
 // TryFlock takes f's lock (how, syscall.LOCK_EX or LOCK_SH) if it is free now: false, with no
 // error, when another holds it.

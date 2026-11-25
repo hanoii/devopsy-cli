@@ -18,6 +18,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/howto"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/vocab"
@@ -481,7 +482,7 @@ func takeProjectID(record, passwd, group string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer lock.Close()
+	defer pathlock.Release(lock)
 	if err := (boundedWait{what: "another --project-users add", bound: time.Minute}).wait(context.Background(), report.Default(), func() (bool, error) {
 		return tryFlock(lock, syscall.LOCK_EX)
 	}); err != nil {
@@ -642,7 +643,7 @@ func removeKept(space, project string) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer pathlock.Release(lock)
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/howto"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -621,7 +622,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	defer lock.Close()
+	defer pathlock.Release(lock)
 	rd, err := readDoorSetup(h, dir, ref)
 	if err != nil {
 		return failErr(err)

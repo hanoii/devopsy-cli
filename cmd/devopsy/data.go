@@ -30,6 +30,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/uids"
@@ -610,7 +611,7 @@ func imagesLockAt(root string, how int, who, doing string) (unlock func(), ok bo
 		if holder != "" {
 			os.Remove(holder)
 		}
-		f.Close()
+		pathlock.Release(f)
 	}, true, nil
 }
 

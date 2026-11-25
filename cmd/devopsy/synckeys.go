@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -131,7 +132,7 @@ func lockedKeys(file string, edit func([]string) ([]string, error)) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer pathlock.Release(lock)
 	if err := waitKeysLock(file, lock); err != nil {
 		return err
 	}
@@ -185,7 +186,7 @@ func dropKeysLock(file string) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer pathlock.Release(lock)
 	if err := waitKeysLock(file, lock); err != nil {
 		return err
 	}

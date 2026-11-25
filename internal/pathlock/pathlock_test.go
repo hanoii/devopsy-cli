@@ -58,3 +58,36 @@ func TestTryOnTheFileThePathNames(t *testing.T) {
 		t.Fatalf("a removed file: %v, %v", ok, err)
 	}
 }
+
+// Release lets a lock go whatever copies of its descriptor are open (a fork in flight holds
+// one until its exec): closing alone would keep it held until every copy closes, so a lock
+// let go would stay busy for whoever takes it next.
+func TestReleaseWithACopyOpen(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "lock")
+	open := func() *os.File {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_CLOEXEC, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	held := open()
+	if ok, err := TryFlock(held, syscall.LOCK_EX); !ok || err != nil {
+		t.Fatalf("take: %v, %v", ok, err)
+	}
+	// A fork's copy of the descriptor: the same open file, and with it the lock.
+	copied, err := syscall.Dup(int(held.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(copied)
+	if err := Release(held); err != nil {
+		t.Fatal(err)
+	}
+	next := open()
+	defer next.Close()
+	if ok, err := TryFlock(next, syscall.LOCK_EX); !ok || err != nil {
+		t.Errorf("the lock stays held after its release while a copy is open: %v, %v", ok, err)
+	}
+}

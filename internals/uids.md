@@ -12,6 +12,7 @@ Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `interna
 - A project holds at most `MaxClaims` claims in a domain: a tenant makes environments freely, and a first claim reads its domain's.
 - Start locks live in `locks/` under the claims directory, never beside a claim: an environment may be named like a lock file.
 - A lock on a file by its path, a start lock or a project user's builder's (`internal/pathlock`, one for every such lock), is opened close-on-exec, read-write, and cleared only right before the exec (`KeepAcrossExec`), so nothing started before it holds the lock.
+- Every flock devopsy takes in Go is let go by `pathlock.Release` (its unlock, then the close), never by closing alone, but one a command it started is to keep holding (`ExtraFiles`): a fork in flight anywhere in the process holds a copy of every descriptor until its exec, and the lock stays held while a copy is open.
 - Such a lock is checked against its path after every take, taken again on the file there now (`Take`) or let go with `ErrReplaced` (`Try`): a free removes a start lock's file while it holds it, and a project user's destroy its builder's.
 - A claim is freed only with its owner's start lock held exclusive (`Store.Free`), which removes the lock's file too.
 - Only the server's devopsy computes a uid, at every load of a release (`setUIDs` in `internal/cli/uids.go`), setting `DEVOPSY_UID` and `DEVOPSY_PROJECT_UID` over every layer and the caller's value, and stores them nowhere: a restore would bring another environment's back.

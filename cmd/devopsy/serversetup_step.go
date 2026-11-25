@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/howto"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -1056,7 +1057,7 @@ func applySetup(h setupHost, a setupApply) int {
 	if err != nil {
 		return failed(err.Error())
 	}
-	defer lock.Close()
+	defer pathlock.Release(lock)
 
 	// The root chosen is judged first, its refusal ending the apply with nothing changed, and
 	// everything after judges it as proposed; it goes into the config only once the deploy

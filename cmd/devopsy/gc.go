@@ -1236,5 +1236,5 @@ func trySnapshotLock(base string) (unlock func(), ok bool, err error) {
 		return nil, false, err
 	}
 	_ = os.Remove(filepath.Join(base, remote.SnapshotHoldingFile))
-	return func() { f.Close() }, true, nil
+	return func() { pathlock.Release(f) }, true, nil
 }

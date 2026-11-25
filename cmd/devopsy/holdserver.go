@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -20,7 +21,7 @@ type serverHold []*os.File
 // release lets go of every lock h holds.
 func (h serverHold) release() {
 	for _, l := range h {
-		l.Close()
+		pathlock.Release(l)
 	}
 }
 

@@ -385,7 +385,7 @@ func (s Store) lockDir() (func(), error) {
 		f.Close()
 		return nil, err
 	}
-	return func() { f.Close() }, nil
+	return func() { pathlock.Release(f) }, nil
 }
 
 func (s Store) wait(what string, f *os.File, how int) error {
