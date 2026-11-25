@@ -143,3 +143,43 @@ func TestBoxRuleAroundARowStartingWithASpan(t *testing.T) {
 		t.Errorf("no rule around a row starting with a span, as around a span row:\n%s", strings.Join(lines, "\n"))
 	}
 }
+
+// Bug: roomsBelow gives a grid in a box's cell its room from where the
+// box's column starts to the box's side, while cells lays a row's last
+// cell out in that room less the columns after it: a grid that is its
+// row's last, in a column before the box's last, is measured wider than
+// it draws, and what its own rows put after a grid in it lands past its
+// gap. roomsBelow's box branch works the rooms out again rather than
+// taking them from cells, as its plain branch takes them from place.
+func TestBoxLastCellGridMeasuredWhereItDraws(t *testing.T) {
+	t.Parallel()
+	inner := &Grid{Rows: []Row{{Cells: []Cell{wrapped(prose)}}}}
+	cell := &Grid{Rows: []Row{{Cells: []Cell{{Grid: inner}, text("x")}}}}
+	g := boxOf(&Grid{Width: 60, Rows: []Row{
+		{Cells: []Cell{text("k"), {Grid: cell}}},
+		{Cells: []Cell{text("k"), text("v"), text("zzzzzzzzzzzzzzzzzzzz")}},
+	}})
+	lines := g.Lines()
+	// The prose's lines as drawn in the box's second column (the first row's
+	// lines, between the top and the second row), and where the x after it
+	// starts.
+	widest, at := 0, -1
+	for _, l := range lines[1 : len(lines)-2] {
+		parts := strings.Split(l, boxSide)
+		if len(parts) < 4 {
+			continue
+		}
+		col := strings.TrimPrefix(parts[2], " ")
+		if strings.HasSuffix(strings.TrimRight(col, " "), " x") {
+			at = strings.Index(col, " x") + 1
+			col = strings.TrimRight(col, " x")
+		}
+		widest = max(widest, Width(strings.TrimRight(col, " ")))
+	}
+	if at < 0 || widest == 0 {
+		t.Fatalf("the control: the prose and its x in the box:\n%s", strings.Join(lines, "\n"))
+	}
+	if at != widest+DefaultGap {
+		t.Errorf("x starts at %d in its cell, the prose before it %d wide:\n%s", at, widest, strings.Join(lines, "\n"))
+	}
+}
