@@ -33,7 +33,9 @@ const DefaultGap = 2
 // Widths are the columns a set of rows share, wherever they sit: every
 // row naming them, in any grid of one rendered tree, is measured into
 // them before any is rendered, so sections share one value column and a
-// run of rows aligns across the lines between them.
+// run of rows aligns across the lines between them. Its rows sit at one
+// depth of the tree: shared by a grid and a grid in one of its own
+// cells, a column can hold no layout, each width moving the other.
 type Widths struct {
 	cols []*column
 }
@@ -170,6 +172,9 @@ type Grid struct {
 	fit     int
 	natural int
 	inBox   bool
+	// boxRoom is the room a box is fitted and drawn in: the tightest
+	// among the boxes sharing its columns (fitBoxes).
+	boxRoom int
 }
 
 // Lines are the grid's lines, laid out.
@@ -233,6 +238,7 @@ func prepare(root *Grid) {
 	}
 	// A render measures afresh: what an earlier one measured goes.
 	all(func(g *Grid) {
+		g.fit, g.natural, g.boxRoom = -1, 0, -1
 		for _, r := range g.Rows {
 			for _, c := range g.widths(r).cols {
 				c.text, c.nest, c.fitted = 0, 0, 0
@@ -273,11 +279,33 @@ func prepare(root *Grid) {
 			}
 		}
 	}
+	// state is every grid's room and natural width and every box column's
+	// fit, to tell when a pass changed nothing.
+	state := func() []int {
+		var out []int
+		all(func(g *Grid) {
+			out = append(out, g.fit, g.natural)
+			for _, r := range g.Rows {
+				for _, c := range g.widths(r).cols {
+					out = append(out, c.fitted)
+				}
+			}
+		})
+		return out
+	}
 	// Each grid's room from where its row places it, then each nested
 	// grid's natural width in it, the deepest first, into its parent's
-	// column; twice, as a grid's room hangs on the widths of the grids
-	// before it in its row.
-	rooms := func() {
+	// column, and the boxes fitted to their rooms: again until a pass
+	// changes nothing, as a grid's room hangs on the grids before it in its
+	// row and a box's on what it holds, bounded by the tree's depth.
+	var boxes []*Grid
+	all(func(g *Grid) {
+		if g.boxed() {
+			boxes = append(boxes, g)
+		}
+	})
+	for range len(byDepth) + 3 {
+		before := state()
 		for _, gs := range byDepth {
 			for _, g := range gs {
 				g.roomsBelow()
@@ -289,19 +317,25 @@ func prepare(root *Grid) {
 			}
 			nested()
 		}
-	}
-	rooms()
-	rooms()
-	var boxes []*Grid
-	all(func(g *Grid) {
-		if g.boxed() {
-			boxes = append(boxes, g)
+		if len(boxes) > 0 {
+			fitBoxes(boxes)
 		}
-	})
-	if len(boxes) > 0 {
-		fitBoxes(boxes)
-		rooms()
+		if equal(before, state()) {
+			break
+		}
 	}
+}
+
+func equal(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // measured are the cells of r its columns measure, by their index: those
@@ -336,12 +370,18 @@ func roomOf(own, room, start int) int {
 // lays it (cells).
 func (g *Grid) roomsBelow() {
 	if g.boxed() {
+		// Where cells lays it, in the room the box is drawn in.
 		s := g.shapeOf()
+		room := g.boxRoom
+		if room < 0 {
+			room = g.fit
+		}
 		for _, r := range g.Rows {
+			rf := runsFrom(r, s.lastCol)
 			for i, k := range s.cols {
-				if k < len(r.Cells) && r.Cells[k].Grid != nil {
+				if k < rf && k < len(r.Cells) && r.Cells[k].Grid != nil {
 					c := r.Cells[k]
-					c.Grid.fit = roomOf(c.Grid.Width, insideRoom(g.fit), s.start(i)+indentOf(r, k))
+					c.Grid.fit = roomOf(c.Grid.Width, insideRoom(room), s.start(i)+indentOf(r, k))
 				}
 			}
 		}
@@ -413,7 +453,7 @@ func lastShown(r Row) int {
 // none).
 func (g *Grid) render(room int) []string {
 	if g.boxed() {
-		return g.renderBox(room)
+		return g.renderBox()
 	}
 	var out []string
 	for i, r := range g.Rows {
@@ -429,7 +469,9 @@ func (g *Grid) render(room int) []string {
 			for _, l := range lines {
 				n = max(n, Width(strings.TrimLeft(Strip(l), " ")))
 			}
-			under = strings.Repeat(" ", r.Indent) + strings.Repeat("-", n)
+			if n > 0 {
+				under = strings.Repeat(" ", r.Indent) + strings.Repeat("-", n)
+			}
 		}
 		if r.Paint != nil {
 			for j := range lines {
@@ -485,13 +527,26 @@ func (g *Grid) place(r Row, room int) rowPlace {
 	}
 	// The row's own last cell says how it fits, an empty one too.
 	move := r.Cells[len(r.Cells)-1].Fit == MoveLast && room >= 0 && last > 0
-	// own is the width of shown cells from..to as they are, their gaps
-	// between.
+	// inColumn: before the row's first span cell, padded to its column.
+	inColumn := make([]bool, len(r.Cells))
+	for k, c := range r.Cells {
+		if c.Span {
+			break
+		}
+		inColumn[k] = true
+	}
+	// own is the width of shown cells from..to as they are, a right
+	// aligned one at its column's width as it is padded wherever it sits,
+	// their gaps between.
 	own := func(from, to int) int {
 		n, any := 0, false
 		for k := from; k <= to; k++ {
 			if shown[k] {
-				n += cellWidth(r.Cells[k], indentOf(r, k)) + w.gap(k)
+				width := cellWidth(r.Cells[k], indentOf(r, k))
+				if inColumn[k] && w.col(k).align == Right {
+					width = max(width, w.size(k))
+				}
+				n += width + w.gap(k)
 				any = true
 			}
 		}
@@ -500,12 +555,39 @@ func (g *Grid) place(r Row, room int) rowPlace {
 		}
 		return n - w.gap(to)
 	}
+	// A cell wider than its fixed column with Overflow ends its line: the
+	// row's last cell fits or not on the line it is on, which starts at
+	// the column after that cell.
+	ends := func(k int) bool {
+		col := w.col(k)
+		return shown[k] && col.fixed > 0 && col.overflow && cellWidth(r.Cells[k], indentOf(r, k)) > col.fixed
+	}
+	from, lineAt := 0, 0
+	for k := 0; k < last; k++ {
+		if ends(k) {
+			from, lineAt = k+1, 0
+			for j := 0; j <= k; j++ {
+				if shown[j] {
+					lineAt += w.size(j) + w.gap(j)
+				}
+			}
+		}
+	}
 	end := last
-	if move && own(0, last) > room {
+	if move && lineAt+own(from, last) > room {
 		p.moved, end = last, last-1
 	}
+	// lineEnd is the last cell on the line cell k is on, before the next
+	// that ends a line.
+	lineEnd := func(k int) int {
+		for j := k; j < end; j++ {
+			if ends(j) {
+				return j
+			}
+		}
+		return end
+	}
 	pos, line := 0, 0
-	spanned = false
 	for k := 0; k <= end; k++ {
 		c := r.Cells[k]
 		if !shown[k] {
@@ -513,30 +595,28 @@ func (g *Grid) place(r Row, room int) rowPlace {
 		}
 		s := slot{k: k, at: pos, line: line, last: k == last}
 		width := cellWidth(c, indentOf(r, k))
-		inColumn := !c.Span && !spanned
 		// Every cell but the last is padded to its column; in a row that
-		// may move its last, only while the row still fits with it padded
-		// (its next cells counted as they are). A right aligned cell is
-		// padded on its left wherever it sits, its row's last too.
-		padded := k < last && inColumn
+		// may move its last, only while its line still fits with it padded
+		// (the next cells on it counted as they are). A right aligned cell
+		// is padded on its left wherever it sits, its row's last too.
+		padded := k < last && inColumn[k]
 		if padded && move {
 			rest := 0
-			if k < end {
-				rest = own(k+1, end) + w.gap(k)
+			if e := lineEnd(k); k < e {
+				rest = own(k+1, e) + w.gap(k)
 			}
 			padded = pos+w.size(k)+rest <= room
 		}
-		right := inColumn && w.col(k).align == Right
+		right := inColumn[k] && w.col(k).align == Right
 		if padded || right {
 			s.pad, s.right = w.size(k), right
 			width = max(width, w.size(k))
 		}
-		spanned = spanned || c.Span
 		p.cells = append(p.cells, s)
 		pos += width + w.gap(k)
 		// A cell wider than its fixed column ends its line: the next
 		// cells go on the next line, at their columns.
-		if col := w.col(k); col.fixed > 0 && col.overflow && cellWidth(c, indentOf(r, k)) > col.fixed && k < end {
+		if ends(k) && k < end {
 			p.cells[len(p.cells)-1].pad = 0
 			line++
 			pos = 0

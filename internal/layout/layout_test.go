@@ -787,3 +787,243 @@ func TestCellAfterASpanAlwaysShows(t *testing.T) {
 		}
 	}
 }
+
+// What runs to a box's side widens its last column before its rows are
+// fitted to the room left: a row whose last cell sits in an earlier
+// column keeps the room it fits in.
+func TestBoxSpanPhaseKeepsTheRowsFitted(t *testing.T) {
+	t.Parallel()
+	box := func(span string) *Grid {
+		return boxOf(&Grid{Width: 40, MinRoom: 10, Rows: []Row{
+			{Cells: []Cell{wrapped(prose)}},
+			{Cells: Cells("k", "v")},
+			{Cells: []Cell{text(""), {Text: span, Span: true}}},
+		}})
+	}
+	square(t, "a span of 30 after a row of prose", box("a span of thirty columns here.").Lines())
+	inRoom(t, "a span of 20 after a row of prose", box("a span of twenty col").Lines(), 40)
+}
+
+// A grid's room is taken until it moves no more: the third grid in a row
+// is measured in the room it draws in, the cell after it at its gap.
+func TestThirdGridInARowMeasuredWhereItDraws(t *testing.T) {
+	t.Parallel()
+	row := func() Row {
+		nine := "aaaaaaaaa bbbbbbbbb ccccccccc ddddddddd eeeeeeeee fffffffff ggggggggg"
+		a := &Grid{Width: 20, Rows: []Row{{Cells: []Cell{wrapped(prose)}}}}
+		b := &Grid{Rows: []Row{{Cells: []Cell{wrapped(nine)}}}}
+		c := &Grid{Rows: []Row{{Cells: []Cell{wrapped("aa bb cc dd")}}}}
+		return Row{Cells: []Cell{{Grid: a}, {Grid: b}, {Grid: c}, text("end")}}
+	}
+	alone := (&Grid{Width: 70, Rows: []Row{row()}}).Lines()
+	withBox := (&Grid{Width: 70, Rows: []Row{row(), {Cells: []Cell{{Grid: boxOf(&Grid{Rows: []Row{{Cells: Cells("x")}}})}}}}}).Lines()
+	if !strings.HasSuffix(withBox[0], "aa bb  end") {
+		t.Fatalf("the control: with a box in the tree, end follows the third grid at its gap:\n%s", strings.Join(withBox, "\n"))
+	}
+	if alone[0] != withBox[0] {
+		t.Errorf("the row lays out otherwise without a box in the tree:\n%s\nwith one:\n%s", alone[0], withBox[0])
+	}
+}
+
+// A row whose first cell spans runs across the box, a rule around it so
+// the column lines above and below join.
+func TestBoxRuleAroundARowStartingWithASpan(t *testing.T) {
+	t.Parallel()
+	g := boxOf(&Grid{Rows: []Row{
+		{Cells: Cells("key", "value")},
+		{Cells: []Cell{{Text: "a title", Span: true}, text("x")}},
+		{Cells: Cells("k", "v")},
+	}})
+	lines := g.Lines()
+	if len(lines) != 7 || !strings.HasPrefix(lines[2], "├") || !strings.HasPrefix(lines[4], "├") {
+		t.Errorf("no rule around a row starting with a span, as around a span row:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// A grid in a box's cell is measured in the room the box lays it in: the
+// cell after it in it sits at its gap.
+func TestBoxLastCellGridMeasuredWhereItDraws(t *testing.T) {
+	t.Parallel()
+	inner := &Grid{Rows: []Row{{Cells: []Cell{wrapped(prose)}}}}
+	cell := &Grid{Rows: []Row{{Cells: []Cell{{Grid: inner}, text("x")}}}}
+	g := boxOf(&Grid{Width: 60, Rows: []Row{
+		{Cells: []Cell{text("k"), {Grid: cell}}},
+		{Cells: []Cell{text("k"), text("v"), text("zzzzzzzzzzzzzzzzzzzz")}},
+	}})
+	lines := g.Lines()
+	// The prose's lines as drawn in the box's second column (the first row's
+	// lines, between the top and the second row), and where the x after it
+	// starts.
+	widest, at := 0, -1
+	for _, l := range lines[1 : len(lines)-2] {
+		parts := strings.Split(l, boxSide)
+		if len(parts) < 4 {
+			continue
+		}
+		col := strings.TrimPrefix(parts[2], " ")
+		if strings.HasSuffix(strings.TrimRight(col, " "), " x") {
+			at = strings.Index(col, " x") + 1
+			col = strings.TrimRight(col, " x")
+		}
+		widest = max(widest, Width(strings.TrimRight(col, " ")))
+	}
+	if at < 0 || widest == 0 {
+		t.Fatalf("the control: the prose and its x in the box:\n%s", strings.Join(lines, "\n"))
+	}
+	if at != widest+DefaultGap {
+		t.Errorf("x starts at %d in its cell, the prose before it %d wide:\n%s", at, widest, strings.Join(lines, "\n"))
+	}
+}
+
+// squareLines fails unless every line of a box is as wide as its first.
+func squareLines(t *testing.T, lines []string) {
+	t.Helper()
+	for _, l := range lines {
+		if Width(l) != Width(lines[0]) {
+			t.Fatalf("the box is not square:\n%s", strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// linesInRoom fails when a line is wider than room.
+func linesInRoom(t *testing.T, lines []string, room int) {
+	t.Helper()
+	if n := linesWidth(lines); n > room {
+		t.Fatalf("%d columns in a room of %d:\n%s", n, room, strings.Join(lines, "\n"))
+	}
+}
+
+// Prose as the last cell of rows in two columns of a box: the earlier
+// runs to the side, the box is measured in one pass, and its lines join.
+func TestBoxFittingTwoColumnsSettles(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Border: Box, Width: 70, Rows: []Row{
+		{Cells: []Cell{{Text: "w7xxxx w8x w9xxx w10xxxxxx w11xxxxxx w12xxxx", Fit: WrapWords}}},
+		{Cells: []Cell{{Text: "w14"}, {Text: "w15 w16xx", Fit: WrapWords}}},
+		{Cells: []Cell{{Text: "w17"}, {}, {Text: "w19xxxxxxx w20 w21xxx w22xxxxx w23xxxxx w24xxxx w25xx", Fit: WrapWords}}},
+	}}
+	squareLines(t, g.Lines())
+}
+
+// Prose as the last cell of rows in two columns of a box: the box stays in
+// a room it fits in.
+func TestBoxFittingTwoColumnsStaysInItsRoom(t *testing.T) {
+	t.Parallel()
+	rows := func() []Row {
+		return []Row{
+			{Cells: []Cell{{Text: "w3xx w4xxxxx", Fit: WrapWords}}},
+			{Cells: []Cell{{Text: "w8"}, {Text: "w9xxxxx", Prefix: "| "}, {Text: "w10xxxxxxx w11 w12x", Fit: WrapWords}}},
+		}
+	}
+	linesInRoom(t, (&Grid{Border: Box, Width: 40, Rows: rows()}).Lines(), 40)
+	linesInRoom(t, (&Grid{Border: Box, Width: 48, Rows: rows()}).Lines(), 48)
+}
+
+// Boxes sharing columns, in rooms of their own, are fitted and drawn in
+// the tightest: each is square and in its room.
+func TestBoxesSharingWidthsInTwoRooms(t *testing.T) {
+	t.Parallel()
+	shared := NewWidths()
+	prose := "w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28"
+	box := func() *Grid {
+		return &Grid{Border: Box, Widths: shared, Rows: []Row{{Cells: []Cell{{Text: prose, Fit: WrapWords}}}}}
+	}
+	wide, tight := box(), box()
+	g := &Grid{Width: 60, Rows: []Row{
+		{Widths: NewWidths(), Cells: []Cell{{Grid: wide}}},
+		{Widths: NewWidths(), Cells: []Cell{{Text: "a key some twenty wide"}, {Grid: tight}}},
+	}}
+	lines := g.Lines()
+	squareLines(t, lines[:3])
+}
+
+// A span cell where no row of the box holds anything starts a column of
+// its own, which widens to hold it inside the box.
+func TestBoxSpanCellPastItsColumns(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Border: Box, Rows: []Row{
+		{Cells: []Cell{{Text: "w1"}, {Text: "w6", Span: true}}},
+	}}
+	squareLines(t, g.Lines())
+	g = &Grid{Border: Box, Rows: []Row{
+		{Cells: []Cell{{Text: "w1"}}},
+		{Cells: []Cell{{}, {Text: "w8", Span: true}}},
+	}}
+	squareLines(t, g.Lines())
+}
+
+// A box measures the grids two levels under it as they draw once it is
+// fitted: its columns hold them.
+func TestBoxMeasuresGridsUnderItAsDrawn(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Widths: NewWidths().Fixed(0, 5), Border: Box, Width: 40, Rows: []Row{
+		{Cells: []Cell{{Text: "w1xxxxxx"}, {Grid: &Grid{Rows: []Row{
+			{Cells: []Cell{{Grid: &Grid{MinRoom: 12, Rows: []Row{
+				{Indent: 1, Cells: []Cell{{Text: "w3xxx w4xxx"}, {Text: "w5xxxx w6xxxxxx", Fit: WrapWords}}},
+			}}}, {Text: "w13"}}},
+		}}}}},
+	}}
+	squareLines(t, g.Lines())
+}
+
+// A grid rendered again in the same room gives the same lines: a render
+// forgets the rooms and widths an earlier one took.
+func TestRenderAgainWithGridsThreeDeep(t *testing.T) {
+	t.Parallel()
+	for room := 0; room <= 120; room++ {
+		w1, w2 := NewWidths(), NewWidths()
+		g := &Grid{Width: room, Rows: []Row{
+			{Cells: []Cell{{Grid: &Grid{Widths: w1, Rows: []Row{
+				{Cells: []Cell{{Grid: &Grid{Widths: w2, Rows: []Row{
+					{Cells: []Cell{{Text: "   w4xxxxxxx w5xxx"}}},
+				}}}, {Text: "w7xx w8xxx w9xxxx w10xxxxxx w11xxx"}}},
+			}}}}},
+			{Cells: []Cell{{Grid: &Grid{Widths: w1, Rows: []Row{
+				{Cells: []Cell{{Text: "w78x"}, {Text: "w79xxxx w80x"}, {Grid: &Grid{Widths: w2, Rows: []Row{
+					{Cells: []Cell{{Text: "w81"}, {Text: "w83x w84x w85xxxxxx w86xxxx", Fit: WrapWords}}},
+				}}}, {Fit: MoveLast}}},
+			}}}}},
+		}}
+		first := g.String()
+		if again := g.String(); again != first {
+			t.Fatalf("in a room of %d, first:\n%sagain:\n%s", room, first, again)
+		}
+	}
+}
+
+// MoveLast counts a right aligned cell at its padded width: a row that
+// does not fit so moves its last cell.
+func TestMoveLastCountsARightCellPadded(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Widths: NewWidths().Right(0), Width: 28, Rows: []Row{
+		{Cells: []Cell{{Text: "w1xxxxxx w2xxxx"}}},
+		{Cells: []Cell{{Text: "w3xx"}, {Text: "  w5 w6 w7xx", Fit: MoveLast}}},
+	}}
+	linesInRoom(t, g.Lines(), 28)
+}
+
+// MoveLast judges the line its last cell is on after an Overflow: a last
+// cell that fits there stays.
+func TestMoveLastAfterAnOverflow(t *testing.T) {
+	t.Parallel()
+	rows := func() []Row {
+		return []Row{{Cells: []Cell{{Text: "w1"}, {Text: "w2xxxxx"}, {Text: "w3xxxxxx w4xx w5xxxxxx w6xxx", Fit: MoveLast}}}}
+	}
+	widths := func() *Widths { return NewWidths().Fixed(1, 3).Overflow(1) }
+	free := (&Grid{Widths: widths(), Rows: rows()}).String()
+	linesInRoom(t, strings.Split(free, "\n"), 40)
+	if got := (&Grid{Widths: widths(), Width: 40, Rows: rows()}).String(); got != free {
+		t.Fatalf("in a room of 40:\n%swith no room:\n%s", got, free)
+	}
+}
+
+// An empty row's underline is no line of spaces.
+func TestUnderlineOfAnEmptyIndentedRow(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Rows: []Row{{Indent: 2, Underline: true}}}
+	for _, l := range g.Lines() {
+		if l != strings.TrimRight(l, " ") {
+			t.Fatalf("a line ends in spaces: %q", g.Lines())
+		}
+	}
+}
