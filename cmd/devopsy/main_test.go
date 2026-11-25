@@ -123,6 +123,17 @@ func fakeBin(t *testing.T) string {
 // fakeRequired answers compose's config -q and config --variables as compose does for the
 // -f files' ${VAR:?msg} and ${VAR?msg}: -q fails on the first one unset (or empty, for :?)
 // with compose's words, --variables lists each as required.
+// killParent is a fake's shell function that kills the process that ran
+// it outright (SIGKILL, as the OOM killer does) and waits, bounded, until
+// it is gone: a kill is only sent, so a fake that exits at once can be
+// seen exiting by the parent it was to kill, which then goes on and says
+// so (seen under a loaded suite).
+const killParent = `killParent() {
+  kill -KILL "$PPID" 2>/dev/null
+  n=0; while kill -0 "$PPID" 2>/dev/null && [ $n -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+}
+`
+
 const fakeRequired = `case "$*" in *' config -q'|*' config --variables --format json')
   files= next=
   for a in "$@"; do [ -z "$next" ] || files="$files $a"; next=; [ "$a" != -f ] || next=1; done

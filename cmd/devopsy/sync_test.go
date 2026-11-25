@@ -51,7 +51,7 @@ import (
 // is app's devopsy.mnt.owner, FAKE_DB_OWNER db's. devopsy-util is there
 // and fresh unless FAKE_UTIL_* say otherwise (below).
 const syncFakeDocker = `#!/bin/sh
-# devopsy's own compose file (images.ComposeFile) is left out of the log:
+` + killParent + `# devopsy's own compose file (images.ComposeFile) is left out of the log:
 # the tests here match the project's compose commands. A sed only where
 # it has something to do: the fake runs thousands of times, and macOS
 # makes every process dear.
@@ -226,7 +226,7 @@ case "$*" in
     script=$2; shift 2
     # FAKE_CUT_AFTER_ROOT: the devopsy that ran it killed outright once it is done.
     [ -n "${FAKE_CUT_AFTER_ROOT:-}" ] || exec sh -c "$script" "$@"
-    sh -c "$script" "$@"; kill -KILL "$PPID"; exit 137 ;;
+    sh -c "$script" "$@"; killParent; exit 137 ;;
   # docker info: the host root's docker-info.json, when a test writes one, else no more than
   # its image store. The store is the containerd one, at the floor (dockerFloors), unless the
   # file names one or FAKE_CLASSIC_STORE: the classic one, as overlay2 says it.
@@ -286,7 +286,7 @@ case "$*" in
     if [ -n "${FAKE_START_WAIT:-}" ]; then : >"$FAKE_START_WAIT"; n=0; while [ ! -e "$FAKE_START_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # FAKE_KILL_START: the devopsy starting them killed outright (SIGKILL,
     # the OOM killer) as they start.
-    [ -z "${FAKE_KILL_START:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_START:-}" ] || { killParent; exit 137; }
     # FAIL_START: a start that fails, its services left stopped.
     [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     for s in $(after start "$@"); do case " $svcs " in *" $s "*) ;; *) echo "no such service: $s" >&2; exit 1 ;; esac; done
@@ -505,7 +505,7 @@ case "$*" in
     [ -z "${FAIL_SNAPSHOT_TAR:-}" ] || exit "$FAIL_SNAPSHOT_TAR"
     # FAKE_KILL_SNAPSHOT_TAR: the devopsy writing the tars killed
     # outright (SIGKILL, the OOM killer).
-    [ -z "${FAKE_KILL_SNAPSHOT_TAR:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_SNAPSHOT_TAR:-}" ] || { killParent; exit 137; }
     # FAKE_SLOW_TAR: a tar that takes until $FAKE_SLOW_TAR.go exists.
     if [ -n "${FAKE_SLOW_TAR:-}" ]; then : >"$FAKE_SLOW_TAR"; n=0; while [ ! -e "$FAKE_SLOW_TAR.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # From the mirror (-v <mirror>:/m:ro), or a take without one from the
@@ -560,14 +560,14 @@ case "$*" in
     [ -z "${FAIL_DESTROY:-}" ] || exit "$FAIL_DESTROY"
     # FAKE_KILL_DESTROY: its devopsy (--destroy-data, which runs this)
     # killed outright meanwhile, as SIGKILL or the OOM killer would.
-    [ -z "${FAKE_KILL_DESTROY:-}" ] || kill -9 "$PPID"
+    [ -z "${FAKE_KILL_DESTROY:-}" ] || killParent
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     # FAKE_KILL_EXPORT: the devopsy exporting killed outright (SIGKILL,
     # the OOM killer) as its tar runs.
-    [ -z "${FAKE_KILL_EXPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_EXPORT:-}" ] || { killParent; exit 137; }
     # Each entry (--mount type=bind,source=<path>,target=/x/<entry>) and
     # volume (-v <name>:/x/<key>:ro) copied into a directory of its own,
     # where the script that follows the image runs, /x being it.
@@ -592,7 +592,7 @@ case "$*" in
     [ -z "${FAKE_EXTRACT_BREAK:-}" ] || echo '{' >"$FAKE_EXTRACT_BREAK"
     # FAKE_KILL_IMPORT: the devopsy that started the extraction killed
     # outright (SIGKILL, the OOM killer) as it writes.
-    [ -z "${FAKE_KILL_IMPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_IMPORT:-}" ] || { killParent; exit 137; }
     # One entry per container (--mount, its source the entry): emptied,
     # then the members named after it extracted from the tar mounted at
     # /in (a snapshot's .tar.zst is a plain tar here), as the util image
