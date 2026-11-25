@@ -483,8 +483,10 @@ code to pass on and no fix, and leaves out what only the admin can do
 rules, every box's columns at one width. `--json` prints the facts and
 the same lines for scripts and agents, never with `--borders`, each
 warning with its own fix, each line with its `section`, its project
-(`group`), a line of a project's heading (`head`), a row's `cells`, and
-the name of what a row is of when its key does not say it (`name`). Its
+(`group`) and instance (`instance`), a line of a project's heading
+(`head`), a row's `cells`, and the name of what a row is of when its key
+does not say it (`name`); the facts say whose report it is when a
+project user's (`project_user`). Its
 fields may change before 1.0.0: the door's `firewall_wrong`,
 `firewall_error` and `project` are gone, the setup's `firewall` (its
 `state`, `differs`, `wrong` and `unread`) saying the firewall for both

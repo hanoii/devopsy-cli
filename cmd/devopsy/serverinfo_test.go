@@ -8,12 +8,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"strconv"
+	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/howto"
@@ -22,8 +26,6 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"github.com/hanoii/devopsy-cli/internal/uids"
-	"strconv"
-	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
@@ -1635,5 +1637,26 @@ func TestServerInfoProxyWarningReadsThisDaemonsEntry(t *testing.T) {
 	}
 	if !warned("http://proxy.example.com:3128", "containers get none") {
 		t.Error("a proxied daemon whose containers get a proxy only on another daemon: no warning that they get none")
+	}
+}
+
+// docs/servers.md names every field --server-info's --json entries carry
+// beyond the level, key, lines and fixes it says in words: a script
+// reading them meets none the docs leave out.
+func TestServerInfoDocsNameEveryEntryField(t *testing.T) {
+	t.Parallel()
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "servers.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What every entry has, which the docs say in words (its level, key,
+	// lines and fixes).
+	plain := map[string]bool{"level": true, "key": true, "lines": true, "remedies": true}
+	ty := reflect.TypeOf(remote.StatusEntry{})
+	for i := range ty.NumField() {
+		name, _, _ := strings.Cut(ty.Field(i).Tag.Get("json"), ",")
+		if !plain[name] && !strings.Contains(string(doc), "`"+name+"`") {
+			t.Errorf("docs/servers.md names no `%s`, a field of --server-info --json's entries", name)
+		}
 	}
 }

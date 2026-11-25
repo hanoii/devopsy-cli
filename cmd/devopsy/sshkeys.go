@@ -186,7 +186,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			if k.Options != "" {
 				options = "[" + k.Options + "]"
 			}
-			g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(fp, strings.TrimPrefix(k.Type, "ssh-"), report.Copyable(k.Comment), report.Copyable(options))})
+			g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(fp, report.Copyable(strings.TrimPrefix(k.Type, "ssh-")), report.Copyable(k.Comment), report.Copyable(options))})
 		}
 		fmt.Print(g.String())
 		return 0

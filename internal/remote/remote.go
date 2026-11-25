@@ -1673,15 +1673,21 @@ func FormatReleases(out string, borders bool) string {
 		{"Images the project's removals left (each pruning retries):", left},
 		{"Names the project's removals kept for a release's tool (each pruning removes them once no tool runs by them):", kept},
 	} {
-		if len(g.ls) > 0 {
-			b.WriteString("\n" + g.head + "\n")
+		if len(g.ls) == 0 {
+			continue
 		}
+		b.WriteString("\n" + g.head + "\n")
+		// Each name and what it is of in columns, why under it, quoted as
+		// they show: the server's file holds them.
+		names := &layout.Grid{}
 		for _, l := range g.ls {
-			fmt.Fprintf(&b, "  %s  %s, release %s, %s\n", l.Ref, l.Name, l.Release, l.Time.Format("2006-01-02 15:04"))
+			names.Rows = append(names.Rows, layout.Row{Indent: 2, Cells: layout.Cells(report.Copyable(l.Ref),
+				report.Copyable(l.Name)+", release "+report.Copyable(l.Release)+", "+l.Time.Format("2006-01-02 15:04"))})
 			if l.Why != images.ToolKeeps {
-				fmt.Fprintf(&b, "    %s\n", l.Why)
+				names.Rows = append(names.Rows, layout.Row{Indent: 4, Cells: []layout.Cell{{Text: report.Copyable(l.Why), Span: true}}})
 			}
 		}
+		b.WriteString(names.String())
 	}
 	return b.String()
 }

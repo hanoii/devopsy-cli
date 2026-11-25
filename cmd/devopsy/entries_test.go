@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -357,7 +358,7 @@ func TestReportArgs(t *testing.T) {
 // With borders, each section is a box under its title, every box's
 // columns at one width: a rule between its keys and before each project,
 // an empty row where a blank line goes inside a key, a project's heading
-// in the key column, its keys at the box's edge.
+// across the box, its keys at the box's edge.
 func TestReportBoxed(t *testing.T) {
 	t.Parallel()
 	info := func(section, group, key string, lines ...string) remote.StatusEntry {
@@ -393,8 +394,9 @@ server
 ╰───────────┴──────────────────────────╯
 
 projects
-╭───────────┬──────────────────────────╮
-│ shop      │                          │
+╭──────────────────────────────────────╮
+│ shop                                 │
+├───────────┬──────────────────────────┤
 │   prod    │ released  1 of 1 running │
 │   staging │ released  0 of 1 running │
 ╰───────────┴──────────────────────────╯
@@ -428,5 +430,35 @@ func TestMovedWarningStaysUnbound(t *testing.T) {
 	newEntryTable(&b, style{}).print(es)
 	if !strings.Contains(b.String(), "/mnt  ext4\n\n") {
 		t.Errorf("no blank line between a row and a warning that is not about it:\n%s", b.String())
+	}
+}
+
+// A project's name sets no key column, with borders as without: its
+// heading runs across the box, and the keys' column is as wide as the keys
+// need.
+func TestBoxedKeyColumnLeavesAProjectHeadingOut(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	// keyColumn is the report's system line up to its value.
+	keyColumn := func(info remote.ServerInfo, borders bool) string {
+		var b strings.Builder
+		tab := newEntryTable(&b, style{})
+		tab.borders = borders
+		tab.print(serverInfoReport(info, "vm1", "vm1:", "0.53.0", now))
+		for _, l := range strings.Split(b.String(), "\n") {
+			if i := strings.Index(l, "Debian"); i >= 0 && strings.Contains(l, "system") {
+				return l[:i]
+			}
+		}
+		t.Fatalf("no system line in:\n%s", b.String())
+		return ""
+	}
+	long := healthyServerInfo()
+	long.Environments = append(long.Environments, remote.Environment{Path: "storefront-checkout-service/prod",
+		Status: "release\t20261027115000\t{\"mode\":\"image\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"})
+	for _, borders := range []bool{false, true} {
+		if short, wide := keyColumn(healthyServerInfo(), borders), keyColumn(long, borders); short != wide {
+			t.Errorf("borders %v: a project's name moved the value column: %q, with a long project name %q", borders, short, wide)
+		}
 	}
 }

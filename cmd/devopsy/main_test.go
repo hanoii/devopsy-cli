@@ -2017,3 +2017,32 @@ func TestMissingStepsExample(t *testing.T) {
 		}
 	}
 }
+
+// --ssh-keys shows each key's fields as they show (report.Copyable), its
+// type too: a key's line is anyone's with the key to write.
+func TestSSHKeysShownEscaped(t *testing.T) {
+	t.Parallel()
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	project := filepath.Join(tmp, "app")
+	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
+	write(t, filepath.Join(tmp, ".ssh", "authorized_keys"),
+		"ssh-\x1b[2Jed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g sample@test\n", 0o600)
+	cmd := exec.Command(binary, "@prod", "--ssh-keys")
+	cmd.Dir = project
+	cmd.Env = []string{"DEVOPSY_HOME=" + t.TempDir(), "DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "sample@test") {
+		t.Fatalf("the control: the key not listed:\n%s", out)
+	}
+	if !strings.Contains(string(out), `\x1b[2Jed25519`) {
+		t.Errorf("a key's type not shown escaped:\n%q", out)
+	}
+}

@@ -4152,7 +4152,8 @@ func TestSnapshotsGrid(t *testing.T) {
 }
 
 // --borders draws a list, so it goes with the list form alone: with a
-// word that acts it is refused, the word named, before any session.
+// word that acts it is refused, the word named, before any session; a
+// word that is none is a usage error as without it.
 func TestBordersListsOnly(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -4165,5 +4166,12 @@ func TestBordersListsOnly(t *testing.T) {
 		if code == 0 || !strings.Contains(out, "takes no --borders") || !strings.Contains(out, "usage: devopsy @") {
 			t.Errorf("%q (%d):\n%s", args, code, out)
 		}
+	}
+	// A word that is no subcommand is a usage error, with --borders as
+	// without.
+	plain, plainCode := s.run(nil, "@prod", "--snapshots", "bogus")
+	boxed, boxedCode := s.run(nil, "@prod", "--snapshots", "bogus", "--borders")
+	if plain != boxed || plainCode != boxedCode {
+		t.Errorf("a word that is no subcommand, said otherwise with --borders:\nwithout (%d):\n%s\nwith (%d):\n%s", plainCode, plain, boxedCode, boxed)
 	}
 }

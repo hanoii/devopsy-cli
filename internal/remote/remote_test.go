@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/hanoii/devopsy-cli/internal/images"
-	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"io"
 	"os"
 	"os/exec"
@@ -21,6 +19,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 func write(t *testing.T, path, content string) {
@@ -3906,5 +3907,26 @@ func TestReleasesGrid(t *testing.T) {
 		"  20261004120000  somebody\\x1b[2J  build fe\\x1b]8;;x\\x07at@def  FAILED\n"
 	if got := ReleasesGrid(rs, false, false).String(); got != want {
 		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+// The names a project's removals left or kept line up in columns under
+// --releases, each quoted as it shows: the server's file holds them.
+func TestReleasesLeftNamesInColumns(t *testing.T) {
+	t.Parallel()
+	out := "left\t1760000000\tapp-prod\t20261001000000\tjq:1.8\tsha256:j\t" + images.ToolKeeps + "\n" +
+		"left\t1760000000\tapp-prod\t20261001000000\tbusybox:1.37\tsha256:b\t" + images.ToolKeeps + "\n"
+	got := FormatReleases(out, false)
+	var at []int
+	for _, l := range strings.Split(got, "\n") {
+		if strings.HasPrefix(l, "  ") && strings.Contains(l, "app-prod, release") {
+			at = append(at, strings.Index(l, "app-prod"))
+		}
+	}
+	if len(at) != 2 {
+		t.Fatalf("the control: two kept names in:\n%s", got)
+	}
+	if at[0] != at[1] {
+		t.Errorf("the kept names' environments at columns %v, not one:\n%s", at, got)
 	}
 }

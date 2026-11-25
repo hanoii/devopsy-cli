@@ -173,12 +173,8 @@ func (t entryTable) boxed(rows []layout.Row) *layout.Grid {
 				box = &layout.Grid{Border: layout.Box, Width: t.width, MinRoom: minWrapRoom}
 				root.Rows = append(root.Rows, layout.Row{Cells: []layout.Cell{{Grid: box}}})
 			}
-			if layout.SpanRow(r) {
-				// A project's heading in the key column, so the box's column
-				// line runs on.
-				r.Cells = append([]layout.Cell(nil), r.Cells...)
-				r.Cells[0].Span = false
-			}
+			// A project's heading runs across the box, its name widening no
+			// column.
 			box.Rows = append(box.Rows, r)
 		}
 	}

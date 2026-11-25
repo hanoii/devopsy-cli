@@ -1638,7 +1638,13 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			words = append(words, a)
 		}
 	}
+	// --borders draws the list alone: with a word that acts, it is that
+	// word's to refuse; a word that is none is a usage error as without.
 	if borders && len(words) > 0 {
+		if !slices.Contains([]string{"restore", "remove", "export", "import"}, words[0]) {
+			report.Error(usage)
+			return 2
+		}
 		return takesNo(2, "--snapshots "+words[0], "--borders", usage)
 	}
 	if len(words) > 0 && words[0] == "restore" {
