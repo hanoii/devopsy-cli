@@ -510,7 +510,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, mode reportM
 	// One grid, so the facts before the containers and after them share
 	// their key column.
 	tab := newEntryTable(w, st)
-	tab.borders = mode == boxedReport
+	tab.borders, tab.wide = mode == boxedReport, terminalWidth(w)
 	var rows []layout.Row
 	if heading != "" {
 		rows = append(rows, layout.Row{Cells: []layout.Cell{{Text: report.Copyable(heading), Span: true, Paint: st.name}}})

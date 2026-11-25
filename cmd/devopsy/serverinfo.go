@@ -1335,7 +1335,7 @@ func (r *serverReport) print(w io.Writer, st style, heading string, mode reportM
 	}
 	fmt.Fprintln(w, st.name(report.Copyable(heading)))
 	tab := newEntryTable(w, st)
-	tab.borders = mode == boxedReport
+	tab.borders, tab.wide = mode == boxedReport, terminalWidth(w)
 	tab.print(r.Entries)
 	return code
 }

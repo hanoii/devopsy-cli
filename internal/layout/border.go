@@ -407,7 +407,25 @@ func fitBoxes(boxes []*Grid) {
 			}
 		}
 	}
+	// A box widens for a line it cannot wrap up to its MaxWidth, boxes
+	// sharing columns up to the least of theirs: a longer line runs past
+	// the side.
+	most := map[*column]int{}
+	for _, g := range boxes {
+		s := g.shapeOf()
+		if len(s.cols) == 0 || g.MaxWidth <= 0 {
+			continue
+		}
+		lastCol := s.w.col(s.cols[len(s.cols)-1])
+		at := g.MaxWidth - s.start(len(s.cols)-1) - boxPadding - sideWidth
+		if m, ok := most[lastCol]; !ok || at < m {
+			most[lastCol] = at
+		}
+	}
 	for col, n := range need {
+		if m, ok := most[col]; ok {
+			n = min(n, max(m, 1))
+		}
 		col.fitted = max(n, col.min, col.fixed, 1)
 	}
 }
@@ -503,6 +521,7 @@ func (g *Grid) boxRow(r Row, s boxShape, inner int) []string {
 	lined := s.lines(&r)
 	content := inner - 2*boxPadding
 	out := make([]string, height)
+lines:
 	for j := range out {
 		var b strings.Builder
 		b.WriteString(boxSide + pad)
@@ -515,6 +534,12 @@ func (g *Grid) boxRow(r Row, s boxShape, inner int) []string {
 			block := 0
 			if k := s.cols[i]; k < len(r.Cells) && r.Cells[k].Grid != nil {
 				block = linesWidth(l.cols[i])
+			}
+			if i == len(s.cols)-1 && l.run == nil && Width(line) > s.widths[i] {
+				// Past the box's MaxWidth: the line runs out past the side.
+				b.WriteString(line)
+				out[j] = b.String()
+				continue lines
 			}
 			line = alignLine(line, s.widths[i], s.w.col(s.cols[i]).align == Right, block)
 			b.WriteString(line)
@@ -534,6 +559,12 @@ func (g *Grid) boxRow(r Row, s boxShape, inner int) []string {
 			line := ""
 			if j < len(l.run) {
 				line = paint(l.run[j])
+			}
+			if Width(line) > content-used {
+				// Past the box's MaxWidth: the line runs out past the side.
+				b.WriteString(line)
+				out[j] = b.String()
+				continue
 			}
 			b.WriteString(Pad(line, content-used))
 		} else if upTo == 0 {

@@ -1027,3 +1027,32 @@ func TestUnderlineOfAnEmptyIndentedRow(t *testing.T) {
 		}
 	}
 }
+
+// A box widens for a line it cannot wrap up to its MaxWidth, and no
+// further: a longer line runs out past its side, alone, every other line
+// of the box at that width.
+func TestBoxMaxWidth(t *testing.T) {
+	t.Parallel()
+	long := "$ docker rmi " + strings.Repeat("an-image-name ", 4)
+	box := func(most int) []string {
+		return boxOf(&Grid{Width: 30, MaxWidth: most, Rows: []Row{
+			{Cells: Cells("k", "v")},
+			{Cells: Cells("key", long)},
+		}}).Lines()
+	}
+	wide := box(100)
+	squareLines(t, wide)
+	if !strings.HasSuffix(wide[2], strings.TrimSpace(long)+" "+boxSide) {
+		t.Errorf("a box with room to widen did not hold the line:\n%s", strings.Join(wide, "\n"))
+	}
+	narrow := box(30)
+	for i, l := range narrow {
+		if strings.Contains(l, "docker rmi") {
+			if Width(l) <= 30 || strings.HasSuffix(l, boxSide) {
+				t.Errorf("the line past MaxWidth does not run past the side: %q", l)
+			}
+		} else if Width(l) != 30 {
+			t.Errorf("line %d is %d wide, not the box's 30:\n%s", i, Width(l), strings.Join(narrow, "\n"))
+		}
+	}
+}

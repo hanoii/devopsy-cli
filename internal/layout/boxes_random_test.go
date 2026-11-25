@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// fable5Gen makes reports at random as --borders draws them: a plain root
+// reportGen makes reports at random as --borders draws them: a plain root
 // whose rows each hold a box (a section), the boxes sharing one Widths or
 // not, each with its own number of columns, or one box alone. It makes what
 // randomGen does not: rows that stop short of the last column, headers with
@@ -16,7 +16,7 @@ import (
 // holds a column the other never does, span cells at the last column, a
 // grid as the cell a row runs to the side from, and grids in the last column
 // of boxes sharing their columns.
-type fable5Gen struct {
+type reportGen struct {
 	rnd   *rand.Rand
 	n     int
 	words []string
@@ -27,16 +27,16 @@ type fable5Gen struct {
 	flat, lastGrids bool
 }
 
-func (g *fable5Gen) p(x float64) bool { return g.rnd.Float64() < x }
+func (g *reportGen) p(x float64) bool { return g.rnd.Float64() < x }
 
-func (g *fable5Gen) word() string {
+func (g *reportGen) word() string {
 	g.n++
 	w := "w" + strconv.Itoa(g.n) + strings.Repeat("x", g.rnd.Intn(4))
 	g.words = append(g.words, w)
 	return w
 }
 
-func (g *fable5Gen) text(long bool) string {
+func (g *reportGen) text(long bool) string {
 	n := 1 + g.rnd.Intn(2)
 	if long {
 		n = 6 + g.rnd.Intn(10)
@@ -51,7 +51,7 @@ func (g *fable5Gen) text(long bool) string {
 	return strings.Join(ws, " ")
 }
 
-func (g *fable5Gen) widths(cols int) (*Widths, string) {
+func (g *reportGen) widths(cols int) (*Widths, string) {
 	w := NewWidths()
 	var d []string
 	for i := 0; i < cols; i++ {
@@ -83,7 +83,7 @@ func (g *fable5Gen) widths(cols int) (*Widths, string) {
 
 // sub is a small grid for a cell, a box at times (it draws none in a box's
 // cell).
-func (g *fable5Gen) sub(d int, pad string) *Grid {
+func (g *reportGen) sub(d int, pad string) *Grid {
 	cols := 1 + g.rnd.Intn(3)
 	w, ws := g.widths(cols)
 	out := &Grid{Widths: w}
@@ -99,7 +99,7 @@ func (g *fable5Gen) sub(d int, pad string) *Grid {
 
 // rows fills out with rows of up to cols cells, every row with cols of them
 // and none empty when uniform.
-func (g *fable5Gen) rows(out *Grid, w *Widths, cols, d int, pad string, uniform bool) {
+func (g *reportGen) rows(out *Grid, w *Widths, cols, d int, pad string, uniform bool) {
 	n := 1 + g.rnd.Intn(4)
 	for i := 0; i < n; i++ {
 		r := Row{Widths: w}
@@ -165,8 +165,8 @@ func (g *fable5Gen) rows(out *Grid, w *Widths, cols, d int, pad string, uniform 
 	}
 }
 
-func fable5Report(seed int64, flat bool) (*Grid, *fable5Gen) {
-	g := &fable5Gen{rnd: rand.New(rand.NewSource(seed)), lastGrids: seed%2 == 0, flat: flat}
+func reportReport(seed int64, flat bool) (*Grid, *reportGen) {
+	g := &reportGen{rnd: rand.New(rand.NewSource(seed)), lastGrids: seed%2 == 0, flat: flat}
 	root := &Grid{}
 	shared, ss := g.widths(4)
 	g.desc = append(g.desc, "shared="+ss)
@@ -200,8 +200,8 @@ func fable5Report(seed int64, flat bool) (*Grid, *fable5Gen) {
 	return root, g
 }
 
-// fable5Boxes are the boxes of a report: its root, or those in its cells.
-func fable5Boxes(root *Grid) []*Grid {
+// reportBoxes are the boxes of a report: its root, or those in its cells.
+func reportBoxes(root *Grid) []*Grid {
 	if root.Border == Box {
 		return []*Grid{root}
 	}
@@ -216,13 +216,13 @@ func fable5Boxes(root *Grid) []*Grid {
 	return boxes
 }
 
-// fable5Need is a room every cell of a flat report fits: each column at its
+// reportNeed is a room every cell of a flat report fits: each column at its
 // widest cell that is no prose, the lines between, a row's own cells that are
 // no prose side by side after them, and the longest word of prose.
-func fable5Need(root *Grid) int {
+func reportNeed(root *Grid) int {
 	cols := map[*column]int{}
 	row, word := 0, 0
-	for _, b := range fable5Boxes(root) {
+	for _, b := range reportBoxes(root) {
 		for _, r := range b.Rows {
 			w := b.widths(r)
 			own := r.Indent
@@ -249,12 +249,12 @@ func fable5Need(root *Grid) int {
 	return need
 }
 
-// fable5Drawn says what in a flat report's lines is not as its boxes'
+// reportDrawn says what in a flat report's lines is not as its boxes'
 // columns say: the cells of one column start at one place, or end at one in
 // a right-aligned column (a cell its row runs to the side from, and those
 // after it, are in no column), and a rule stands between a row across the
 // box and a row of columns.
-func fable5Drawn(root *Grid, lines []string) string {
+func reportDrawn(root *Grid, lines []string) string {
 	type place struct {
 		x    int
 		text string
@@ -268,7 +268,7 @@ func fable5Drawn(root *Grid, lines []string) string {
 		}
 		return -1, -1
 	}
-	for _, b := range fable5Boxes(root) {
+	for _, b := range reportBoxes(root) {
 		lastCol := b.shapeOf().lastCol
 		prev, prevLine := -1, -1
 		for i, r := range b.Rows {
@@ -324,15 +324,15 @@ func fable5Drawn(root *Grid, lines []string) string {
 // past it, wider or not; each column's cells start at one place, or end at
 // one in a right-aligned column; a rule stands where the box goes from a
 // row across it to columns or back.
-func TestReview5FableFlatBoxesInARoomTheirCellsFit(t *testing.T) {
+func TestFlatBoxesInARoomTheirCellsFit(t *testing.T) {
 	t.Parallel()
 	for seed := range 2500 {
-		root, gen := fable5Report(int64(seed), true)
-		need := fable5Need(root)
+		root, gen := reportReport(int64(seed), true)
+		need := reportNeed(root)
 		for _, room := range []int{0, need, need + 7, need + 40} {
 			root.Width = room
 			lines := root.Lines()
-			msg := fable5Drawn(root, lines)
+			msg := reportDrawn(root, lines)
 			if got := linesWidth(lines); msg == "" && room > 0 && got > room {
 				msg = fmt.Sprintf("%d columns", got)
 			}
@@ -346,11 +346,11 @@ func TestReview5FableFlatBoxesInARoomTheirCellsFit(t *testing.T) {
 // Reports in boxes with grids in their cells, at random, hold the contract
 // random grids do (contractBreak), and where a grid is only a row's last
 // cell, what fits one room fits every room as wide as it draws there.
-func TestReview5FableBoxesFitEveryRoomTheyFitOne(t *testing.T) {
+func TestBoxesFitEveryRoomTheyFitOne(t *testing.T) {
 	t.Parallel()
 	rooms := []int{0, 150, 100, 80, 60, 40, 20}
 	for seed := range 250 {
-		root, gen := fable5Report(int64(seed), false)
+		root, gen := reportReport(int64(seed), false)
 		fail := func(room int, msg string) {
 			t.Helper()
 			root.Width = room
@@ -390,7 +390,7 @@ func TestReview5FableBoxesFitEveryRoomTheyFitOne(t *testing.T) {
 // A span cell wider than its column's fixed width does not end its line
 // with Overflow: it is in no column, and the cells after it follow at their
 // gap.
-func TestReview5FableSpanCellEndsNoLine(t *testing.T) {
+func TestSpanCellEndsNoLine(t *testing.T) {
 	t.Parallel()
 	g := &Grid{Widths: NewWidths().Fixed(0, 4).Overflow(0), Rows: []Row{
 		{Cells: []Cell{{Text: "a span cell", Span: true}, {Text: "after"}}},
@@ -402,14 +402,10 @@ func TestReview5FableSpanCellEndsNoLine(t *testing.T) {
 	}
 }
 
-// Bug (review 5): in a box, a row whose cells stop short of the box's last
-// column runs its last cell to the side whatever it holds (runsFrom), so a
-// cell that is no heading leaves its column: in a right-aligned column it
-// is drawn on the left, and the column's line after it is gone, where the
-// same rows without borders, and the same row with an empty cell after it,
-// keep it in its column. A list whose header and rows differ in their number
-// of cells draws so (--snapshots with a state: its header's SIZE).
-func TestReview5FableBoxShortRowKeepsItsColumn(t *testing.T) {
+// In a box, a row of several cells that stops short of the box's last
+// column keeps them in their columns, a right-aligned one at its right and
+// the column's line after it, as without borders.
+func TestBoxShortRowKeepsItsColumn(t *testing.T) {
 	t.Parallel()
 	rows := func() []Row {
 		return []Row{
@@ -446,11 +442,9 @@ func TestReview5FableBoxShortRowKeepsItsColumn(t *testing.T) {
 	}
 }
 
-// Bug (review 5): a box aligns a grid in a right-aligned column line by
-// line (boxRow pads each of the cell's lines on its left), so the grid's
-// own columns lose their shape; without borders it is aligned as one block
-// (compose), which TestGridInARightAlignedColumnKeepsItsColumns holds.
-func TestReview5FableBoxGridInARightAlignedColumnKeepsItsColumns(t *testing.T) {
+// A box aligns a grid in a right-aligned column as one block, its own
+// columns kept, as without borders.
+func TestBoxGridInARightAlignedColumnKeepsItsColumns(t *testing.T) {
 	t.Parallel()
 	g := &Grid{Border: Box, Widths: NewWidths().Right(0), Rows: []Row{
 		{Cells: []Cell{{Grid: &Grid{Rows: []Row{{Cells: Cells("ab", "cd")}, {Cells: Cells("x")}}}}, {Text: "after"}}},
@@ -462,11 +456,9 @@ func TestReview5FableBoxGridInARightAlignedColumnKeepsItsColumns(t *testing.T) {
 	}
 }
 
-// Bug (review 5): an empty span cell at a row's end makes a box draw a
-// column for it, empty in every row, and the rows that stop before it run
-// their last cell to the side, their column line gone; an empty cell that
-// is no span, and the same rows without borders, draw nothing for it.
-func TestReview5FableBoxEmptySpanCellDrawsNoColumn(t *testing.T) {
+// An empty span cell at a row's end draws no column in a box, as an empty
+// cell does.
+func TestBoxEmptySpanCellDrawsNoColumn(t *testing.T) {
 	t.Parallel()
 	box := func(last Cell) string {
 		return (&Grid{Border: Box, Rows: []Row{
@@ -479,10 +471,9 @@ func TestReview5FableBoxEmptySpanCellDrawsNoColumn(t *testing.T) {
 	}
 }
 
-// Bug (review 5): a row's fit is its last cell's, an empty one too, for
-// MoveLast only (place): prose before an empty last cell that says
-// WrapWords is not wrapped, in a box or without.
-func TestReview5FableEmptyLastCellSaysTheRowWraps(t *testing.T) {
+// A row's fit is its last cell's, an empty one too: prose before an empty
+// last cell that says WrapWords wraps, in a box and without.
+func TestEmptyLastCellSaysTheRowWraps(t *testing.T) {
 	t.Parallel()
 	prose := "some prose of several words, wider than the room it has"
 	moved := (&Grid{Width: 30, Rows: []Row{{Cells: []Cell{{Text: "key"}, {Text: prose}, {Fit: MoveLast}}}}}).Lines()

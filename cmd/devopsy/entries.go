@@ -13,6 +13,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"golang.org/x/term"
 )
 
 // reportMode is how a report prints: as text, as JSON, or as text in
@@ -114,9 +115,11 @@ type entryTable struct {
 	// width is where a section's prose wraps, reportWidth.
 	width int
 	// borders draws each section, or a flat report, in a box: a rule
-	// between its keys and before each project, where blank lines go
-	// without.
+	// between its keys, each project and each environment, where blank
+	// lines go without; wide is the terminal's width, the most a box widens
+	// to for a line it cannot wrap (reportWidth when there is none).
 	borders bool
+	wide    int
 }
 
 // newEntryTable is a table printing on w in st.
@@ -170,7 +173,7 @@ func (t entryTable) boxed(rows []layout.Row) *layout.Grid {
 			root.Rows = append(root.Rows, r)
 		default:
 			if box == nil {
-				box = &layout.Grid{Border: layout.Box, Width: t.width, MinRoom: minWrapRoom}
+				box = &layout.Grid{Border: layout.Box, Width: t.width, MinRoom: minWrapRoom, MaxWidth: max(t.width, t.wide)}
 				root.Rows = append(root.Rows, layout.Row{Cells: []layout.Cell{{Grid: box}}})
 			}
 			// A project's heading runs across the box, its name widening no
@@ -240,6 +243,21 @@ func ordered(es []remote.StatusEntry) (out []remote.StatusEntry, block, bound []
 		i = j
 	}
 	return out, block, bound
+}
+
+// terminalWidth is the width of the terminal w writes to, 0 when it is
+// none (a pipe, a file, a test's buffer): a box widens to it for a line it
+// cannot wrap.
+func terminalWidth(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return 0
+	}
+	cols, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return cols
 }
 
 // minWrapRoom is the least room prose wraps into: with less left after
@@ -440,10 +458,13 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		case l.group && l.indent == 2 && (l.kind == lineGroup || l.key != ""):
 			// A project's heading, with facts of its own or none.
 			brk, keyStart = true, true
+		case l.kind == lineGroup:
+			// An instance's heading: a block of its own in a box.
+			keyStart = true
 		case first:
 			i := l.entry
 			brk = brk || (block[i] && !bound[i] && !stacks(i)) || (start[i] == i && long(i))
-			keyStart = start[i] == i && es[i].Group == ""
+			keyStart = start[i] == i
 		}
 		if last {
 			i := l.entry
@@ -473,14 +494,9 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		case lineSection:
 			out = append(out, layout.Row{Widths: keys, Break: true, Underline: true, Cells: []layout.Cell{{Text: l.value, Span: true, Paint: t.st.head}}})
 		case lineGroup:
-			heading := layout.Row{Widths: keys, Break: brk, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}}
-			if t.borders && l.indent > 2 {
-				// An instance's heading in a box is a key row, its value
-				// empty, as an instance's heading with facts is: never a
-				// row across the box cutting its project's block.
-				heading.Cells = []layout.Cell{{Text: l.key, Paint: t.st.name}, {}}
-			}
-			out = append(out, heading)
+			// A heading with no facts of its own runs free, across a box: its
+			// name sets no key column, with borders as without.
+			out = append(out, layout.Row{Widths: keys, Break: brk, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}})
 		case lineEntry:
 			key := layout.Cell{Text: l.key}
 			value := layout.Cell{Text: l.value, Fit: prose}

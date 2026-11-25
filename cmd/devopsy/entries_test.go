@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -358,7 +359,8 @@ func TestReportArgs(t *testing.T) {
 // With borders, each section is a box under its title, every box's
 // columns at one width: a rule between its keys and before each project,
 // an empty row where a blank line goes inside a key, a project's heading
-// across the box, its keys at the box's edge.
+// with no facts across the box, a rule around each environment, its keys
+// at the box's edge.
 func TestReportBoxed(t *testing.T) {
 	t.Parallel()
 	info := func(section, group, key string, lines ...string) remote.StatusEntry {
@@ -398,6 +400,7 @@ projects
 │ shop                                 │
 ├───────────┬──────────────────────────┤
 │   prod    │ released  1 of 1 running │
+├───────────┼──────────────────────────┤
 │   staging │ released  0 of 1 running │
 ╰───────────┴──────────────────────────╯
 `
@@ -459,6 +462,48 @@ func TestBoxedKeyColumnLeavesAProjectHeadingOut(t *testing.T) {
 	for _, borders := range []bool{false, true} {
 		if short, wide := keyColumn(healthyServerInfo(), borders), keyColumn(long, borders); short != wide {
 			t.Errorf("borders %v: a project's name moved the value column: %q, with a long project name %q", borders, short, wide)
+		}
+	}
+}
+
+func reportText(info remote.ServerInfo, borders bool) string {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	var b strings.Builder
+	tab := newEntryTable(&b, style{})
+	tab.borders = borders
+	tab.print(serverInfoReport(info, "vm1", "vm1:", "0.53.0", now))
+	return b.String()
+}
+
+// With borders, a command wider than the room widens the boxes up to the
+// terminal's width (reportWidth with none) and no further: past it, its
+// own line runs out past the box's side, every other line of every box in
+// its room.
+func TestBoxedLongLineRunsPastTheSide(t *testing.T) {
+	t.Parallel()
+	info := healthyServerInfo()
+	for i := range 8 {
+		info.Images = append(info.Images, remote.HostImage{ID: "i" + string(rune('a'+i)), Tags: []string{"registry.example.com/team/app-" + string(rune('a'+i)) + ":2026-11-14-build"}, Size: 1e6})
+	}
+	out := reportText(info, true)
+	if !strings.Contains(out, "docker rmi") {
+		t.Fatalf("the control: no docker rmi in:\n%s", out)
+	}
+	// With a terminal as wide as the command, the boxes widen to hold it.
+	var wide strings.Builder
+	tab := newEntryTable(&wide, style{})
+	tab.borders, tab.wide = true, 1000
+	tab.print(serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)))
+	for _, l := range strings.Split(wide.String(), "\n") {
+		if strings.HasPrefix(l, "│") && !strings.HasSuffix(l, "│") {
+			t.Errorf("a line runs past its box though the terminal holds it:\n%s", l)
+		}
+	}
+	// The server's box: from its title to the next.
+	server := out[strings.Index(out, "server\n"):strings.Index(out, "devopsy\n")]
+	for _, l := range strings.Split(server, "\n") {
+		if w := layout.Width(l); w > reportWidth {
+			t.Fatalf("the server's box drawn %d wide for leftovers' command, past its %d:\n%s", w, reportWidth, l)
 		}
 	}
 }

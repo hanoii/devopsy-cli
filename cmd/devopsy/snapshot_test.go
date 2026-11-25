@@ -18,6 +18,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -4173,5 +4174,32 @@ func TestBordersListsOnly(t *testing.T) {
 	boxed, boxedCode := s.run(nil, "@prod", "--snapshots", "bogus", "--borders")
 	if plain != boxed || plainCode != boxedCode {
 		t.Errorf("a word that is no subcommand, said otherwise with --borders:\nwithout (%d):\n%s\nwith (%d):\n%s", plainCode, plain, boxedCode, boxed)
+	}
+}
+
+// --snapshots' header right-aligns SIZE over the sizes, with borders as
+// without, whatever state a snapshot is in: a row of several cells keeps
+// them in their columns.
+func TestSnapshotsHeaderAlignsInABox(t *testing.T) {
+	t.Parallel()
+	snaps := []snap{
+		{id: "20261101000000", kind: "full", release: "20261031000000", taken: "2026-11-01 00:00 UTC", size: "1.2 GB"},
+		{id: "20261102000000", kind: "data", release: "20261031000000", taken: "2026-11-02 00:00 UTC", size: "12 MB", state: "incomplete"},
+	}
+	// end is the column a word in out ends at, on the first line holding it.
+	end := func(out, word string) int {
+		for _, l := range strings.Split(out, "\n") {
+			if i := strings.Index(l, word); i >= 0 {
+				return layout.Width(l[:i+len(word)])
+			}
+		}
+		t.Fatalf("no %q in:\n%s", word, out)
+		return 0
+	}
+	for _, borders := range []bool{false, true} {
+		out := snapshotsGrid(snaps, borders).String()
+		if end(out, "SIZE") != end(out, "1.2 GB") {
+			t.Errorf("borders %v: SIZE not right-aligned over the sizes:\n%s", borders, out)
+		}
 	}
 }

@@ -479,8 +479,11 @@ A warning only the server's admin can fix carries its
 code to pass on and no fix, and leaves out what only the admin can do
 (the hint to free what kdump keeps, data on XFS).
 
-`--borders` draws each part in a box under its title, its keys between
-rules, every box's columns at one width. `--json` prints the facts and
+`--borders` draws each part in a box under its title, its keys and each
+environment between rules, every box's columns at one width. A box
+widens for a command it cannot wrap up to the terminal's width (100
+columns in a pipe); a longer command runs out past the box's side, on its
+line alone. `--json` prints the facts and
 the same lines for scripts and agents, never with `--borders`, each
 warning with its own fix, each line with its `section`, its project
 (`group`) and instance (`instance`), a line of a project's heading

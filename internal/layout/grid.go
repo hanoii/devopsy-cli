@@ -167,6 +167,10 @@ type Grid struct {
 	MinRoom int
 	// Border draws the grid in a box.
 	Border Border
+	// MaxWidth is the most a box widens to for a line it cannot wrap (a
+	// command, kept whole): past it the line runs out past the box's side,
+	// the box keeping this width; 0 for no limit.
+	MaxWidth int
 
 	// What prepare works out: fit is the room the grid is laid out in,
 	// its parent's room less its cell's start, at most its own Width, -1
