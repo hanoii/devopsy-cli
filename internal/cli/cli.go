@@ -1093,7 +1093,7 @@ has no fix for it.
 Options:
   --json     the facts and the same lines as JSON on stdout, for scripts
              and agents
-  --borders  each part in a box, its keys and lines between rules
+  --borders  each part in a box, its keys between rules
 
 Examples:
   devopsy @vm1 --server-info

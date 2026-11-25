@@ -87,7 +87,7 @@ var Flags = []FlagGroup{
 		{Name: "--vars-project", Args: "[...]", Scope: Server, Desc: "the project's .env on the server"},
 	}},
 	{"Running", []Flag{
-		{Name: "--status", Args: "[--json|--borders]", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
+		{Name: "--status", Args: "[--json | --borders]", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
 		{Name: "--shell", Args: "[service] [-- command...]", Scope: LocalOrTarget, Desc: "a shell, or the command, in a container"},
 		{Name: "--shell-host", Args: "[--root]", Scope: Server, Desc: "a shell on the server itself, or root's"},
 		{Name: "--environments", Scope: LocalOrServer, Desc: "the project's environments on its servers"},
@@ -99,7 +99,7 @@ var Flags = []FlagGroup{
 		{Name: "--ssh-keys", Args: "[--for <project>] [list | add <file> | remove <key>]", Scope: Server, Desc: "keys of the deploy user, or a project user"},
 		{Name: "--ssh-keys-generate", Args: "[<name>] [--for <project>]", Scope: Server, Desc: "the same, its public half added to the\nserver's keys or a project user's"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
-		{Name: "--server-info", Args: "[--json|--borders]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
+		{Name: "--server-info", Args: "[--json | --borders]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--server-setup", Args: "[--yes] [--root <dir>]", Scope: Server, Desc: "the server's setup for devopsy: Docker's\ndaemon.json, buffers, the release root"},
 		{Name: "--gc", Args: "[--dry-run] [--yes]", Scope: Server, Desc: "remove what nothing on the server owns:\nold one-offs and build cache, snapshots\nof releases gone, images left"},
 		{Name: "--reboot", Args: "[--yes]", Scope: Server, Desc: "reboot the server, its hostname typed,\nand wait for it to come back"},
