@@ -1728,7 +1728,9 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			fmt.Println("no snapshots on " + t.Address + " (devopsy @" + targetRef(t) + " --snapshot takes one)")
 			return 0
 		}
-		fmt.Print(snapshotsGrid(snaps, borders).String())
+		g := snapshotsGrid(snaps, borders)
+		g.MaxWidth = terminalWidth(os.Stdout)
+		fmt.Print(g.String())
 		// How the last take here copied: an imported snapshot says nothing
 		// of that.
 		last := ""

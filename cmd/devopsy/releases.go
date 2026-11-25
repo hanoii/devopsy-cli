@@ -63,7 +63,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 		return code
 	}
 	if len(words) == 0 {
-		fmt.Print(remote.FormatReleases(out.String(), borders))
+		fmt.Print(remote.FormatReleases(out.String(), borders, terminalWidth(os.Stdout)))
 		return 0
 	}
 

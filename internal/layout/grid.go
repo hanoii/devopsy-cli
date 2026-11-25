@@ -169,7 +169,7 @@ type Grid struct {
 	Border Border
 	// MaxWidth is the most a box widens to for a line it cannot wrap (a
 	// command, kept whole): past it the line runs out past the box's side,
-	// the box keeping this width; 0 for no limit.
+	// the box keeping this width; 0 for no limit, never less than Width.
 	MaxWidth int
 
 	// What prepare works out: fit is the room the grid is laid out in,
@@ -426,16 +426,9 @@ func (g *Grid) roomsBelow() {
 			room = g.fit
 		}
 		for _, r := range g.Rows {
-			last := lastShown(r)
 			for i, k := range s.drawn(r) {
 				if c := r.Cells[k]; c.Grid != nil {
-					// Where cells lays it: a row's last in what the columns
-					// after it leave.
-					inside := insideRoom(room)
-					if k == last {
-						inside = s.lastRoom(inside, i)
-					}
-					c.Grid.fit = roomOf(c.Grid.Width, inside, s.start(i)+indentOf(r, k))
+					c.Grid.fit = roomOf(c.Grid.Width, insideRoom(room), s.start(i)+indentOf(r, k))
 				}
 			}
 			// A grid the row runs to the side from, from its column.

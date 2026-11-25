@@ -436,9 +436,10 @@ func TestMovedWarningStaysUnbound(t *testing.T) {
 	}
 }
 
-// A project's name sets no key column, with borders as without: its
-// heading runs across the box, and the keys' column is as wide as the keys
-// need.
+// A project's name with no facts on its heading sets no key column, with
+// borders as without: its heading runs across the box, and the keys'
+// column is as wide as the keys need. (One with facts is a key row, its
+// name in the key column.)
 func TestBoxedKeyColumnLeavesAProjectHeadingOut(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
@@ -505,5 +506,24 @@ func TestBoxedLongLineRunsPastTheSide(t *testing.T) {
 		if w := layout.Width(l); w > reportWidth {
 			t.Fatalf("the server's box drawn %d wide for leftovers' command, past its %d:\n%s", w, reportWidth, l)
 		}
+	}
+}
+
+// A flat report's box, which wraps nothing, widens for a long line no
+// further than the terminal, a narrow one too: a longer line runs past its
+// side alone.
+func TestFlatBoxWidensNoFurtherThanTheTerminal(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	tab := newEntryTable(&b, style{})
+	tab.borders, tab.wide = true, 80
+	url := "https://shop.example.com/" + strings.Repeat("a-long-path/", 6)
+	tab.write([]layout.Row{tab.row("project", "shop-prod"), tab.row("url", url)})
+	lines := strings.Split(b.String(), "\n")
+	if !strings.Contains(b.String(), url) {
+		t.Fatalf("the control: no url in:\n%s", b.String())
+	}
+	if w := layout.Width(lines[0]); w > 80 {
+		t.Errorf("on an 80-column terminal the box is %d wide for one line it cannot wrap:\n%s", w, b.String())
 	}
 }

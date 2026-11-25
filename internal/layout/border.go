@@ -137,10 +137,12 @@ func runsFrom(r Row, lastCol int) int {
 	if last < 0 || last >= sp || last >= lastCol || empty(r.Cells[last]) {
 		return sp
 	}
-	// Prose runs to the side, and so does a row of one cell that stops
-	// short of the box's last column (a heading); a row of several cells
-	// keeps them in their columns, its alignment and lines with them.
-	if lastCell(r, last).Fit == WrapWords || firstHeld(r) == last && len(r.Cells)-1 < lastCol {
+	// Prose and a grid run to the side, laid out in the room to it, which
+	// so never hangs on the columns after them; so does a row of one cell
+	// that stops short of the box's last column (a heading); a row of
+	// several cells keeps them in their columns, its alignment and lines
+	// with them.
+	if lastCell(r, last).Fit == WrapWords || r.Cells[last].Grid != nil || firstHeld(r) == last && len(r.Cells)-1 < lastCol {
 		return last
 	}
 	return sp
@@ -225,25 +227,6 @@ func (s boxShape) start(i int) int {
 	return at
 }
 
-// after is the room the box's columns after column i take, their lines
-// included.
-func (s boxShape) after(i int) int {
-	n := 0
-	for j := i + 1; j < len(s.cols); j++ {
-		n += s.widths[j] + 2*boxPadding + sideWidth
-	}
-	return n
-}
-
-// lastRoom is the room a row's last cell has in the box's column i: what
-// the box leaves inside it, less the columns after it.
-func (s boxShape) lastRoom(inside, i int) int {
-	if inside < 0 {
-		return -1
-	}
-	return max(0, inside-s.after(i))
-}
-
 // inner is the width between a box's sides.
 func (s boxShape) inner() int {
 	if len(s.cols) == 0 {
@@ -295,7 +278,7 @@ func (g *Grid) cells(r Row, s boxShape, room int) boxLaid {
 		c := r.Cells[k]
 		indent := indentOf(r, k)
 		if k == last {
-			l.cols[i] = indented(g.fitCell(lastCell(r, k), s.start(i)+indent, s.lastRoom(inside, i)), indent)
+			l.cols[i] = indented(g.fitCell(lastCell(r, k), s.start(i)+indent, inside), indent)
 		} else {
 			l.cols[i] = indented(cellLines(c, inside, s.start(i)+indent), indent)
 		}
@@ -388,8 +371,10 @@ func fitBoxes(boxes []*Grid) {
 		}
 	}
 	// The last column: its own cells fitted after the others, and what
-	// runs to the side.
-	need := map[*column]int{}
+	// runs to the side; what wraps (prose, a grid laid out in its room) and
+	// what cannot (a command, kept whole) apart, as MaxWidth holds back the
+	// second alone.
+	need, keep := map[*column]int{}, map[*column]int{}
 	for _, g := range boxes {
 		s := g.shapeOf()
 		if len(s.cols) == 0 {
@@ -400,10 +385,20 @@ func fitBoxes(boxes []*Grid) {
 		need[lastCol] = max(need[lastCol], natural[lastCol])
 		for _, r := range g.Rows {
 			l := g.cells(r, s, g.boxRoom)
-			need[lastCol] = max(need[lastCol], linesWidth(l.cols[len(s.cols)-1]))
+			n := linesWidth(l.cols[len(s.cols)-1])
+			if k := s.cols[len(s.cols)-1]; k < len(r.Cells) && kept(r, k) {
+				keep[lastCol] = max(keep[lastCol], n)
+			} else {
+				need[lastCol] = max(need[lastCol], n)
+			}
 			if l.run != nil {
 				at := s.start(l.runsIn) - sideWidth - boxPadding
-				need[lastCol] = max(need[lastCol], at+linesWidth(l.run)-from)
+				n := at + linesWidth(l.run) - from
+				if kept(r, runsFrom(r, s.lastCol)) {
+					keep[lastCol] = max(keep[lastCol], n)
+				} else {
+					need[lastCol] = max(need[lastCol], n)
+				}
 			}
 		}
 	}
@@ -417,17 +412,40 @@ func fitBoxes(boxes []*Grid) {
 			continue
 		}
 		lastCol := s.w.col(s.cols[len(s.cols)-1])
-		at := g.MaxWidth - s.start(len(s.cols)-1) - boxPadding - sideWidth
+		// Never less than the room the box wraps in.
+		at := max(g.MaxWidth, g.Width) - s.start(len(s.cols)-1) - boxPadding - sideWidth
 		if m, ok := most[lastCol]; !ok || at < m {
 			most[lastCol] = at
 		}
 	}
-	for col, n := range need {
-		if m, ok := most[col]; ok {
-			n = min(n, max(m, 1))
+	for col := range keep {
+		if _, ok := need[col]; !ok {
+			need[col] = 0
 		}
-		col.fitted = max(n, col.min, col.fixed, 1)
 	}
+	for col, n := range need {
+		// Held back to the room MaxWidth leaves the column, never below
+		// what its prose takes; with none left (the columns before it pass
+		// MaxWidth already), nothing is held back: the box is wider anyway.
+		k := keep[col]
+		if m, ok := most[col]; ok && m > 0 {
+			k = min(k, max(m, n))
+		}
+		col.fitted = max(n, k, col.min, col.fixed, 1)
+	}
+}
+
+// kept says whether r's cell k is kept whole wherever it is drawn: text
+// that does not wrap, which a box's MaxWidth lets run past its side.
+func kept(r Row, k int) bool {
+	if k >= len(r.Cells) {
+		return false
+	}
+	c := r.Cells[k]
+	if k == lastShown(r) {
+		c = lastCell(r, k)
+	}
+	return c.Grid == nil && c.Fit != WrapWords
 }
 
 // lines says, for a row of a box, whether a column line stands after each
@@ -533,7 +551,7 @@ lines:
 			}
 			block := 0
 			if k := s.cols[i]; k < len(r.Cells) && r.Cells[k].Grid != nil {
-				block = linesWidth(l.cols[i])
+				block = min(linesWidth(l.cols[i]), s.widths[i])
 			}
 			if i == len(s.cols)-1 && l.run == nil && Width(line) > s.widths[i] {
 				// Past the box's MaxWidth: the line runs out past the side.

@@ -70,23 +70,21 @@ func sided(l string) bool {
 // box as wide as the box and ending in its side but one that runs past it,
 // which a box with no MaxWidth has none of, which fits no box of that
 // MaxWidth, and beside which the box is as wide as its MaxWidth; the lines
-// joining once those are cut at the side. known says it of the three cases
-// the tests below fail on, left out here until they are fixed.
-func maxWidthBreak(root *Grid, gen *reportGen, room int) (msg string, known bool) {
+// joining once those are cut at the side.
+func maxWidthBreak(root *Grid, gen *reportGen, room int) string {
 	root.Width = room
 	lines := root.Lines()
 	all := strings.Join(lines, "\n")
 	for _, w := range gen.words {
 		if !strings.Contains(all, w) {
-			return "word " + w + " missing", false
+			return "word " + w + " missing"
 		}
 	}
 	if again := strings.Join(root.Lines(), "\n"); again != all {
-		return "second render differs", false
+		return "second render differs"
 	}
-	// TestBoxGridBeforeItsLastColumnSettles.
-	if settledBreak(root) != "" {
-		return "", true
+	if msg := settledBreak(root); msg != "" {
+		return msg
 	}
 	root.Lines()
 	boxes := reportBoxes(root)
@@ -103,7 +101,7 @@ func maxWidthBreak(root *Grid, gen *reportGen, room int) (msg string, known bool
 			continue
 		}
 		wide, m := Width(bl[0]), most[b.shapeOf().w]
-		past, far := 0, false
+		past := 0
 		cut := make([]string, len(bl))
 		for j, l := range bl {
 			n := Width(l)
@@ -114,49 +112,42 @@ func maxWidthBreak(root *Grid, gen *reportGen, room int) (msg string, known bool
 			past++
 			cut[j] = string([]rune(Pad(l, wide))[:wide-1]) + boxSide
 			switch {
-			case sided(l) && n > wide && m > 0:
-				// TestBoxRightAlignedGridPastMaxWidthKeepsItsSide.
-				far = true
 			case sided(l):
-				return fmt.Sprintf("box %d line %d: %d wide with its side, the box %d", i, j, n, wide), false
+				return fmt.Sprintf("box %d line %d: %d wide with its side, the box %d", i, j, n, wide)
 			case n < wide-1:
-				return fmt.Sprintf("box %d line %d: %d wide, the box %d", i, j, n, wide), false
+				return fmt.Sprintf("box %d line %d: %d wide, the box %d", i, j, n, wide)
 			case m == 0:
-				return fmt.Sprintf("box %d line %d runs past the side with no MaxWidth", i, j), false
+				return fmt.Sprintf("box %d line %d runs past the side with no MaxWidth", i, j)
 			case n+boxPadding+sideWidth <= m:
-				return fmt.Sprintf("box %d line %d runs past the side, %d wide, within its MaxWidth, %d", i, j, n, m), false
+				return fmt.Sprintf("box %d line %d runs past the side, %d wide, within its MaxWidth, %d", i, j, n, m)
 			}
 		}
-		// TestBoxMaxWidthWithAWideEarlierColumn.
-		if past > 0 && wide > m || far {
-			known = true
-			continue
-		}
-		if past > 0 && wide != m {
-			return fmt.Sprintf("box %d: %d lines run past its side, the box %d wide, its MaxWidth %d", i, past, wide, m), false
+		// A line runs past only a box at its MaxWidth, or past it already for
+		// what it holds otherwise.
+		if past > 0 && wide < m {
+			return fmt.Sprintf("box %d: %d lines run past its side, the box %d wide, its MaxWidth %d", i, past, wide, m)
 		}
 		if msg := boxJoined(cut); msg != "" {
-			return fmt.Sprintf("box %d: %s", i, msg), false
+			return fmt.Sprintf("box %d: %s", i, msg)
 		}
 		if msg := boxesSquare(cut); msg != "" {
-			return fmt.Sprintf("box %d: %s", i, msg), false
+			return fmt.Sprintf("box %d: %s", i, msg)
 		}
 	}
-	return "", known
+	return ""
 }
 
 // Reports in boxes with a MaxWidth and words no room holds, at random,
 // flat and with grids in their cells: a line runs past its box's side only
 // where the box, at its MaxWidth, cannot hold it, and the rest of the box
-// is whole. Three cases are left out (maxWidthBreak's known), each failing a
-// test of its own below.
+// is whole.
 func TestBoxesWithAMaxWidthAtRandom(t *testing.T) {
 	t.Parallel()
 	for _, flat := range []bool{true, false} {
 		for seed := range 150 {
 			root, gen := maxWidthReport(int64(seed), flat)
 			for _, room := range []int{100, 60, 30} {
-				if msg, _ := maxWidthBreak(root, gen, room); msg != "" {
+				if msg := maxWidthBreak(root, gen, room); msg != "" {
 					root.Width = room
 					out := root.String()
 					if len(out) > 6000 {
@@ -169,13 +160,6 @@ func TestBoxesWithAMaxWidthAtRandom(t *testing.T) {
 	}
 }
 
-// BUG (review 6, fable): fitBoxes caps only the box's last column to
-// MaxWidth (most, max(m, 1)), so a cell no room holds in an earlier column
-// widens the box past its MaxWidth all the same, and the last column, capped
-// to one column, drops the side of every row holding more than a letter in
-// it: the box is wider than its MaxWidth and broken, where with no MaxWidth
-// it is only wider.
-//
 // A box past its MaxWidth for a column before its last keeps its sides: no
 // line runs past one unless the box is as wide as its MaxWidth.
 func TestBoxMaxWidthWithAWideEarlierColumn(t *testing.T) {
@@ -206,14 +190,6 @@ func TestBoxMaxWidthWithAWideEarlierColumn(t *testing.T) {
 	}
 }
 
-// BUG (review 6, fable): a grid that is its row's last cell in a column
-// before the box's last gets the room the columns after it leave (lastRoom),
-// while the last column is as wide as what runs to the side needs after the
-// columns before it (fitBoxes' need): once anything holds the box past its
-// room (a heading kept whole, a last column capped by MaxWidth), each pass
-// gives the grid a column less than it took, until its prose is a word a
-// line beside an empty last column, and prepare ends on its bound, unsettled.
-//
 // A grid before a box's last column keeps its width when the box cannot fit
 // its room anyway, and prepare settles.
 func TestBoxGridBeforeItsLastColumnSettles(t *testing.T) {
@@ -249,11 +225,6 @@ func TestBoxGridBeforeItsLastColumnSettles(t *testing.T) {
 	}
 }
 
-// BUG (review 6, fable): boxRow pads a grid's lines to the grid's widest
-// (alignLine's block) in a right-aligned column, also when that widest line
-// runs past the box's side for MaxWidth: the grid's other lines are then as
-// wide as it, and the side is drawn after them, far past the box's.
-//
 // A grid in a right-aligned last column, one of its lines past the box's
 // MaxWidth: only that line runs past the side, every other ends at it.
 func TestBoxRightAlignedGridPastMaxWidthKeepsItsSide(t *testing.T) {
@@ -274,12 +245,6 @@ func TestBoxRightAlignedGridPastMaxWidthKeepsItsSide(t *testing.T) {
 	}
 }
 
-// BUG (review 6, fable): prose in a box's last column wraps in the room the
-// box has (boxRoom), never in the column as MaxWidth draws it: once a cell
-// kept whole in an earlier column takes the room, the prose has none, stays
-// whole (fitCell) and runs out past the side, beside a column it would wrap
-// in. With no MaxWidth it stays whole too, the box widened around it.
-//
 // Prose runs past no side: beside a column wider than the room, it wraps in
 // the column a box at its MaxWidth leaves it.
 func TestBoxProseBesideAWideColumnWrapsInsideMaxWidth(t *testing.T) {

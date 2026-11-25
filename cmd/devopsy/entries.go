@@ -161,6 +161,16 @@ func (t entryTable) write(rows []layout.Row) {
 // one, the boxes sharing their columns.
 func (t entryTable) boxed(rows []layout.Row) *layout.Grid {
 	root := &layout.Grid{Width: t.width, MinRoom: minWrapRoom}
+	// A box widens for a line it cannot wrap up to the terminal's width
+	// (reportWidth in a pipe); a flat report's, which wraps nothing, no
+	// further than a narrower terminal either.
+	most, room := t.width, t.width
+	if t.wide > 0 {
+		most = t.wide
+	}
+	if !slices.ContainsFunc(rows, func(r layout.Row) bool { return r.Underline }) {
+		room = most
+	}
 	var box *layout.Grid
 	for i, r := range rows {
 		switch {
@@ -173,11 +183,11 @@ func (t entryTable) boxed(rows []layout.Row) *layout.Grid {
 			root.Rows = append(root.Rows, r)
 		default:
 			if box == nil {
-				box = &layout.Grid{Border: layout.Box, Width: t.width, MinRoom: minWrapRoom, MaxWidth: max(t.width, t.wide)}
+				box = &layout.Grid{Border: layout.Box, Width: room, MinRoom: minWrapRoom, MaxWidth: most}
 				root.Rows = append(root.Rows, layout.Row{Cells: []layout.Cell{{Grid: box}}})
 			}
-			// A project's heading runs across the box, its name widening no
-			// column.
+			// A heading with no facts of its own runs across the box, its
+			// name widening no column; one with facts is a key row.
 			box.Rows = append(box.Rows, r)
 		}
 	}

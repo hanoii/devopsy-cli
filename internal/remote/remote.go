@@ -1601,9 +1601,10 @@ func ReleasesGrid(rs []Release, images, borders bool) *layout.Grid {
 	if borders {
 		g.Border = layout.Box
 	}
+	// Each release's images on the line under it, with borders as
+	// without: a row across a box, which widens no column for the others.
 	for _, r := range rs {
-		cells := r.cells()
-		g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(cells...)})
+		g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(r.cells()...)})
 		if !images || len(r.Images) == 0 {
 			continue
 		}
@@ -1614,13 +1615,6 @@ func ReleasesGrid(rs []Release, images, borders bool) *layout.Grid {
 				img = ref + " (" + v + ")"
 			}
 			shown[i] = report.Copyable(img)
-		}
-		if borders {
-			// In a box, under its source in its cell: the release stays one
-			// row between the box's lines.
-			cells[2] += "\n" + strings.Join(shown, " ")
-			g.Rows[len(g.Rows)-1].Cells = layout.Cells(cells...)
-			continue
 		}
 		g.Rows = append(g.Rows, layout.Row{Indent: 4, Cells: []layout.Cell{{Text: strings.Join(shown, " "), Span: true}}})
 	}
@@ -1649,11 +1643,14 @@ func ParseLeft(out string) []Left {
 }
 
 // FormatReleases turns ReleasesScript output into a table (in a box with
-// borders), each release's images on the line under it, then the
-// project's images left behind.
-func FormatReleases(out string, borders bool) string {
+// borders, widening up to wide, the terminal's width, 0 for none), each
+// release's images on the line under it, then the project's images left
+// behind.
+func FormatReleases(out string, borders bool, wide int) string {
 	var b strings.Builder
-	b.WriteString(ReleasesGrid(ParseReleases(out), true, borders).String())
+	g := ReleasesGrid(ParseReleases(out), true, borders)
+	g.MaxWidth = wide
+	b.WriteString(g.String())
 	if b.Len() == 0 {
 		b.WriteString("No releases yet.\n")
 	}
