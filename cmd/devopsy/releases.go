@@ -18,16 +18,18 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// runReleases implements devopsy @<target> --releases [--borders | remove
-// <id|failed>... [--yes]]: the list (in a box with --borders), or releases removed with the images only they
+// runReleases implements devopsy @<target> --releases [--borders |
+// --no-borders | remove <id|failed>... [--yes]]: the list (in a box with
+// --borders, or by default as bordersDefault says), or releases removed with the images only they
 // hold. Ids are exact or a unique prefix, failed is every failed or
 // rolled-back release,
 // and every word is resolved before anything is asked or removed: one that
 // names nothing, or the current release, refuses them all. Asks [y/N] at a
 // terminal unless --yes; without one, --yes is required.
 func runReleases(t *remote.Target, projectName string, args []string, color bool) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --releases [--borders | remove <id|failed>... [--yes]]"
-	yes, borders := false, false
+	usage := "usage: devopsy @" + targetRef(t) + " --releases [--borders | --no-borders | remove <id|failed>... [--yes]]"
+	yes := false
+	var borders bordersArg
 	var words []string
 	for _, a := range args {
 		switch a {
@@ -36,8 +38,11 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 			return 0
 		case "--yes", "-y":
 			yes = true
-		case "--borders":
-			borders = true
+		case "--borders", "--no-borders":
+			if !borders.take(a) {
+				report.Say(report.ErrorLevel, "--releases takes --borders or --no-borders, never both", []string{usage})
+				return 1
+			}
 		default:
 			if strings.HasPrefix(a, "-") {
 				report.Error(usage)
@@ -50,8 +55,8 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 		report.Error(usage)
 		return 1
 	}
-	if borders && len(words) > 0 {
-		return takesNo(1, "--releases remove", "--borders", usage)
+	if borders.given != "" && len(words) > 0 {
+		return takesNo(1, "--releases remove", borders.given, usage)
 	}
 
 	var out bytes.Buffer
@@ -63,7 +68,11 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 		return code
 	}
 	if len(words) == 0 {
-		fmt.Print(remote.FormatReleases(out.String(), borders, terminalWidth(os.Stdout)))
+		boxed, err := borders.on(os.Stdout)
+		if err != nil {
+			return fail(err.Error())
+		}
+		fmt.Print(remote.FormatReleases(out.String(), boxed, terminalWidth(os.Stdout)))
 		return 0
 	}
 

@@ -1614,8 +1614,9 @@ func startStops(cwd string, names []string) error {
 // runSnapshots implements devopsy @<target> --snapshots [remove
 // <id>... [--yes]]: the snapshots there, or some removed.
 func runSnapshots(t *remote.Target, projectName string, args []string, color bool) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [--borders | remove <id>... [--yes] | restore <id> [--no-code [--accept-image <service>]] [--with-env] [--yes]]"
-	yes, borders := false, false
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [--borders | --no-borders | remove <id>... [--yes] | restore <id> [--no-code [--accept-image <service>]] [--with-env] [--yes]]"
+	yes := false
+	var borders bordersArg
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -1627,8 +1628,11 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			return 0
 		case "--yes", "-y":
 			yes = true
-		case "--borders":
-			borders = true
+		case "--borders", "--no-borders":
+			if !borders.take(a) {
+				report.Say(report.ErrorLevel, "--snapshots takes --borders or --no-borders, never both", []string{usage})
+				return 2
+			}
 		case "--no-code", "--with-env":
 		default:
 			if strings.HasPrefix(a, "-") {
@@ -1638,14 +1642,15 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			words = append(words, a)
 		}
 	}
-	// --borders draws the list alone: with a word that acts, it is that
-	// word's to refuse; a word that is none is a usage error as without.
-	if borders && len(words) > 0 {
+	// --borders and --no-borders draw the list alone: with a word that
+	// acts, it is that word's to refuse; a word that is none is a usage
+	// error as without.
+	if borders.given != "" && len(words) > 0 {
 		if !slices.Contains([]string{"restore", "remove", "export", "import"}, words[0]) {
 			report.Error(usage)
 			return 2
 		}
-		return takesNo(2, "--snapshots "+words[0], "--borders", usage)
+		return takesNo(2, "--snapshots "+words[0], borders.given, usage)
 	}
 	if len(words) > 0 && words[0] == "restore" {
 		return runRestore(t, projectName, args)
@@ -1728,7 +1733,11 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			fmt.Println("no snapshots on " + t.Address + " (devopsy @" + targetRef(t) + " --snapshot takes one)")
 			return 0
 		}
-		g := snapshotsGrid(snaps, borders)
+		boxed, err := borders.on(os.Stdout)
+		if err != nil {
+			return fail(err.Error())
+		}
+		g := snapshotsGrid(snaps, boxed)
 		g.MaxWidth = terminalWidth(os.Stdout)
 		fmt.Print(g.String())
 		// How the last take here copied: an imported snapshot says nothing

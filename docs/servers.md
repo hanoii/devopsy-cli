@@ -7,7 +7,7 @@ uses most:
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps; the one left is marked rolled back
 devopsy @vm1:prod --reload       # the release again with its variables and imports as they are now, then its reload: step
-devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one; --borders in a box
+devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one; --borders in a box, --no-borders without
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
@@ -480,11 +480,15 @@ code to pass on and no fix, and leaves out what only the admin can do
 (the hint to free what kdump keeps, data on XFS).
 
 `--borders` draws each part in a box under its title, its keys and each
-environment between rules, every box's columns at one width. A box
+environment between rules, every box's columns at one width;
+`borders: true` in your user config makes boxes the default at a
+terminal, and `--no-borders` leaves them out
+([Configuration](config.md#boxes-by-default)). A box
 widens for a command it cannot wrap up to the terminal's width (100
 columns in a pipe); a longer command runs out past the box's side, on its
 line alone. `--json` prints the facts and
-the same lines for scripts and agents, never with `--borders`, each
+the same lines for scripts and agents, never with `--borders` or
+`--no-borders`, each
 warning with its own fix, each line with its `section`, its project
 (`group`) and instance (`instance`), a line of a project's heading
 (`head`), a row's `cells`, and the name of what a row is of when its key

@@ -4,7 +4,7 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 
 ## Files
 
-- A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`; on a server `releases:`, `snapshots: {root, max_keep, mirror}`, `firewall: {metadata}` and `gc: {containers, build_cache}`); an unknown key is an error.
+- A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`, `borders:`; on a server `releases:`, `snapshots: {root, max_keep, mirror}`, `firewall: {metadata}` and `gc: {containers, build_cache}`); an unknown key is an error.
 - Never `~/.devopsy`: project discovery would take the home directory for a project.
 - `defaults:` gives environments `mode`, steps, `releases`, `snapshots`, `inherit` and `env`, merged: `env` key by key, `snapshots` by kind and key (`mergeSnapshots`); a `~` value removes the key (`KEY: ~`, `snapshots.manual.keep: ~`, `inherit: ~`), and `""` stays empty.
 - `config.local.yaml` replaces the project's top-level keys, but its `defaults:` and an environment of the same key (a pattern only over the same pattern) merge over the project's as `defaults:` do, `parent: ~` removing the parent (`mergeEnvironment`): a local file changing one key of an environment must not have to repeat the rest.

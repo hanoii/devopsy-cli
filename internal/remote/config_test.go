@@ -1066,3 +1066,24 @@ func TestPreludeSnapshotDir(t *testing.T) {
 		}
 	}
 }
+
+// borders: is the user-level config's, true or false, and no project's.
+func TestConfigBorders(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := filepath.Join(dir, ConfigFile)
+	for conf, want := range map[string]bool{"borders: true\n": true, "borders: false\n": false, "aliases: {}\n": false} {
+		write(t, file, conf)
+		if f, err := readConfigFile(file, true); err != nil || f.borders != want {
+			t.Errorf("%q: %+v, %v", conf, f, err)
+		}
+	}
+	write(t, file, "borders: boxes\n")
+	if _, err := readConfigFile(file, true); err == nil || !strings.Contains(err.Error(), "borders: true or false") {
+		t.Errorf("borders: boxes: %v", err)
+	}
+	write(t, file, "project: app\nborders: true\n")
+	if _, err := readConfigFile(file, false); err == nil || !strings.Contains(err.Error(), `unknown key "borders"`) {
+		t.Errorf("a project's borders: %v", err)
+	}
+}

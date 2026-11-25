@@ -37,7 +37,7 @@ const statusShowFormat = `<level>\t<key>\t<value>[\t<fix>]`
 // none), then the project's own entries (capabilities/status/show). In a
 // release on a server, its images and the server's disks too.
 func runStatus(cwd string, args []string, color bool) int {
-	mode, code := reportArgs("--status", args, "usage: devopsy --status [--json | --borders]")
+	mode, code := reportArgs("--status", args, "usage: devopsy --status [--json | --borders | --no-borders]", os.Stdout)
 	if code >= 0 {
 		return code
 	}
@@ -87,7 +87,7 @@ func runStatusFacts(cwd string, args []string) int {
 // or running), then the facts of its current release there, formatted
 // here.
 func runRemoteStatus(t *remote.Target, args []string, color bool) int {
-	mode, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json | --borders]")
+	mode, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json | --borders | --no-borders]", os.Stdout)
 	if code >= 0 {
 		return code
 	}
