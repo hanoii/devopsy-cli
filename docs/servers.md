@@ -479,9 +479,9 @@ A warning only the server's admin can fix carries its
 code to pass on and no fix, and leaves out what only the admin can do
 (the hint to free what kdump keeps, data on XFS).
 
-`--borders` draws each part in a box under its title, its keys and each
-project between rules, a project's instances and environments in its
-block, every box's columns at one width;
+`--borders` draws each part in a box under its title, its keys, projects,
+instances and environments between rules, a project's rules open in the
+key column, every box's columns at one width;
 `borders: true` in your user config makes boxes the default at a
 terminal, and `--no-borders` leaves them out
 ([Configuration](config.md#boxes-by-default)). A box

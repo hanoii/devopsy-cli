@@ -1056,3 +1056,35 @@ func TestBoxMaxWidth(t *testing.T) {
 		}
 	}
 }
+
+// A rule at a Break leaves its Open columns blank between the lines that
+// go on through them, so a key reads as one cell across the rows of its
+// values; a rule the box needs anyway (under a header) stays whole, and
+// one with every column open is none.
+func TestBoxOpenRule(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Border: Box, Rows: []Row{
+		{Cells: Cells("KEY", "VALUE", "N"), Header: true},
+		{Cells: Cells("shop", "uid 1", "1"), Break: true, Open: 1},
+		{Cells: Cells("  prod", "released", "2"), Break: true, Open: 1},
+		{Cells: Cells("", "more", "3"), Break: true, Open: 2},
+		{Cells: Cells("", "all open", "4"), Break: true, Open: 3},
+		{Cells: Cells("blog", "uid 2", "5"), Break: true},
+	}}
+	want := `╭────────┬──────────┬───╮
+│ KEY    │ VALUE    │ N │
+├────────┼──────────┼───┤
+│ shop   │ uid 1    │ 1 │
+│        ├──────────┼───┤
+│   prod │ released │ 2 │
+│        │          ├───┤
+│        │ more     │ 3 │
+│        │ all open │ 4 │
+├────────┼──────────┼───┤
+│ blog   │ uid 2    │ 5 │
+╰────────┴──────────┴───╯
+`
+	if got := g.String(); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}

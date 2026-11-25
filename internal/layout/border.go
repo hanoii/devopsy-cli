@@ -469,20 +469,40 @@ func (g *Grid) renderBox() []string {
 	s := g.shapeOf()
 	inner := s.inner()
 	// A rule: a junction at each column line, joining those of the row
-	// above and below it.
-	rule := func(left, right string, above, below *Row) string {
+	// above and below it, its first open columns left blank between the
+	// lines that go on through it.
+	rule := func(left, right string, above, below *Row, open int) string {
 		if len(s.cols) == 0 {
 			return left + strings.Repeat(boxLine, inner) + right
 		}
 		up, down := s.lines(above), s.lines(below)
 		var b strings.Builder
+		if open > 0 {
+			left = boxSide
+		}
 		b.WriteString(left)
 		for i, w := range s.widths {
-			b.WriteString(strings.Repeat(boxLine, w+2*boxPadding))
+			fill := boxLine
+			if i < open {
+				fill = " "
+			}
+			b.WriteString(strings.Repeat(fill, w+2*boxPadding))
 			if i == len(s.widths)-1 {
 				break
 			}
 			switch {
+			case i < open-1 && (up[i] || down[i]):
+				b.WriteString(boxSide)
+			case i < open-1:
+				b.WriteString(" ")
+			case i == open-1 && up[i] && down[i]:
+				b.WriteString("├")
+			case i == open-1 && up[i]:
+				b.WriteString("└")
+			case i == open-1 && down[i]:
+				b.WriteString("┌")
+			case i == open-1:
+				b.WriteString("╶")
 			case up[i] && down[i]:
 				b.WriteString("┼")
 			case up[i]:
@@ -502,17 +522,21 @@ func (g *Grid) renderBox() []string {
 		r := &g.Rows[i]
 		switch {
 		case prev == nil:
-			out = append(out, rule("╭", "╮", nil, r))
-		case r.Break || prev.Header || across(*prev, s.lastCol) != across(*r, s.lastCol):
-			// A rule at a break, under a header, and where the box goes
-			// from a row across it to columns or back, so its lines join.
-			out = append(out, rule("├", "┤", prev, r))
+			out = append(out, rule("╭", "╮", nil, r, 0))
+		case prev.Header || across(*prev, s.lastCol) != across(*r, s.lastCol):
+			// A rule under a header, and where the box goes from a row
+			// across it to columns or back, so its lines join: whole.
+			out = append(out, rule("├", "┤", prev, r, 0))
+		case r.Break && (len(s.cols) == 0 || r.Open < len(s.cols)):
+			// A rule at a break, its open columns left blank; with all of
+			// them open, none.
+			out = append(out, rule("├", "┤", prev, r, max(0, r.Open)))
 		}
 		out = append(out, g.boxRow(*r, s, inner)...)
 		prev = r
 	}
 	if prev != nil {
-		out = append(out, rule("╰", "╯", prev, nil))
+		out = append(out, rule("╰", "╯", prev, nil, 0))
 	}
 	return out
 }
