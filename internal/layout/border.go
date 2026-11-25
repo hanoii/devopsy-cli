@@ -1,6 +1,9 @@
 package layout
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Border is how a grid is drawn.
 type Border int
@@ -52,23 +55,64 @@ func spanAt(r Row) int {
 	return len(r.Cells)
 }
 
-// lastColumn is the last column a row of g holds a cell in before its
-// span cell, -1 for none.
+// lastColumn is the last column a row of g draws: a cell it holds before
+// its span, or the column a span starts in; -1 for none. Whether a row's
+// prose runs to the side (runsFrom) and which column a box fits last go by
+// it alike.
 func (g *Grid) lastColumn() int {
 	n := -1
 	for _, r := range g.Rows {
-		if !SpanRow(r) {
-			n = max(n, min(spanAt(r), len(r.Cells))-1)
+		if SpanRow(r) {
+			n = max(n, firstHeld(r))
+			continue
+		}
+		sp := spanAt(r)
+		if sp < len(r.Cells) {
+			n = max(n, sp)
+		}
+		for k := min(sp, len(r.Cells)) - 1; k >= 0; k-- {
+			if !empty(r.Cells[k]) {
+				n = max(n, k)
+				break
+			}
 		}
 	}
 	return n
 }
 
+// boxColumns are the columns boxes sharing a Widths draw: every one any of
+// them holds, and their last.
+type boxColumns struct {
+	cols    []int
+	lastCol int
+}
+
+// heldColumns are the columns g's rows hold anything in before they run
+// to the side, and each a row runs from, with lastCol the box's last.
+func (g *Grid) heldColumns(lastCol int) []int {
+	n := 0
+	for _, r := range g.Rows {
+		n = max(n, min(runsFrom(r, lastCol)+1, len(r.Cells)))
+	}
+	var out []int
+	for k := range n {
+		for _, r := range g.Rows {
+			rf := runsFrom(r, lastCol)
+			if k < len(r.Cells) && (k < rf && !empty(r.Cells[k]) || k == rf) {
+				out = append(out, k)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // runsFrom is the cell of r a box runs from to its side, with no column
 // line across it: a span row's first cell that holds anything, else its
-// first span cell, else its last cell when that is prose (WrapWords)
-// before the box's last column, which so wraps in the room to the side
-// and never in a column the cells after it hold; len(r.Cells) for none.
+// first span cell, else its last cell before the box's last column when
+// that is prose (WrapWords), which so wraps in the room to the side and
+// never in a column the cells after it hold, or when the row's cells stop
+// short of that column; len(r.Cells) for none.
 // A box's widths then hang on no fit of a column but its last, and are
 // measured in one pass.
 func runsFrom(r Row, lastCol int) int {
@@ -76,7 +120,14 @@ func runsFrom(r Row, lastCol int) int {
 		return firstHeld(r)
 	}
 	sp := spanAt(r)
-	if last := lastShown(r); last >= 0 && last < sp && last < lastCol && r.Cells[last].Fit == WrapWords && !empty(r.Cells[last]) {
+	last := lastShown(r)
+	if last < 0 || last >= sp || last >= lastCol || empty(r.Cells[last]) {
+		return sp
+	}
+	// Prose, or a row whose cells stop short of the box's last column (a
+	// heading), runs to the side; one that reaches it with empty cells
+	// keeps them in their columns.
+	if r.Cells[last].Fit == WrapWords || len(r.Cells)-1 < lastCol {
 		return last
 	}
 	return sp
@@ -100,43 +151,56 @@ type boxShape struct {
 	widths  []int
 }
 
-// shapeOf is g's columns as a box draws them: every column a row holds
-// anything in before it runs to the side, and each column a row runs
-// from, a column empty in all of them left out as without borders; each
-// as wide as fitBoxes fitted it, else as measured.
+// shapeOf is g's columns as a box draws them: the columns its rows hold
+// (heldColumns), or, once fitted, those every box sharing its Widths
+// holds, so they draw one set; each as wide as fitBoxes fitted it, else as
+// measured.
 func (g *Grid) shapeOf() boxShape {
-	s := boxShape{lastCol: g.lastColumn()}
-	n := 0
+	var s boxShape
 	for _, r := range g.Rows {
-		if s.w == nil {
-			s.w = g.widths(r)
-		}
-		rf := runsFrom(r, s.lastCol)
-		n = max(n, min(rf+1, len(r.Cells)))
+		s.w = g.widths(r)
+		break
 	}
 	if s.w == nil {
 		s.w = g.widths(Row{})
 	}
-	for k := range n {
+	if b := s.w.box; b != nil {
+		s.lastCol, s.cols = b.lastCol, b.cols
+	} else {
+		s.lastCol = g.lastColumn()
+		s.cols = g.heldColumns(s.lastCol)
+	}
+	for _, k := range s.cols {
 		c := s.w.col(k)
-		held := c.fitted > 0
-		for _, r := range g.Rows {
-			rf := runsFrom(r, s.lastCol)
-			if k < len(r.Cells) && (k < rf && !empty(r.Cells[k]) || k == rf) {
-				held = true
-			}
-		}
-		if !held {
-			continue
-		}
 		width := max(s.w.size(k), c.min, c.fixed)
 		if c.fitted > 0 {
 			width = max(c.min, c.fixed, c.fitted)
 		}
-		s.cols = append(s.cols, k)
 		s.widths = append(s.widths, width)
 	}
 	return s
+}
+
+// drawn are r's cells a box draws in columns, by the index of the column
+// each is in: those before the row runs to the side.
+func (s boxShape) drawn(r Row) map[int]int {
+	out := map[int]int{}
+	rf := runsFrom(r, s.lastCol)
+	for i, k := range s.cols {
+		if k < rf && k < len(r.Cells) {
+			out[i] = k
+		}
+	}
+	return out
+}
+
+// runsIn is the box's column r runs to the side from, len(s.cols) for a
+// row that does not.
+func (s boxShape) runsIn(r Row) int {
+	if rf := runsFrom(r, s.lastCol); rf < len(r.Cells) {
+		return s.column(rf)
+	}
+	return len(s.cols)
 }
 
 // start is where the box's column i starts, from its left side.
@@ -194,23 +258,15 @@ func (g *Grid) cells(r Row, s boxShape, room int) boxLaid {
 	inside := insideRoom(room)
 	rf := runsFrom(r, s.lastCol)
 	last := lastShown(r)
-	l := boxLaid{cols: make([][]string, len(s.cols)), runsIn: s.column(rf)}
-	for i, k := range s.cols {
-		if k >= rf || k >= len(r.Cells) {
-			continue
-		}
+	l := boxLaid{cols: make([][]string, len(s.cols)), runsIn: s.runsIn(r)}
+	for i, k := range s.drawn(r) {
 		c := r.Cells[k]
 		indent := indentOf(r, k)
-		var lines []string
 		if k == last {
-			lines = g.fitCell(c, s.start(i)+indent, inside)
+			l.cols[i] = indented(g.fitCell(c, s.start(i)+indent, inside), indent)
 		} else {
-			lines = cellLines(c, inside, s.start(i)+indent)
+			l.cols[i] = indented(cellLines(c, inside, s.start(i)+indent), indent)
 		}
-		for j := range lines {
-			lines[j] = strings.Repeat(" ", indent) + lines[j]
-		}
-		l.cols[i] = lines
 	}
 	if rf >= len(r.Cells) {
 		return l
@@ -219,21 +275,14 @@ func (g *Grid) cells(r Row, s boxShape, room int) boxLaid {
 	if c := r.Cells[rf]; !c.Span && rf == last {
 		// Prose before the last column, to the side.
 		indent := indentOf(r, rf)
-		l.run = g.fitCell(c, start+indent, inside)
-		for j := range l.run {
-			l.run[j] = strings.Repeat(" ", indent) + l.run[j]
-		}
+		l.run = indented(g.fitCell(c, start+indent, inside), indent)
 		return l
 	}
-	rest := Row{Cells: r.Cells[rf:]}
-	if rf == 0 {
-		rest.Indent = r.Indent
-	}
-	room = -1
+	run := -1
 	if inside >= 0 {
-		room = max(0, inside-start)
+		run = max(0, inside-start)
 	}
-	l.run = g.renderRow(rest, room)
+	l.run = g.renderFrom(r, run, rf)
 	return l
 }
 
@@ -243,6 +292,36 @@ func (g *Grid) cells(r Row, s boxShape, room int) boxLaid {
 // they are, and the last as wide as its own cells fitted to the room left
 // after the others, and as what runs to the side needs.
 func fitBoxes(boxes []*Grid) {
+	// The columns of boxes sharing a Widths: their last the last of any,
+	// their set every one any holds.
+	groups := map[*Widths][]*Grid{}
+	var order []*Widths
+	for _, g := range boxes {
+		w := g.shapeOf().w
+		w.box = nil
+		if groups[w] == nil {
+			order = append(order, w)
+		}
+		groups[w] = append(groups[w], g)
+	}
+	for _, w := range order {
+		last := -1
+		for _, g := range groups[w] {
+			last = max(last, g.lastColumn())
+		}
+		held := map[int]bool{}
+		var cols []int
+		for _, g := range groups[w] {
+			for _, k := range g.heldColumns(last) {
+				if !held[k] {
+					held[k] = true
+					cols = append(cols, k)
+				}
+			}
+		}
+		slices.Sort(cols)
+		w.box = &boxColumns{cols: cols, lastCol: last}
+	}
 	room := map[*Widths]int{}
 	shapes := map[*Grid]boxShape{}
 	for _, g := range boxes {
@@ -258,9 +337,9 @@ func fitBoxes(boxes []*Grid) {
 		g.boxRoom = room[shapes[g].w]
 		s := shapes[g]
 		for _, r := range g.Rows {
-			rf, last := runsFrom(r, s.lastCol), lastShown(r)
-			for i, k := range s.cols {
-				if k >= rf || k >= len(r.Cells) || (i == len(s.cols)-1 && k == last) {
+			last := lastShown(r)
+			for i, k := range s.drawn(r) {
+				if i == len(s.cols)-1 && k == last {
 					continue
 				}
 				col := s.w.col(k)
@@ -280,11 +359,10 @@ func fitBoxes(boxes []*Grid) {
 	// runs to the side.
 	need := map[*column]int{}
 	for _, g := range boxes {
-		s := shapes[g]
+		s := g.shapeOf()
 		if len(s.cols) == 0 {
 			continue
 		}
-		s.widths = g.shapeOf().widths
 		lastCol := s.w.col(s.cols[len(s.cols)-1])
 		from := s.start(len(s.cols)-1) - sideWidth - boxPadding
 		need[lastCol] = max(need[lastCol], natural[lastCol])
@@ -311,10 +389,7 @@ func (s boxShape) lines(r *Row) []bool {
 	if r == nil || across(*r, s.lastCol) {
 		return out
 	}
-	in := len(s.cols)
-	if rf := runsFrom(*r, s.lastCol); rf < len(r.Cells) {
-		in = s.column(rf)
-	}
+	in := s.runsIn(*r)
 	for i := range out {
 		out[i] = i+1 <= in
 	}

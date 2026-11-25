@@ -3,56 +3,49 @@ package layout
 import (
 	"fmt"
 	"math/rand"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-// Review 4: random grids with boxes against the contract (every box a
-// rectangle whose lines join, every word shown, a second render alike,
-// prepare ended on a pass that changed nothing, no room and a wide room
-// alike), and the bugs it and a reading found, each a failing test that
-// names it.
-
-// r4opts are what a random grid may hold, each a probability.
-type r4opts struct {
+// randomOpts are what a random grid may hold, each a probability.
+type randomOpts struct {
 	box, nestBox, nest, span, prose, move, fixed, min, right, gap, overflow float64
 	indent, prefix, brk, header, underline, multiline, shared, emptyCell    float64
 	ownWidth, minRoom, long, rowWidths                                      float64
 	maxDepth, maxCols, maxRows                                              int
-	// What the random test leaves out, each for a bug a test below
-	// names: a grid in a right-aligned column, MoveLast in a row holding a
-	// grid, boxes sharing their Widths.
+	// What a grid may also hold: a grid in a right-aligned column,
+	// MoveLast in a row holding a grid, boxes sharing their Widths.
 	rightGrid, moveGrid, boxShared bool
 }
 
-var r4all = r4opts{
+var randomAll = randomOpts{
 	box: 0.6, nestBox: 0.3, nest: 0.15, span: 0.12, prose: 0.4, move: 0.1, fixed: 0.12, min: 0.12, right: 0.15, gap: 0.15, overflow: 0.5,
 	indent: 0.12, prefix: 0.08, brk: 0.15, header: 0.1, underline: 0.05, multiline: 0.08, shared: 0.4, emptyCell: 0.15,
 	ownWidth: 0.08, minRoom: 0.2, long: 0.2, rowWidths: 0,
 	maxDepth: 2, maxCols: 4, maxRows: 4,
+	rightGrid: true, moveGrid: true, boxShared: true,
 }
 
-type r4gen struct {
+type randomGen struct {
 	rnd   *rand.Rand
-	o     r4opts
+	o     randomOpts
 	n     int
 	words []string
 	pool  map[int]*Widths
 	desc  []string
 }
 
-func (g *r4gen) p(x float64) bool { return g.rnd.Float64() < x }
+func (g *randomGen) p(x float64) bool { return g.rnd.Float64() < x }
 
-func (g *r4gen) word() string {
+func (g *randomGen) word() string {
 	g.n++
 	w := "w" + strconv.Itoa(g.n) + strings.Repeat("x", g.rnd.Intn(5))
 	g.words = append(g.words, w)
 	return w
 }
 
-func (g *r4gen) text() string {
+func (g *randomGen) text() string {
 	n := 1 + g.rnd.Intn(3)
 	if g.p(g.o.long) {
 		n = 5 + g.rnd.Intn(12)
@@ -68,7 +61,7 @@ func (g *r4gen) text() string {
 	return s
 }
 
-func (g *r4gen) newWidths(d int) (*Widths, string) {
+func (g *randomGen) newWidths(d int) (*Widths, string) {
 	w := NewWidths()
 	var desc []string
 	for i := 0; i < g.o.maxCols; i++ {
@@ -98,7 +91,7 @@ func (g *r4gen) newWidths(d int) (*Widths, string) {
 	return w, strings.Join(desc, ".")
 }
 
-func (g *r4gen) grid(d int, pad string) *Grid {
+func (g *randomGen) grid(d int, pad string) *Grid {
 	out := &Grid{}
 	head := "Grid{"
 	if d == 0 && g.p(g.o.box) || d > 0 && g.p(g.o.nestBox) {
@@ -199,14 +192,14 @@ func (g *r4gen) grid(d int, pad string) *Grid {
 	return out
 }
 
-func r4build(seed int64, o r4opts) (*Grid, *r4gen) {
-	g := &r4gen{rnd: rand.New(rand.NewSource(seed)), o: o, pool: map[int]*Widths{}}
+func randomGrid(seed int64, o randomOpts) (*Grid, *randomGen) {
+	g := &randomGen{rnd: rand.New(rand.NewSource(seed)), o: o, pool: map[int]*Widths{}}
 	root := g.grid(0, "")
 	return root, g
 }
 
-// r4conn is the sides a box character joins: up, down, left, right.
-var r4conn = map[rune][4]bool{
+// boxJoins is the sides a box character joins: up, down, left, right.
+var boxJoins = map[rune][4]bool{
 	'│': {true, true, false, false},
 	'─': {false, false, true, true},
 	'╭': {false, true, false, true},
@@ -220,10 +213,10 @@ var r4conn = map[rune][4]bool{
 	'┼': {true, true, true, true},
 }
 
-// r4joined says what in lines does not join: every box character meets
+// boxJoined says what in lines does not join: every box character meets
 // one joining it back on each side it joins, and none on a side it does
 // not.
-func r4joined(lines []string) string {
+func boxJoined(lines []string) string {
 	grid := make([][]rune, len(lines))
 	for i, l := range lines {
 		grid[i] = []rune(l)
@@ -232,11 +225,11 @@ func r4joined(lines []string) string {
 		if y < 0 || y >= len(grid) || x < 0 || x >= len(grid[y]) {
 			return [4]bool{}
 		}
-		return r4conn[grid[y][x]]
+		return boxJoins[grid[y][x]]
 	}
 	for y := range grid {
 		for x, r := range grid[y] {
-			c, ok := r4conn[r]
+			c, ok := boxJoins[r]
 			if !ok {
 				continue
 			}
@@ -251,7 +244,7 @@ func r4joined(lines []string) string {
 					// A column line may end at a row running to the side.
 					yy, xx := y+s.dy, x+s.dx
 					if yy >= 0 && yy < len(grid) && xx < len(grid[yy]) {
-						if _, box := r4conn[grid[yy][xx]]; !box {
+						if _, box := boxJoins[grid[yy][xx]]; !box {
 							continue
 						}
 					}
@@ -265,10 +258,10 @@ func r4joined(lines []string) string {
 	return ""
 }
 
-func r4check(root *Grid, gen *r4gen, room int) string {
+func contractBreak(root *Grid, gen *randomGen, room int) string {
 	root.Width = room
 	lines := root.Lines()
-	if msg := r4joined(lines); msg != "" {
+	if msg := boxJoined(lines); msg != "" {
 		return msg
 	}
 	all := strings.Join(lines, "\n")
@@ -288,10 +281,10 @@ func r4check(root *Grid, gen *r4gen, room int) string {
 	if strings.Join(again, "\n") != all {
 		return "second render differs:\n" + strings.Join(again, "\n")
 	}
-	if msg := r4rects(lines); msg != "" {
+	if msg := boxesSquare(lines); msg != "" {
 		return msg
 	}
-	if msg := r4settled(root); msg != "" {
+	if msg := settledBreak(root); msg != "" {
 		return msg
 	}
 	if strings.Join(root.render(root.fit), "\n") != all {
@@ -313,8 +306,8 @@ func r4check(root *Grid, gen *r4gen, room int) string {
 	return ""
 }
 
-// r4rects says which box in lines is no rectangle.
-func r4rects(lines []string) string {
+// boxesSquare says which box in lines is no rectangle.
+func boxesSquare(lines []string) string {
 	grid := make([][]rune, len(lines))
 	for i, l := range lines {
 		grid[i] = []rune(l)
@@ -351,9 +344,9 @@ func r4rects(lines []string) string {
 	return ""
 }
 
-// r4settled runs one more pass of prepare's loop over root as prepared
+// settledBreak runs one more pass of prepare's loop over root as prepared
 // and says what it changed.
-func r4settled(root *Grid) string {
+func settledBreak(root *Grid) string {
 	byDepth := [][]*Grid{}
 	var walk func(g *Grid, d int)
 	walk = func(g *Grid, d int) {
@@ -438,33 +431,15 @@ func r4settled(root *Grid) string {
 	return ""
 }
 
-// Random grids hold the contract, with what the bugs below break left
-// out (r4opts): R4_OPT brings each back (rightGrid, moveGrid, boxShared),
-// R4_N and R4_FROM say which seeds.
+// Random grids hold the grid's contract: every box a rectangle whose
+// lines join, every word shown, a second render alike, prepare ended on
+// a pass that changed nothing, and no room alike with a wide one.
 func TestRandomBoxesAgainstTheContract(t *testing.T) {
 	t.Parallel()
 	n, from := 3000, 0
-	if s := os.Getenv("R4_N"); s != "" {
-		n, _ = strconv.Atoi(s)
-	}
-	if s := os.Getenv("R4_FROM"); s != "" {
-		from, _ = strconv.Atoi(s)
-	}
-	o := r4all
-	for _, f := range strings.Fields(os.Getenv("R4_OPT")) {
-		switch f {
-		case "boxShared":
-			o.boxShared = true
-		case "moveGrid":
-			o.moveGrid = true
-		case "rightGrid":
-			o.rightGrid = true
-		case "deep":
-			o.maxDepth, o.nest = 4, 0.3
-		}
-	}
+	o := randomAll
 	for seed := from; seed < from+n; seed++ {
-		root, gen := r4build(int64(seed), o)
+		root, gen := randomGrid(int64(seed), o)
 		for _, room := range []int{0, 120, gen.rnd.Intn(121), gen.rnd.Intn(60), gen.rnd.Intn(30)} {
 			msg := func() (msg string) {
 				defer func() {
@@ -472,10 +447,10 @@ func TestRandomBoxesAgainstTheContract(t *testing.T) {
 						msg = fmt.Sprint("panic: ", r)
 					}
 				}()
-				return r4check(root, gen, room)
+				return contractBreak(root, gen, room)
 			}()
 			if msg != "" {
-				fresh, _ := r4build(int64(seed), o)
+				fresh, _ := randomGrid(int64(seed), o)
 				fresh.Width = room
 				out := "(panic)"
 				func() {
@@ -491,16 +466,11 @@ func TestRandomBoxesAgainstTheContract(t *testing.T) {
 	}
 }
 
-const r4prose = "w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29 w30 w31 w32 w33 w34 w35 w36"
+const shortProse = "w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29 w30 w31 w32 w33 w34 w35 w36"
 
-// Bug: a box in a row that may move its last cell (MoveLast) never
-// settles. prepare measures a box's width before it fits it in the same
-// pass, so the width a row is placed by is the one of the room before:
-// the row moves the box, which gets the whole room and grows, so the row
-// keeps it, which gets less and shrinks, and so on until the bound ends
-// the loop, on a pass that depends on the tree's depth. The box is drawn
-// past its room at one depth, and moved to a line of its own yet fitted
-// to the room beside its key at another.
+// A box in a row that may move its last cell (MoveLast) settles: each
+// pass measures a box as it draws once fitted, so the row is placed by
+// the box's width in that pass, at any depth of the tree.
 func TestBoxInARowThatMovesItsLastSettles(t *testing.T) {
 	t.Parallel()
 	var drawn []string
@@ -512,7 +482,7 @@ func TestBoxInARowThatMovesItsLastSettles(t *testing.T) {
 		}
 		g.Width = 60
 		lines := g.Lines()
-		if msg := r4settled(g); msg != "" {
+		if msg := settledBreak(g); msg != "" {
 			t.Errorf("%d grids around it: %s", deep, msg)
 		}
 		if n := linesWidth(lines); n > 60 {
@@ -527,30 +497,25 @@ func TestBoxInARowThatMovesItsLastSettles(t *testing.T) {
 	}
 }
 
-// Bug: boxes sharing their Widths whose last columns differ (a section
-// of keys and values, another of a heading or of prose alone) are fitted
-// wrong. fitBoxes takes each box's own last column as the one that fits
-// the room, but the column is shared: what the shorter box's last column
-// needs (its prose fitted to the whole room) lands in a column the other
-// box draws before its last, after that box's last column was fitted
-// beside the narrower one. The longer box is drawn past the room, and a
-// row of it past its own side.
+// Boxes sharing their Widths draw one set of columns with one last, so a
+// box of a heading or of prose alone and one of keys and values both stay
+// in the room, the keys' column as wide as its keys.
 func TestBoxesSharingWidthsWithDifferentLastColumns(t *testing.T) {
 	t.Parallel()
 	for name, second := range map[string][]Cell{
-		"a span row alone":        {{Text: r4prose, Span: true, Fit: WrapWords}},
-		"prose alone":             {{Text: r4prose, Fit: WrapWords}},
+		"a span row alone":        {{Text: shortProse, Span: true, Fit: WrapWords}},
+		"prose alone":             {{Text: shortProse, Fit: WrapWords}},
 		"a heading in its column": {{Text: "a heading some thirty columns wide"}},
 	} {
 		w := NewWidths()
 		one := &Grid{Border: Box, Rows: []Row{
 			{Widths: w, Cells: []Cell{{Text: "key"}, {Text: "a value"}}},
-			{Widths: w, Cells: []Cell{{Text: "other"}, {Text: r4prose, Fit: WrapWords}}},
+			{Widths: w, Cells: []Cell{{Text: "other"}, {Text: shortProse, Fit: WrapWords}}},
 		}}
 		two := &Grid{Border: Box, Rows: []Row{{Widths: w, Cells: second}}}
 		g := &Grid{Width: 60, Rows: []Row{{Cells: []Cell{{Grid: one}}}, {Cells: []Cell{{Grid: two}}}}}
 		lines := g.Lines()
-		if msg := r4rects(lines); msg != "" {
+		if msg := boxesSquare(lines); msg != "" {
 			t.Errorf("%s: %s:\n%s", name, msg, strings.Join(lines, "\n"))
 		}
 		if n := linesWidth(lines); n > 60 {
@@ -562,16 +527,12 @@ func TestBoxesSharingWidthsWithDifferentLastColumns(t *testing.T) {
 	}
 }
 
-// Bug: prose in the column before one a span cell starts never fits the
-// room. runsFrom takes the box's last column for the last one a row holds
-// before its span (lastColumn), shapeOf draws the span's own column after
-// it, and fitBoxes fits only the last column drawn: the prose is in
-// neither, so its column is as wide as its text unwrapped, the box past
-// its room, while the prose itself is wrapped to the room inside it.
+// Prose in the column before one a span cell starts runs to the side, as
+// prose before the box's last column does: the box stays in its room.
 func TestBoxProseBeforeASpansColumnFitsTheRoom(t *testing.T) {
 	t.Parallel()
 	g := &Grid{Border: Box, Width: 40, Rows: []Row{
-		{Cells: []Cell{{Text: "key"}, {Text: r4prose, Fit: WrapWords}}},
+		{Cells: []Cell{{Text: "key"}, {Text: shortProse, Fit: WrapWords}}},
 		{Cells: []Cell{{Text: "key"}, {Text: "v"}, {Text: "x", Span: true}}},
 	}}
 	lines := g.Lines()
@@ -579,11 +540,8 @@ func TestBoxProseBeforeASpansColumnFitsTheRoom(t *testing.T) {
 	linesInRoom(t, lines, 40)
 }
 
-// Bug: in a box, the cells from a span cell on take the gaps (and the
-// fixed widths and Overflow) of the columns from 0 on, not of their own.
-// cells draws them as a row of their own (Row{Cells: r.Cells[rf:]}), so
-// renderRow reads column 0's settings for the cell at rf. Without
-// borders the same row takes each cell's own.
+// In a box, the cells from a span cell on keep their own columns' gaps,
+// fixed widths and Overflow, as without borders.
 func TestBoxCellsAfterASpanKeepTheirGaps(t *testing.T) {
 	t.Parallel()
 	rows := func() []Row {
@@ -599,10 +557,8 @@ func TestBoxCellsAfterASpanKeepTheirGaps(t *testing.T) {
 	}
 }
 
-// Bug: a grid in a right-aligned column is torn apart. compose pads
-// each line of a cell on its left by itself, a grid's too, so its lines
-// of different widths start at different columns: its own columns no
-// longer align, and a box in it loses its shape.
+// A grid in a right-aligned column is aligned as one block: its own
+// columns, and a box in it, keep their shape.
 func TestGridInARightAlignedColumnKeepsItsColumns(t *testing.T) {
 	t.Parallel()
 	sub := &Grid{Rows: []Row{{Cells: Cells("ab", "cd")}, {Cells: Cells("x")}}}
@@ -619,7 +575,7 @@ func TestGridInARightAlignedColumnKeepsItsColumns(t *testing.T) {
 		{Cells: []Cell{{Grid: &Grid{Rows: []Row{{Cells: []Cell{{Grid: box}, {Text: "beside"}}}}}}}},
 	}}
 	lines = g.Lines()
-	if msg := r4joined(lines); msg != "" {
+	if msg := boxJoined(lines); msg != "" {
 		t.Errorf("a box in it: %s:\n%s", msg, strings.Join(lines, "\n"))
 	}
 }
