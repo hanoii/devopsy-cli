@@ -167,9 +167,10 @@ type entryTable struct {
 	// width is where a section's prose wraps, reportWidth.
 	width int
 	// borders draws each section, or a flat report, in a box: a rule
-	// between its keys, each project and each environment, where blank
-	// lines go without; wide is the terminal's width, the most a box widens
-	// to for a line it cannot wrap (reportWidth when there is none).
+	// between its top-level entries (its keys and projects), what is
+	// nested under one (instances, environments) in its block; wide is the
+	// terminal's width, the most a box widens to for a line it cannot wrap
+	// (reportWidth when there is none).
 	borders bool
 	wide    int
 }
@@ -238,8 +239,6 @@ func (t entryTable) boxed(rows []layout.Row) *layout.Grid {
 				box = &layout.Grid{Border: layout.Box, Width: room, MinRoom: minWrapRoom, MaxWidth: most}
 				root.Rows = append(root.Rows, layout.Row{Cells: []layout.Cell{{Grid: box}}})
 			}
-			// A heading with no facts of its own runs across the box, its
-			// name widening no column; one with facts is a key row.
 			box.Rows = append(box.Rows, r)
 		}
 	}
@@ -511,8 +510,9 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		pending = false
 		first := l.entry >= 0 && (j == 0 || laid[j-1].entry != l.entry)
 		last := l.entry >= 0 && (j+1 == len(laid) || laid[j+1].entry != l.entry)
-		// A key's first line outside a group, or a project's heading: where
-		// a box draws its rule.
+		// A top-level entry's first line, a key's outside a group or a
+		// project's heading: where a box draws its rule, what is nested
+		// under it (an instance, an environment, their lines) in its block.
 		keyStart := false
 		switch {
 		case l.kind == lineSection:
@@ -520,13 +520,10 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		case l.group && l.indent == 2 && (l.kind == lineGroup || l.key != ""):
 			// A project's heading, with facts of its own or none.
 			brk, keyStart = true, true
-		case l.kind == lineGroup:
-			// An instance's heading: a block of its own in a box.
-			keyStart = true
 		case first:
 			i := l.entry
 			brk = brk || (block[i] && !bound[i] && !stacks(i)) || (start[i] == i && long(i))
-			keyStart = start[i] == i
+			keyStart = start[i] == i && es[i].Group == ""
 		}
 		if last {
 			i := l.entry
@@ -556,9 +553,15 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		case lineSection:
 			out = append(out, layout.Row{Widths: keys, Break: true, Underline: true, Cells: []layout.Cell{{Text: l.value, Span: true, Paint: t.st.head}}})
 		case lineGroup:
-			// A heading with no facts of its own runs free, across a box: its
-			// name sets no key column, with borders as without.
-			out = append(out, layout.Row{Widths: keys, Break: brk, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}})
+			// A heading with no facts of its own: across the report, its name
+			// setting no key column; in a box, a key row like the others, its
+			// value empty, so the column's line runs on by it.
+			name := layout.Cell{Text: l.key, Span: !t.borders, Paint: t.st.name}
+			row := layout.Row{Widths: keys, Break: brk, Indent: l.indent, Cells: []layout.Cell{name}}
+			if t.borders {
+				row.Cells = append(row.Cells, layout.Cell{})
+			}
+			out = append(out, row)
 		case lineEntry:
 			key := layout.Cell{Text: l.key}
 			value := layout.Cell{Text: l.value, Fit: prose}
@@ -597,8 +600,8 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 			out = append(out, layout.Row{Widths: keys, Break: brk, Cells: []layout.Cell{{}, bar}})
 		}
 		if t.borders && l.kind != lineSection {
-			// In a box: a rule at each key and project, an empty row where a
-			// blank line goes inside a key, a section's keys at its edge.
+			// In a box: a rule at each top-level entry, an empty row where a
+			// blank line goes inside one, a section's keys at its edge.
 			r := &out[len(out)-1]
 			blank := r.Break && !keyStart
 			r.Break = keyStart

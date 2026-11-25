@@ -362,10 +362,11 @@ func TestReportArgs(t *testing.T) {
 }
 
 // With borders, each section is a box under its title, every box's
-// columns at one width: a rule between its keys and before each project,
-// an empty row where a blank line goes inside a key, a project's heading
-// with no facts across the box, a rule around each environment, its keys
-// at the box's edge.
+// columns at one width: a rule between its top-level entries (its keys
+// and projects) and none inside one, so a project's instances and
+// environments stay in its block; an empty row where a blank line goes
+// inside an entry; every heading a key row, one with no facts its value
+// empty; its keys at the box's edge.
 func TestReportBoxed(t *testing.T) {
 	t.Parallel()
 	info := func(section, group, key string, lines ...string) remote.StatusEntry {
@@ -384,7 +385,11 @@ func TestReportBoxed(t *testing.T) {
 		info("server", "", "docker", "29.9.1"),
 		row("projects", "shop", "prod", "released", "1 of 1 running"),
 		row("projects", "shop", "staging", "released", "0 of 1 running"),
+		row("projects", "tunnel", "prod", "released", "1 of 1 running"),
 	}
+	inEU := row("projects", "tunnel", "prod", "released", "2 of 2 running")
+	inEU.Instance = "eu"
+	es = append(es, inEU)
 	var b bytes.Buffer
 	tab := newEntryTable(&b, style{})
 	tab.borders = true
@@ -401,12 +406,15 @@ server
 ╰───────────┴──────────────────────────╯
 
 projects
-╭──────────────────────────────────────╮
-│ shop                                 │
-├───────────┬──────────────────────────┤
+╭───────────┬──────────────────────────╮
+│ shop      │                          │
 │   prod    │ released  1 of 1 running │
-├───────────┼──────────────────────────┤
 │   staging │ released  0 of 1 running │
+├───────────┼──────────────────────────┤
+│ tunnel    │                          │
+│   prod    │ released  1 of 1 running │
+│   eu      │                          │
+│     prod  │ released  2 of 2 running │
 ╰───────────┴──────────────────────────╯
 `
 	if b.String() != want {
@@ -441,10 +449,10 @@ func TestMovedWarningStaysUnbound(t *testing.T) {
 	}
 }
 
-// A project's name with no facts on its heading sets no key column, with
-// borders as without: its heading runs across the box, and the keys'
-// column is as wide as the keys need. (One with facts is a key row, its
-// name in the key column.)
+// A project's name with no facts on its heading sets no key column
+// without borders: its heading runs across the report, and the keys'
+// column is as wide as the keys need. In a box, every heading is a key
+// row, so the column's line runs on by it, and its name sets the column.
 func TestBoxedKeyColumnLeavesAProjectHeadingOut(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
@@ -465,10 +473,14 @@ func TestBoxedKeyColumnLeavesAProjectHeadingOut(t *testing.T) {
 	long := healthyServerInfo()
 	long.Environments = append(long.Environments, remote.Environment{Path: "storefront-checkout-service/prod",
 		Status: "release\t20261027115000\t{\"mode\":\"image\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"})
-	for _, borders := range []bool{false, true} {
-		if short, wide := keyColumn(healthyServerInfo(), borders), keyColumn(long, borders); short != wide {
-			t.Errorf("borders %v: a project's name moved the value column: %q, with a long project name %q", borders, short, wide)
-		}
+	if short, wide := keyColumn(healthyServerInfo(), false), keyColumn(long, false); short != wide {
+		t.Errorf("a project's name moved the value column: %q, with a long project name %q", short, wide)
+	}
+	if boxed := keyColumn(long, true); layout.Width(boxed) != layout.Width("│ storefront-checkout-service │ ") {
+		t.Errorf("in a box, the key column is not the long name's: %q", boxed)
+	}
+	if !strings.Contains(reportText(long, true), "│ storefront-checkout-service │") {
+		t.Errorf("in a box, a heading with no facts has no column line by it:\n%s", reportText(long, true))
 	}
 }
 
