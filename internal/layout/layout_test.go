@@ -374,3 +374,193 @@ func TestRenderAgain(t *testing.T) {
 		t.Errorf("laid out again: %q", got)
 	}
 }
+
+// A tab in a cell shows as one space, measured as one: a terminal's tab
+// stops are not the grid's columns, and a comment someone chose may hold
+// one.
+func TestTabInACell(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Rows: []Row{{Cells: Cells("a\tb", "x")}, {Cells: Cells("abcd", "y")}}}
+	if got, want := g.String(), "a b   x\nabcd  y\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A grid in a cell its parent leaves no room keeps fitting to none:
+// its row of cells moves its last cell rather than run on.
+func TestNoRoomLeft(t *testing.T) {
+	t.Parallel()
+	sub := &Grid{Rows: []Row{{Cells: []Cell{text("aaa"), {Text: "bbb", Span: true, Fit: MoveLast}}}}}
+	g := &Grid{Width: 8, Rows: []Row{{Cells: []Cell{text("a-key-wider"), {Grid: sub}}}}}
+	if got, want := g.String(), "a-key-wider  aaa\n             bbb\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A row's underline goes under all its lines, as wide as the widest; a
+// row's paint leaves its empty lines empty; an empty span cell costs no
+// gap.
+func TestUnderlinePaintAndEmptySpan(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Width: 12, Rows: []Row{{Underline: true, Cells: []Cell{text(""), {Text: "a title that wraps", Fit: WrapWords}}}}}
+	if got, want := g.String(), "a title that\nwraps\n------------\n"; got != want {
+		t.Errorf("underline: got %q, want %q", got, want)
+	}
+	bold := func(s string) string { return "\x1b[1m" + s + "\x1b[0m" }
+	g = &Grid{Rows: []Row{{Paint: bold, Cells: []Cell{text("k"), text("one\n\nthree")}}}}
+	if got, want := g.String(), bold("k  one")+"\n\n"+bold("   three")+"\n"; got != want {
+		t.Errorf("paint: got %q, want %q", got, want)
+	}
+	g = &Grid{Rows: []Row{{Cells: []Cell{text("a"), {Span: true}, text("c")}}}}
+	if got, want := g.String(), "a  c\n"; got != want {
+		t.Errorf("empty span: got %q, want %q", got, want)
+	}
+}
+
+// boxOf is g drawn in a box.
+func boxOf(g *Grid) *Grid { g.Border = Box; return g }
+
+// square fails unless every line of a box is as wide as its first:
+// a box whose lines differ has a side that does not join.
+func square(t *testing.T, name string, lines []string) {
+	t.Helper()
+	for _, l := range lines {
+		if Width(l) != Width(lines[0]) || strings.Contains(l, "\n") {
+			t.Errorf("%s: a line of the box is not as wide as its first:\n%s", name, strings.Join(lines, "\n"))
+			return
+		}
+	}
+}
+
+// The cells after a span cell follow it at their gap, in no column: a
+// long one widens no column for the other rows.
+func TestCellsAfterASpanInNoColumn(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Rows: []Row{
+		{Cells: []Cell{{Text: "a"}, {Text: "x", Span: true}, {Text: "long-long-long"}, {Text: "z"}}},
+		{Cells: Cells("b", "c", "d", "e")},
+	}}
+	want := "a  x  long-long-long  z\nb  c  d  e\n"
+	if got := g.String(); got != want {
+		t.Errorf("a cell after a span widened its column:\n%swant:\n%s", got, want)
+	}
+}
+
+// MoveLast counts every cell the row shows, a span cell before its last
+// too: a row wider than the room moves its last cell.
+func TestMoveLastCountsASpan(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Width: 20, Rows: []Row{
+		{Cells: []Cell{{Text: "key"}, {Text: "a-middle-span-cell", Span: true}, {Text: "last", Fit: MoveLast}}},
+	}}
+	lines := g.Lines()
+	if len(lines) != 2 || lines[1] != "last" {
+		t.Errorf("a row of 29 columns in a room of 20 kept its last cell: %q", lines)
+	}
+}
+
+// A box's span row of several lines keeps the box's sides on each.
+func TestBoxSpanRowOfSeveralLines(t *testing.T) {
+	t.Parallel()
+	g := boxOf(&Grid{Rows: []Row{{Cells: Cells("a", "b")}, {Cells: []Cell{{Text: "one\ntwo", Span: true}}}}})
+	square(t, "a span row of two lines", g.Lines())
+}
+
+// A box's span row is laid out as without borders: its indent, and its
+// cell's paint.
+func TestBoxSpanRowKeepsItsPaint(t *testing.T) {
+	t.Parallel()
+	paint := func(s string) string { return "\x1b[1m" + s + "\x1b[0m" }
+	g := boxOf(&Grid{Rows: []Row{{Cells: Cells("a", "b")}, {Indent: 2, Cells: []Cell{{Text: "title", Span: true, Paint: paint}}}}})
+	if got := strings.Join(g.Lines(), "\n"); !strings.Contains(got, paint("title")) {
+		t.Errorf("an indented span row lost its paint:\n%q", got)
+	}
+}
+
+// A box measures a row as it draws it (cells): a row with fewer cells
+// than the box has columns wraps its last cell in what the columns after
+// it leave, and the box stays in its room.
+func TestBoxShortRowInItsRoom(t *testing.T) {
+	t.Parallel()
+	g := boxOf(&Grid{Width: 30, Rows: []Row{
+		{Cells: []Cell{{Text: "a long prose line that wraps in the box", Fit: WrapWords}}},
+		{Cells: Cells("k2", "v")},
+	}})
+	lines := g.Lines()
+	square(t, "a short row", lines)
+	if len(lines) < 5 {
+		t.Fatalf("the control: the prose wraps:\n%s", strings.Join(lines, "\n"))
+	}
+	if w := Width(lines[0]); w > 30 {
+		t.Errorf("the box is %d wide in a room of 30, its first column wider than the wrapped text in it:\n%s", w, strings.Join(lines, "\n"))
+	}
+}
+
+// A box in a cell is fitted to the room its parent's row leaves it,
+// at most its own Width (roomOf): at an indent it stays in the room.
+func TestBoxInAnIndentedCell(t *testing.T) {
+	t.Parallel()
+	box := boxOf(&Grid{Width: 30, Rows: []Row{{Cells: []Cell{{Text: "key"}, {Text: "some prose that wraps here and there again", Fit: WrapWords}}}}})
+	g := &Grid{Width: 30, Rows: []Row{{Indent: 4, Cells: []Cell{{Grid: box}}}}}
+	for _, l := range g.Lines() {
+		if Width(l) > 30 {
+			t.Errorf("a line of %d columns in a room of 30:\n%s", Width(l), strings.Join(g.Lines(), "\n"))
+			break
+		}
+	}
+}
+
+// Boxes sharing their Widths draw their columns at one width, a span row
+// wider than the columns in one widening the last column of all.
+func TestBoxesSharingWidthsUnderASpan(t *testing.T) {
+	t.Parallel()
+	w := NewWidths()
+	one := boxOf(&Grid{Widths: w, Rows: []Row{{Cells: Cells("k", "v")}, {Cells: []Cell{{Text: "a span row wider than the columns", Span: true}}}}})
+	two := boxOf(&Grid{Widths: w, Rows: []Row{{Cells: Cells("key2", "value two")}}})
+	g := &Grid{Rows: []Row{{Cells: []Cell{{Grid: one}}}, {Cells: []Cell{{Grid: two}}}}}
+	square(t, "two boxes sharing their columns", g.Lines())
+}
+
+// A box leaves out a column empty in every row, with its line, as a grid
+// without borders leaves it out with its gap: a list's state when no row
+// has one, a release's author when none says who made it.
+func TestBoxLeavesOutEmptyColumns(t *testing.T) {
+	t.Parallel()
+	g := &Grid{Border: Box, Widths: NewWidths().Right(2)}
+	g.Rows = []Row{
+		{Header: true, Cells: Cells("ID", "WHO", "SIZE")},
+		{Cells: Cells("1", "", "4 MB", "")},
+		{Cells: Cells("2", "", "40 MB", "")},
+	}
+	// Without borders the empty fourth column is left out (the header
+	// fills WHO).
+	plain := "ID  WHO   SIZE\n1         4 MB\n2        40 MB\n"
+	g.Border = NoBorder
+	if got := g.String(); got != plain {
+		t.Fatalf("the control, without borders:\n%s\nwant:\n%s", got, plain)
+	}
+	g.Border = Box
+	want := "╭────┬─────┬───────╮\n" +
+		"│ ID │ WHO │  SIZE │\n" +
+		"├────┼─────┼───────┤\n" +
+		"│ 1  │     │  4 MB │\n" +
+		"│ 2  │     │ 40 MB │\n" +
+		"╰────┴─────┴───────╯\n"
+	if got := g.String(); got != want {
+		t.Errorf("a box drew a column empty in every row:\n%s\nwant:\n%s", got, want)
+	}
+	// A middle column empty in every row (--releases' who, none recorded),
+	// left out with borders as without.
+	m := &Grid{Rows: []Row{{Cells: Cells("* 1", "", "build")}, {Cells: Cells("  2", "", "image")}}}
+	if got := m.String(); got != "* 1  build\n  2  image\n" {
+		t.Fatalf("the control, without borders:\n%q", got)
+	}
+	m.Border = Box
+	want = "╭─────┬───────╮\n" +
+		"│ * 1 │ build │\n" +
+		"│   2 │ image │\n" +
+		"╰─────┴───────╯\n"
+	if got := m.String(); got != want {
+		t.Errorf("a box drew a middle column empty in every row:\n%s\nwant:\n%s", got, want)
+	}
+}

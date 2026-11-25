@@ -157,6 +157,11 @@ type Grid struct {
 	MinRoom int
 	// Border draws the grid in a box.
 	Border Border
+
+	// fit is the room a box is fitted to before it is drawn (prepare):
+	// its parent's room less its cell's start, at most its own Width; -1
+	// for none.
+	fit int
 }
 
 // Lines are the grid's lines, laid out.
@@ -222,8 +227,8 @@ func prepare(g *Grid) {
 		for _, g := range gs {
 			for _, r := range g.Rows {
 				w := g.widths(r)
-				for k, c := range r.Cells {
-					if c.Span || c.Grid != nil {
+				for k, c := range measured(r) {
+					if c.Grid != nil {
 						continue
 					}
 					col := w.col(k)
@@ -236,8 +241,8 @@ func prepare(g *Grid) {
 		for _, g := range byDepth[d] {
 			for _, r := range g.Rows {
 				w := g.widths(r)
-				for k, c := range r.Cells {
-					if c.Span || c.Grid == nil {
+				for k, c := range measured(r) {
+					if c.Grid == nil {
 						continue
 					}
 					col := w.col(k)
@@ -246,10 +251,73 @@ func prepare(g *Grid) {
 			}
 		}
 	}
+	// Each box's room, from its parent's, then the boxes fitted to it, in
+	// phases across every box so those sharing columns draw them at one
+	// width.
+	g.fit = roomOf(g.Width, -1, 0)
+	for _, gs := range byDepth {
+		for _, g := range gs {
+			g.roomsBelow()
+		}
+	}
+	var boxes []*Grid
 	for _, gs := range byDepth {
 		for _, g := range gs {
 			if g.Border != NoBorder {
-				g.fitBorders()
+				boxes = append(boxes, g)
+			}
+		}
+	}
+	fitBoxes(boxes)
+}
+
+// measured are the cells of r its columns measure, by their index: those
+// before its first span cell, which runs free with every cell after it.
+func measured(r Row) map[int]Cell {
+	out := map[int]Cell{}
+	for k, c := range r.Cells {
+		if c.Span {
+			break
+		}
+		out[k] = c
+	}
+	return out
+}
+
+// roomOf is the room a grid has in a cell that starts at start, of a
+// parent with room (-1 for none), at most the grid's own width when it
+// has one, and never less than none left.
+func roomOf(own, room, start int) int {
+	sub := -1
+	if room >= 0 {
+		sub = max(0, room-start)
+	}
+	if own > 0 && (sub < 0 || own < sub) {
+		sub = own
+	}
+	return sub
+}
+
+// roomsBelow gives each grid in g's cells its room (fit), from g's and
+// where its cell starts, laid out as renderRow lays it.
+func (g *Grid) roomsBelow() {
+	for _, r := range g.Rows {
+		if g.Border != NoBorder {
+			for _, c := range r.Cells {
+				if c.Grid != nil {
+					c.Grid.fit = roomOf(c.Grid.Width, -1, 0)
+				}
+			}
+			continue
+		}
+		w := g.widths(r)
+		pos := 0
+		for k, c := range r.Cells {
+			if c.Grid != nil {
+				c.Grid.fit = roomOf(c.Grid.Width, g.fit, pos+indentOf(r, k))
+			}
+			if !c.Span && (w.shown(k) || c.Grid != nil) {
+				pos += w.size(k) + w.gap(k)
 			}
 		}
 	}
@@ -266,10 +334,16 @@ func indentOf(r Row, k int) int {
 // an indent before it.
 func cellWidth(c Cell, indent int) int {
 	n := 0
-	for _, l := range strings.Split(c.Text, "\n") {
+	for _, l := range textLines(c) {
 		n = max(n, Width(l))
 	}
 	return indent + Width(c.Prefix) + n
+}
+
+// textLines are a text cell's lines, a tab in them one space: a
+// terminal's tab stops are not the grid's columns.
+func textLines(c Cell) []string {
+	return strings.Split(strings.ReplaceAll(c.Text, "\t", " "), "\n")
 }
 
 func linesWidth(lines []string) int {
@@ -294,16 +368,26 @@ func (g *Grid) render(room int) []string {
 			out = append(out, "")
 		}
 		lines := g.renderRow(r, room)
+		under := ""
+		if r.Underline && len(lines) > 0 {
+			// Under every line of the row, as wide as the widest, at the
+			// row's indent.
+			n := 0
+			for _, l := range lines {
+				n = max(n, Width(strings.TrimLeft(Strip(l), " ")))
+			}
+			under = strings.Repeat(" ", r.Indent) + strings.Repeat("-", n)
+		}
 		if r.Paint != nil {
 			for j := range lines {
-				lines[j] = r.Paint(lines[j])
+				if lines[j] != "" {
+					lines[j] = r.Paint(lines[j])
+				}
 			}
 		}
 		out = append(out, lines...)
-		if r.Underline && len(lines) > 0 {
-			plain := Strip(lines[0])
-			text := strings.TrimLeft(plain, " ")
-			out = append(out, plain[:len(plain)-len(text)]+strings.Repeat("-", Width(text)))
+		if under != "" {
+			out = append(out, under)
 		}
 	}
 	return out
@@ -332,7 +416,7 @@ func (g *Grid) renderRow(r Row, room int) []string {
 	}
 	shownCell := func(k int) bool {
 		c := r.Cells[k]
-		return k == last || c.Span || w.shown(k) || c.Grid != nil
+		return k == last || (c.Span && !empty(c)) || w.shown(k) || c.Grid != nil
 	}
 	// The row's own last cell says how it fits, an empty one too.
 	move := r.Cells[len(r.Cells)-1].Fit == MoveLast && room >= 0 && last > 0
@@ -340,7 +424,7 @@ func (g *Grid) renderRow(r Row, room int) []string {
 	own := func(from, to int) int {
 		n, any := 0, false
 		for k := from; k <= to; k++ {
-			if k == to || (shownCell(k) && !r.Cells[k].Span) {
+			if k == to || shownCell(k) {
 				n += cellWidth(r.Cells[k], indentOf(r, k)) + w.gap(k)
 				any = true
 			}
@@ -370,7 +454,7 @@ func (g *Grid) renderRow(r Row, room int) []string {
 		if k == last {
 			text = g.fitCell(c, pos+indent, room)
 		} else {
-			text = cellLines(c, room, pos+indent, g)
+			text = cellLines(c, room, pos+indent)
 		}
 		for j := range text {
 			text[j] = strings.Repeat(" ", indent) + text[j]
@@ -463,30 +547,25 @@ func compose(cs []placed) []string {
 }
 
 // cellLines are a cell's lines as it is written, not fitted: its text's
-// lines or its grid's, each with its prefix and painted.
-func cellLines(c Cell, room, start int, g *Grid) []string {
-	var text []string
+// lines or its grid's, in the room its cell leaves it (roomOf), each with
+// its prefix and painted.
+func cellLines(c Cell, room, start int) []string {
 	if c.Grid != nil {
-		sub := -1
-		if room >= 0 {
-			sub = room - start
-		}
-		return c.Grid.render(sub)
+		return c.Grid.render(roomOf(c.Grid.Width, room, start))
 	}
-	text = strings.Split(c.Text, "\n")
-	return finish(c, text)
+	return finish(c, textLines(c))
 }
 
 // fitCell is a row's last cell, fitted to the room from start.
 func (g *Grid) fitCell(c Cell, start, room int) []string {
 	if c.Grid != nil {
-		return cellLines(c, room, start, g)
+		return cellLines(c, room, start)
 	}
 	if c.Fit != WrapWords || room < 0 {
-		return finish(c, strings.Split(c.Text, "\n"))
+		return finish(c, textLines(c))
 	}
 	var text []string
-	for _, line := range strings.Split(c.Text, "\n") {
+	for _, line := range textLines(c) {
 		body := strings.TrimLeft(line, " ")
 		lead := len(line) - len(body)
 		hang := max(c.Hang, lead)
