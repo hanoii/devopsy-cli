@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/howto"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
@@ -65,7 +66,7 @@ var Flags = []FlagGroup{
 		{Name: "--release", Scope: Local, Desc: "in place: prepare, images, run\n(defaults: release steps)"},
 		{Name: "--rollback", Args: "[--accept-image <svc>] [--yes]", Scope: Target, Desc: "back to the previous release"},
 		{Name: "--reload", Scope: LocalOrTarget, Desc: "the release again with its variables and\nimports as they are now: its reload: step"},
-		{Name: "--releases", Args: "[remove <id|failed>... [--yes]]", Scope: Target, Desc: "the releases there; or remove some,\nwith the images only they hold"},
+		{Name: "--releases", Args: "[--borders | remove <id|failed>... [--yes]]", Scope: Target, Desc: "the releases there; or remove some,\nwith the images only they hold"},
 		{Name: "--log", Args: "[<id>]", Scope: Target, Desc: "what the last release (or <id>) printed"},
 		{Name: "--destroy", Args: "[--yes] [--purge]", Scope: Target, Desc: "remove the environment, data included"},
 		{Name: "--destroy", Args: "[--yes]", Scope: Local, Desc: "in place: the destroy step\n(defaults: destroy)"},
@@ -77,7 +78,7 @@ var Flags = []FlagGroup{
 		{Name: "--export", Args: "<service>", Scope: LocalOrTarget, Desc: "a service's data, to stdout"},
 		{Name: "--import", Args: "<service> [--accept-image <svc>] [--yes] [--resolved]", Scope: LocalOrTarget, Desc: "a service's data, from stdin"},
 		{Name: "--snapshot", Scope: Target, Desc: "a snapshot: the data, code and images,\nits services stopped for the copy"},
-		{Name: "--snapshots", Args: "[restore | remove | export | import ...]", Scope: Target, Desc: "the snapshots there; or restore one,\nremove, export or import some"},
+		{Name: "--snapshots", Args: "[--borders | restore | remove | export | import ...]", Scope: Target, Desc: "the snapshots there; or restore one,\nremove, export or import some"},
 	}},
 	{"Variables", []Flag{
 		{Name: "--env", Scope: LocalOrTarget, Desc: "what devopsy loads and computes (.env)"},
@@ -86,7 +87,7 @@ var Flags = []FlagGroup{
 		{Name: "--vars-project", Args: "[...]", Scope: Server, Desc: "the project's .env on the server"},
 	}},
 	{"Running", []Flag{
-		{Name: "--status", Args: "[--json]", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
+		{Name: "--status", Args: "[--json | --borders]", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
 		{Name: "--shell", Args: "[service] [-- command...]", Scope: LocalOrTarget, Desc: "a shell, or the command, in a container"},
 		{Name: "--shell-host", Args: "[--root]", Scope: Server, Desc: "a shell on the server itself, or root's"},
 		{Name: "--environments", Scope: LocalOrServer, Desc: "the project's environments on its servers"},
@@ -98,7 +99,7 @@ var Flags = []FlagGroup{
 		{Name: "--ssh-keys", Args: "[--for <project>] [list | add <file> | remove <key>]", Scope: Server, Desc: "keys of the deploy user, or a project user"},
 		{Name: "--ssh-keys-generate", Args: "[<name>] [--for <project>]", Scope: Server, Desc: "the same, its public half added to the\nserver's keys or a project user's"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
-		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
+		{Name: "--server-info", Args: "[--json | --borders]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--server-setup", Args: "[--yes] [--root <dir>]", Scope: Server, Desc: "the server's setup for devopsy: Docker's\ndaemon.json, buffers, the release root"},
 		{Name: "--gc", Args: "[--dry-run] [--yes]", Scope: Server, Desc: "remove what nothing on the server owns:\nold one-offs and build cache, snapshots\nof releases gone, images left"},
 		{Name: "--reboot", Args: "[--yes]", Scope: Server, Desc: "reboot the server, its hostname typed,\nand wait for it to come back"},
@@ -239,25 +240,22 @@ var ServerScope = names(flagsWhere(func(s Scope) bool { return s == Server || s 
 // helpColumn is where descriptions start in devopsy's help.
 const helpColumn = 36
 
+// helpWidths are help's columns: the scope's prefix right aligned in 6
+// (two spaces and four), one space, what you type up to the description's
+// column, two spaces before it. New for each grid: a render measures into
+// its columns.
+func helpWidths() *layout.Widths {
+	return layout.NewWidths().Fixed(0, 6).Right(0).Gap(0, 1).
+		Fixed(1, helpColumn-6-1-layout.DefaultGap).Overflow(1)
+}
+
 // helpLine is one entry of devopsy's help: the scope's prefix, right
 // aligned, what you type, then the description, on the next line when
-// what you type is too long.
+// what you type is too long, a description of several lines under
+// itself.
 func helpLine(b *strings.Builder, prefix, typed, desc string) {
-	left := fmt.Sprintf("  %4s %s", prefix, typed)
-	lines := strings.Split(desc, "\n")
-	if len(left)+2 > helpColumn {
-		b.WriteString(left + "\n")
-	} else if desc != "" {
-		fmt.Fprintf(b, "%-*s%s\n", helpColumn, left, lines[0])
-		lines = lines[1:]
-	} else {
-		b.WriteString(left + "\n")
-		return
-	}
-	// A description of several lines continues under itself.
-	for _, l := range lines {
-		fmt.Fprintf(b, "%*s%s\n", helpColumn, "", l)
-	}
+	g := &layout.Grid{Widths: helpWidths(), Rows: []layout.Row{{Cells: layout.Cells(prefix, typed, desc)}}}
+	b.WriteString(g.String())
 }
 
 // flagsHelp is the help's list of flags, by group.

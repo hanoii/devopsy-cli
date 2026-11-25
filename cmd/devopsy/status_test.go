@@ -113,21 +113,24 @@ func TestStatusPrint(t *testing.T) {
 		},
 	}, "vm1:")
 	var out bytes.Buffer
-	code := r.print(&out, style{}, "@vm1:prod (vm1:shop/prod)", false)
+	code := r.print(&out, style{}, "@vm1:prod (vm1:shop/prod)", textReport)
 	want := `@vm1:prod (vm1:shop/prod)
 release      20261107000000  just now
+
 disks        /                ext4  50.0 GB free of 100.0 GB  50% used  releases /srv
              /var/lib/docker  xfs   2.0 GB free of 100.0 GB   98% used  docker /var/lib/docker
              warning: /var/lib/docker is 98% full, 2.0 GB free: builds, pulls, uploads, logs and databases fail once it is full
              | to fix it:
              | remove what nothing on the server owns, listed first with its sizes:
              | $ devopsy @vm1: --gc
-containers
-  app      running  up 3 hours (healthy)
-  db       running  healthy
-  worker   no container
+
+containers   app     running       up 3 hours (healthy)
+             db      running       healthy
+             worker  no container
+
 url          https://shop.example
              https://www.shop.example
+
 maintenance  warning: on
              | to fix it:
              | $ devopsy maintenance off
@@ -173,7 +176,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	warn := []string{"FAKE_SHOW=warning\tmaintenance\ton\tdevopsy maintenance off\n"}
 	out, code := s.run(warn, "@prod", "--status")
 	if code != statusWarned || !strings.Contains(out, "\nrelease      "+id) || !regexp.MustCompile(`\ndisks        \S+ .* releases `).MatchString(out) ||
-		!strings.Contains(out, "\ncontainers\n  app ") || !strings.Contains(out, "\nurl          https://shop-prod.example\n") ||
+		!strings.Contains(out, "\ncontainers   app ") || !strings.Contains(out, "\nurl          https://shop-prod.example\n") ||
 		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  warning: on\n             | to fix it:\n             | $ devopsy @devopsy@one:prod maintenance off\n") {
 		t.Errorf("--status with a warning on the server (%d):\n%s", code, out)
 	}
@@ -225,8 +228,8 @@ func TestStatusPlainDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := s.run(nil, "@prod", "--status")
-	if code != 0 || !strings.Contains(out, "\nrelease     none: a plain devopsy directory\n") || !regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) ||
-		!strings.Contains(out, "\ncontainers\n  app ") || !strings.Contains(out, "\nurl         https://") {
+	if code != 0 || !regexp.MustCompile(`\nrelease +none: a plain devopsy directory\n`).MatchString(out) || !regexp.MustCompile(`\ndisks +\S+ .* releases `).MatchString(out) ||
+		!regexp.MustCompile(`\ncontainers +app +running\n`).MatchString(out) || !regexp.MustCompile(`\nurl +https://`).MatchString(out) {
 		t.Errorf("--status of a plain directory (%d):\n%s", code, out)
 	}
 }
@@ -251,7 +254,7 @@ func TestStatusLeavesOneOffsOut(t *testing.T) {
 	if apps != 1 {
 		t.Errorf("a one-off of app listed as a second app: %+v", r.Containers)
 	}
-	if out, code := s.run([]string{"FAKE_ABSENT=db", "FAKE_ONEOFF=db"}, "--status"); code != 0 || strings.Count(out, "  db ") != 1 || !strings.Contains(out, "  db       no container\n") {
+	if out, code := s.run([]string{"FAKE_ABSENT=db", "FAKE_ONEOFF=db"}, "--status"); code != 0 || strings.Count(out, "  db ") != 1 || !strings.Contains(out, "  db   no container\n") {
 		t.Errorf("a service with a one-off alone (%d):\n%s", code, out)
 	}
 }
@@ -267,11 +270,11 @@ func TestStatusJSONCopyable(t *testing.T) {
 		Disks:   []remote.Disk{{Paths: []string{"docker=/var/lib/docker"}, Type: "xfs", Size: 100e9, Free: 2e9, Used: 98e9}},
 	}, "devopsy@[::1]:22:")
 	var text, js strings.Builder
-	r.print(&text, style{}, "", false)
+	r.print(&text, style{}, "", textReport)
 	if !strings.Contains(text.String(), "$ devopsy @'devopsy@[::1]:22:' --gc") {
 		t.Fatalf("the text's command is not quoted:\n%s", text.String())
 	}
-	r.print(&js, style{}, "", true)
+	r.print(&js, style{}, "", jsonReport)
 	var got statusReport
 	if err := json.Unmarshal([]byte(js.String()), &got); err != nil {
 		t.Fatal(err)
@@ -350,15 +353,17 @@ func TestStatusPrintColors(t *testing.T) {
 	var out bytes.Buffer
 	// A warning as devopsy's own lines show one: its message yellow and tagged, its details
 	// and its remedies after a dim bar, their texts plain, their commands bold.
-	code := r.print(&out, style{on: true}, "@vm1:prod (vm1:shop/prod)", false)
+	code := r.print(&out, style{on: true}, "@vm1:prod (vm1:shop/prod)", textReport)
 	want := "\033[0;36m@vm1:prod (vm1:shop/prod)\033[0m\n" +
 		"\033[0;33mrelease      warning: the release of 1 was cut off\033[0m\n" +
-		"containers\n" +
-		"  app      \033[0;32mrunning\033[0m  up 1 hour (healthy)\n" +
-		"  db       \033[0;33mexited\033[0m\n" +
-		"  worker   \033[2mno container\033[0m\n" +
+		"\n" +
+		"containers   app     \033[0;32mrunning\033[0m       up 1 hour (healthy)\n" +
+		"             db      \033[0;33mexited\033[0m\n" +
+		"             worker  \033[2mno container\033[0m\n" +
+		"\n" +
 		"php          8.4\n" +
 		"\033[1murl          https://shop.example\033[0m\n" +
+		"\n" +
 		"\033[0;33mmaintenance  warning: on\033[0m\n" +
 		"             \033[2m| \033[0msince 10 min ago\n" +
 		"             \033[2m| \033[0mto fix it:\n" +
@@ -368,13 +373,13 @@ func TestStatusPrintColors(t *testing.T) {
 		t.Errorf("--status in color (%d):\n%q\nwant:\n%q", code, out.String(), want)
 	}
 	out.Reset()
-	if code := r.print(&out, style{on: true}, "", true); code != statusWarned || bytes.Contains(out.Bytes(), []byte("\033")) {
+	if code := r.print(&out, style{on: true}, "", jsonReport); code != statusWarned || bytes.Contains(out.Bytes(), []byte("\033")) {
 		t.Errorf("--json (%d):\n%s", code, out.String())
 	}
 	// A highlight alone needs no attention.
 	h := statusReport{}
 	h.addFacts(remote.StatusFacts{Entries: []remote.StatusEntry{{Level: remote.StatusHighlight, Key: "url", Lines: []string{"https://shop.example"}}}}, "")
-	if code := h.print(&bytes.Buffer{}, style{}, "", false); code != 0 {
+	if code := h.print(&bytes.Buffer{}, style{}, "", textReport); code != 0 {
 		t.Errorf("a highlight exits %d", code)
 	}
 }
@@ -388,8 +393,8 @@ func TestStatusUnreleasedTarget(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	out, code := s.run(nil, "@dev", "--status")
-	if code != 0 || !strings.Contains(out, "\nrelease     none: not released yet\n") || !strings.Contains(out, "\nparent      ") || !strings.Contains(out, "  never synced\n") ||
-		!regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
+	if code != 0 || !regexp.MustCompile(`\nrelease +none: not released yet\n`).MatchString(out) || !regexp.MustCompile(`\nparent +prod`).MatchString(out) || !strings.Contains(out, "  never synced\n") ||
+		!regexp.MustCompile(`\ndisks +\S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
 		t.Errorf("--status of an unreleased child (%d):\n%s", code, out)
 	}
 	stdout, stderr, code := s.runIO(nil, nil, "@dev", "--status", "--json")
@@ -506,6 +511,34 @@ func TestStatusHeaderFixesHintAddress(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// --status with no heading (in a project, or in a release on a server)
+// starts with the project's row, a key as any other: a key of several
+// lines after it gets its blank line, and in a box its rule.
+func TestStatusBreaksAfterTheProjectRow(t *testing.T) {
+	t.Parallel()
+	r := statusReport{}
+	r.addFacts(remote.StatusFacts{
+		Project:    "shop-prod",
+		Disks:      []remote.Disk{{Paths: []string{"releases=/home/devopsy", "/=/"}, Type: "xfs", Size: 80e9, Free: 1e9, Used: 79e9}},
+		Containers: []remote.StatusContainer{{Service: "app", State: "running"}},
+	}, "")
+	var plain, boxed bytes.Buffer
+	r.print(&plain, style{}, "", textReport)
+	if !strings.Contains(plain.String(), "warning: / is 99% full") {
+		t.Fatalf("the control: the disk's key has several lines:\n%s", plain.String())
+	}
+	if !strings.Contains(plain.String(), "shop-prod\n\ndisks") {
+		t.Errorf("no blank line before a key of several lines, after the project's row:\n%s", plain.String())
+	}
+	r.print(&boxed, style{}, "", boxedReport)
+	lines := strings.Split(boxed.String(), "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, "│ disks") && !strings.HasPrefix(lines[i-1], "├") {
+			t.Errorf("no rule between the project's row and the next key:\n%s", boxed.String())
 		}
 	}
 }

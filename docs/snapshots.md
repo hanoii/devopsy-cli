@@ -6,7 +6,7 @@ brought back whole or as data alone.
 
 ```sh
 devopsy @vm1:prod --snapshot     # a snapshot: every service with data stopped for the moment of its copy, code and images kept
-devopsy @vm1:prod --snapshots    # list them; restore, remove, export or import one
+devopsy @vm1:prod --snapshots    # list them (--borders: in a box); restore, remove, export or import one
 devopsy @vm1:prod --snapshots restore <id>   # its data, code and images back, as a new release (--no-code: the data alone)
 devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   # a snapshot off the server
 ```

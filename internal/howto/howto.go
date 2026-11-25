@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
@@ -114,17 +115,14 @@ const AllFlag = "--all"
 // listIntro opens the list of topics.
 const listIntro = "What devopsy checks on a server and cannot set up itself, step by step, as root. Each topic prints with devopsy " + Flag + " followed by its name, and all of them with " + AllFlag + ":"
 
-// rows are the topics' names and summaries, aligned, each name between before and after.
+// rows are the topics' names and summaries, in columns, each name between before and after,
+// one space after the longest: the list fits 80 columns.
 func rows(before, after string) string {
-	var b strings.Builder
-	longest := 0
+	g := &layout.Grid{Widths: layout.NewWidths().Gap(0, 1)}
 	for _, t := range Topics {
-		longest = max(longest, len(t.Name))
+		g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(before+string(t.Name)+after, t.Summary)})
 	}
-	for _, t := range Topics {
-		b.WriteString(before + string(t.Name) + after + strings.Repeat(" ", longest-len(t.Name)+1) + t.Summary + "\n")
-	}
-	return b.String()
+	return g.String()
 }
 
 // List is what the flag prints without a topic: each topic's name and summary, aligned, a
@@ -188,21 +186,13 @@ func writeCmds(b *strings.Builder, cmds []string, indent string) {
 // wrap breaks s into lines of width at most, at spaces, the first starting with first and the
 // others with rest; a word longer than a line stays whole. Every line ends with a newline.
 func wrap(s, first, rest string) string {
-	var b strings.Builder
-	line := first
-	empty := true
-	for _, w := range strings.Fields(s) {
-		switch {
-		case empty:
-			line += w
-			empty = false
-		case len(line)+1+len(w) > width:
-			b.WriteString(line + "\n")
-			line = rest + w
-		default:
-			line += " " + w
+	s = strings.Join(strings.Fields(s), " ")
+	parts := layout.Wrap(s, width-layout.Width(first))
+	lines := []string{first + parts[0]}
+	if len(parts) > 1 {
+		for _, p := range layout.Wrap(strings.Join(parts[1:], " "), width-layout.Width(rest)) {
+			lines = append(lines, rest+p)
 		}
 	}
-	b.WriteString(line + "\n")
-	return b.String()
+	return strings.Join(lines, "\n") + "\n"
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -36,7 +37,7 @@ const statusShowFormat = `<level>\t<key>\t<value>[\t<fix>]`
 // none), then the project's own entries (capabilities/status/show). In a
 // release on a server, its images and the server's disks too.
 func runStatus(cwd string, args []string, color bool) int {
-	asJSON, code := reportArgs("--status", args, "usage: devopsy --status [--json]")
+	mode, code := reportArgs("--status", args, "usage: devopsy --status [--json | --borders]")
 	if code >= 0 {
 		return code
 	}
@@ -50,7 +51,7 @@ func runStatus(cwd string, args []string, color bool) int {
 	}
 	var r statusReport
 	r.addFacts(facts, "")
-	return r.print(os.Stdout, styleFor(os.Stdout), "", asJSON)
+	return r.print(os.Stdout, styleFor(os.Stdout), "", mode)
 }
 
 // runStatusFacts implements the hidden --status-facts on a server: the
@@ -86,7 +87,7 @@ func runStatusFacts(cwd string, args []string) int {
 // or running), then the facts of its current release there, formatted
 // here.
 func runRemoteStatus(t *remote.Target, args []string, color bool) int {
-	asJSON, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json]")
+	mode, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json | --borders]")
 	if code >= 0 {
 		return code
 	}
@@ -109,7 +110,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	r := statusReport{Target: targetRef(t), Server: t.Host + ":" + t.Path}
 	r.addHeader(parseStatus(header), t)
 	r.addFacts(facts, remote.ServerRef(t))
-	return r.print(os.Stdout, styleFor(os.Stdout), fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), asJSON)
+	return r.print(os.Stdout, styleFor(os.Stdout), fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), mode)
 }
 
 // statusFacts are the facts of the project at cwd (projectDir its
@@ -491,38 +492,51 @@ func containerTrouble(state, health string, exitCode int) string {
 
 // print shows r on w in st under heading (none without a target), or
 // prints it as JSON: statusWarned when something needs attention.
-func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+func (r *statusReport) print(w io.Writer, st style, heading string, mode reportMode) int {
 	r.Attention = entriesWarn(r.Entries) || slices.ContainsFunc(r.Containers, func(c remote.StatusContainer) bool { return c.Level == remote.StatusWarning })
 	code := 0
 	if r.Attention {
 		code = statusWarned
 	}
-	if asJSON {
-		r.Entries = copyableEntries(r.Entries)
+	if mode == jsonReport {
+		// In the order the text prints them (ordered), each half apart:
+		// none moves across the containers.
+		r.Entries = copyableEntries(append(orderWarnings(r.Entries[:r.head:r.head]), orderWarnings(r.Entries[r.head:])...))
 		if err := printJSON(w, r); err != nil {
 			return failErr(err)
 		}
 		return code
 	}
-	tab := newEntryTable(w, st, r.Entries, "containers")
-	row := tab.row
+	// One grid, so the facts before the containers and after them share
+	// their key column.
+	tab := newEntryTable(w, st)
+	tab.borders, tab.wide = mode == boxedReport, terminalWidth(w)
+	var rows []layout.Row
 	if heading != "" {
-		fmt.Fprintln(w, st.name(report.Copyable(heading)))
+		rows = append(rows, layout.Row{Cells: []layout.Cell{{Text: report.Copyable(heading), Span: true, Paint: st.name}}})
 	} else {
-		fmt.Fprintln(w, row("project", r.Project))
+		rows = append(rows, tab.row("project", r.Project))
 	}
-	tab.print(r.Entries[:r.head])
+	before, pending := tab.rows(r.Entries[:r.head])
+	if len(before) > 0 && heading != "" {
+		// Nothing breaks right under the heading; the project's row is no
+		// heading, and the key after it breaks as any.
+		before[0].Break = false
+	}
+	rows = append(rows, before...)
 	switch {
 	case r.Project == "":
 		// An environment with no release live: no project to list.
 	case len(r.Containers) == 0:
-		fmt.Fprintln(w, row("containers", "none"))
+		row := tab.row("containers", "none")
+		row.Break = pending || tab.borders
+		rows = append(rows, row)
+		pending = false
 	default:
-		sw := len("service")
-		for _, c := range r.Containers {
-			sw = max(sw, len(c.Service))
-		}
-		fmt.Fprintln(w, "containers")
+		// The containers a table under their key: the service, its state,
+		// compose's status (or the health alone); a blank line around it
+		// when it has more than one row.
+		sub := &layout.Grid{}
 		for _, c := range r.Containers {
 			state := c.State
 			switch {
@@ -535,17 +549,22 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 			}
 			// compose's Status already ends in the health, when there is
 			// one: "Up 3 hours (healthy)".
-			if c.Health != "" && c.Status == "" {
-				state += "  " + c.Health
-			}
-			line := fmt.Sprintf("  %-*s  %s", sw, c.Service, state)
+			status := c.Health
 			if c.Status != "" {
-				line += "  " + strings.ToLower(c.Status[:1]) + c.Status[1:]
+				status = strings.ToLower(c.Status[:1]) + c.Status[1:]
 			}
-			fmt.Fprintln(w, line)
+			sub.Rows = append(sub.Rows, layout.Row{Cells: layout.Cells(c.Service, state, status)})
 		}
+		many := len(r.Containers) > 1
+		rows = append(rows, layout.Row{Widths: tab.flat, Break: pending || many || tab.borders, Cells: []layout.Cell{{Text: "containers"}, {Grid: sub}}})
+		pending = many
 	}
-	tab.print(r.Entries[r.head:])
+	after, _ := tab.rows(r.Entries[r.head:])
+	if len(after) > 0 && pending {
+		after[0].Break = true
+	}
+	rows = append(rows, after...)
+	tab.write(rows)
 	return code
 }
 

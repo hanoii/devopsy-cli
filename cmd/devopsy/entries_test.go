@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -18,7 +20,7 @@ func TestEntryTableQuotesBeforePainting(t *testing.T) {
 	es := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "sync", Lines: []string{"none"},
 		Remedies: []report.Remedy{report.Hint("from its parent:", "devopsy @dev --sync --from @[2001:db8::1]:prod")}}}
 	var b bytes.Buffer
-	newEntryTable(&b, style{on: true}, es).print(es)
+	newEntryTable(&b, style{on: true}).print(es)
 	want := "sync  none\n" +
 		"      \033[2m| \033[0mfrom its parent:\n" +
 		"      \033[2m| \033[0m\033[1m$ devopsy @dev --sync --from @'[2001:db8::1]:prod'\033[0m\n"
@@ -27,7 +29,8 @@ func TestEntryTableQuotesBeforePainting(t *testing.T) {
 	}
 }
 
-// A report in sections: a section's heading after a blank line, one key
+// A report in sections: a section's title underlined between blank lines,
+// a blank line around a key of several lines and a project, one key
 // column for every section, so each section's values start where the
 // others' do; a project's heading, its rows indented under it, their
 // cells aligned across projects; a warning's first line starting with
@@ -71,27 +74,38 @@ func TestEntryTableSections(t *testing.T) {
 		img1, img2,
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	want := `
 server
+------
+
   system     Linux
   disks      /  xfs
+
              warning: / is 95% full
              | to fix it:
              | $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
+
   setup      a line long enough to wrap at a word once it runs past the report's width, which it
              does here
 
 projects
+--------
+
   app        project uid 1
     prod     released just now by ci          1 of 1 running  uid 2
+
   shop       project uid 3
     staging  released 2 days ago by somebody  1 of 2 running  uid 4
+
              warning: app restarting
+
   web
     dev      gone                             x
 
 leftovers
+---------
+
   images     busybox:1.37  4.3 MB
              alpine:3      8.0 MB
              no release holds them
@@ -118,7 +132,7 @@ func TestEntryTableEscapesKeysAndNames(t *testing.T) {
 		{Level: remote.StatusInfo, Section: "projects", Group: "ap\x1b[2Jp", Key: "ap\x1b[2Jp", Lines: []string{"project uid 1"}},
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	if strings.Contains(b.String(), "\x1b") {
 		t.Errorf("a key or a heading reaches the terminal with its escape:\n%q", b.String())
 	}
@@ -130,14 +144,14 @@ func TestEntryTableEscapesKeysAndNames(t *testing.T) {
 	// A flat report's key too, as before the layout (the whole row went through Copyable).
 	flat := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "k\x1b[2Jk", Lines: []string{"v"}}}
 	b.Reset()
-	newEntryTable(&b, style{}, flat).print(flat)
+	newEntryTable(&b, style{}).print(flat)
 	if strings.Contains(b.String(), "\x1b") {
 		t.Errorf("a flat report's key: %q", b.String())
 	}
 }
 
 // Rows of cells under one key align with each other whatever lines sit between them, a full
-// disk's warning between two disks' rows.
+// disk's warning between two disks' rows, under its disk's row with a blank line after it.
 func TestEntryCellsAlignAcrossAWarning(t *testing.T) {
 	t.Parallel()
 	row := func(cells ...string) remote.StatusEntry {
@@ -149,11 +163,14 @@ func TestEntryCellsAlignAcrossAWarning(t *testing.T) {
 		row("/mnt/backup", "ext4", "snapshots"),
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	want := `
 server
+------
+
   disks  /            ext4  releases
          warning: / is 94% full
+
          /mnt/backup  ext4  snapshots
 `
 	if b.String() != want {
@@ -169,7 +186,7 @@ func TestEntryWrappedRemedyKeepsItsIndent(t *testing.T) {
 	es := []remote.StatusEntry{{Level: remote.StatusWarning, Section: "server", Key: "disks", Lines: []string{"full"},
 		Remedies: []report.Remedy{report.Fix("first\n" + long), report.Fix("second")}}}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
+	newEntryTable(&b, style{}).print(es)
 	lines := strings.Split(b.String(), "\n")
 	at := func(l string) int {
 		if !strings.HasPrefix(strings.TrimLeft(l, " "), report.BarMark) {
@@ -188,89 +205,325 @@ func TestEntryWrappedRemedyKeepsItsIndent(t *testing.T) {
 	t.Fatalf("no numbered fix:\n%s", b.String())
 }
 
-// A row of cells past the width is never cut at a word: its last cell moves whole to a line
-// of its own at the value column, every other cell whole on the row.
-func TestEntryRowMovesItsLastCellWhole(t *testing.T) {
+// A run's warnings bound to no row come after its facts, in their order,
+// in what prints and in --json alike: a warning under a row of cells stays
+// under it, a note under its line, nothing moves across runs, and moving
+// them again changes nothing.
+func TestOrderWarnings(t *testing.T) {
 	t.Parallel()
-	cells := []string{"released 10 min ago by somebody@a-long-runner-name.example.com", "3 of 3 running", "uid 2091094815", "a sync or an export from it"}
+	e := func(level, key string, line string) remote.StatusEntry {
+		return remote.StatusEntry{Level: level, Section: "server", Key: key, Lines: []string{line}}
+	}
+	row := e(remote.StatusInfo, "disks", "/")
+	row.Cells = []string{"/", "xfs"}
+	note := e(remote.StatusInfo, "docker", "its noProxy leaves ::1")
+	note.Remedies = []report.Remedy{report.Hint("add it")}
 	es := []remote.StatusEntry{
-		{Level: remote.StatusInfo, Section: "projects", Group: "shop", Head: true, Key: "shop", Lines: []string{"project uid 1"}},
-		{Level: remote.StatusInfo, Section: "projects", Group: "shop", Key: "prod", Lines: []string{remote.CellsJoined(cells...)}, Cells: cells},
+		e(remote.StatusInfo, "system", "Linux"),
+		e(remote.StatusWarning, "system", "reboot"),
+		e(remote.StatusInfo, "system", "clock: synchronized"),
+		e(remote.StatusWarning, "system", "kexec"),
+		e(remote.StatusInfo, "docker", "29.9.1"),
+		e(remote.StatusInfo, "docker", "containers' proxy: x"),
+		note,
+		e(remote.StatusInfo, "docker", "data: /var/lib/docker"),
+		row,
+		e(remote.StatusWarning, "disks", "/ is full"),
+		e(remote.StatusInfo, "disks", "/mnt"),
+	}
+	lines := func(es []remote.StatusEntry) string {
+		var out []string
+		for _, e := range es {
+			out = append(out, e.Lines[0])
+		}
+		return strings.Join(out, "|")
+	}
+	want := "Linux|clock: synchronized|reboot|kexec|29.9.1|containers' proxy: x|its noProxy leaves ::1|data: /var/lib/docker|/|/ is full|/mnt"
+	got := orderWarnings(es)
+	if lines(got) != want {
+		t.Errorf("ordered:\n%s\nwant:\n%s", lines(got), want)
+	}
+	if again := orderWarnings(got); lines(again) != want {
+		t.Errorf("ordered again:\n%s", lines(again))
+	}
+}
+
+// Blank lines in a report, the same at any width: a section's title
+// underlined between blank lines; around a key of several lines; around a
+// warning bound to nothing, a run of them together; after a warning under
+// a row of cells (none before it) and after a note under its line; before
+// each project; in a project, after an entry's bar lines; none between a
+// project's rows otherwise, nor between keys of one line.
+func TestReportBlankLines(t *testing.T) {
+	t.Parallel()
+	info := func(section, group, key string, lines ...string) remote.StatusEntry {
+		return remote.StatusEntry{Level: remote.StatusInfo, Section: section, Group: group, Key: key, Lines: lines}
+	}
+	warn := func(section, group, key, line string, fixes ...report.Remedy) remote.StatusEntry {
+		e := info(section, group, key, line)
+		e.Level, e.Remedies = remote.StatusWarning, fixes
+		return e
+	}
+	row := func(section, group, key string, cells ...string) remote.StatusEntry {
+		e := info(section, group, key, remote.CellsJoined(cells...))
+		e.Cells = cells
+		return e
+	}
+	note := info("server", "", "docker", "its noProxy leaves ::1")
+	note.Remedies = []report.Remedy{report.Hint("add it:", "devopsy --server-setup-howto proxy")}
+	gone := row("projects", "shop", "pr-1", "gone", "a uid claim")
+	gone.Remedies = []report.Remedy{report.Hint("remove it:", "devopsy @vm1: --gc")}
+	es := []remote.StatusEntry{
+		info("server", "", "system", "Linux"),
+		info("server", "", "arch", "amd64"),
+		info("server", "", "docker", "29.9.1"),
+		info("server", "", "docker", "containers' proxy: x"),
+		note,
+		warn("server", "", "docker", "no apparmor_parser"),
+		warn("server", "", "docker", "logs grow"),
+		row("server", "", "disks", "/", "xfs"),
+		warn("server", "", "disks", "/ is full", report.Fix("", "devopsy @vm1: --gc")),
+		row("server", "", "disks", "/mnt", "ext4"),
+		row("projects", "shop", "prod", "released", "1 of 1 running"),
+		gone,
+		row("projects", "shop", "dev", "released", "1 of 1 running"),
+		row("projects", "web", "prod", "released", "1 of 1 running"),
 	}
 	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
-	// Each cell whole on a line, the last on its own: never "uid" on one line and its number on the next.
+	newEntryTable(&b, style{}).print(es)
+	want := `
+server
+------
+
+  system  Linux
+  arch    amd64
+
+  docker  29.9.1
+          containers' proxy: x
+          its noProxy leaves ::1
+          | add it:
+          | $ devopsy --server-setup-howto proxy
+
+          warning: no apparmor_parser
+          warning: logs grow
+
+  disks   /     xfs
+          warning: / is full
+          | to fix it:
+          | $ devopsy @vm1: --gc
+
+          /mnt  ext4
+
+projects
+--------
+
+  shop
+    prod  released  1 of 1 running
+    pr-1  gone      a uid claim
+          | remove it:
+          | $ devopsy @vm1: --gc
+
+    dev   released  1 of 1 running
+
+  web
+    prod  released  1 of 1 running
+`
+	if b.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
+// A report flag prints as text, as JSON or in boxes, never as two of
+// them: --json with --borders is a usage error naming both.
+func TestReportArgs(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args []string
+		mode reportMode
+		code int
+	}{
+		{nil, textReport, -1},
+		{[]string{"--json"}, jsonReport, -1},
+		{[]string{"--borders"}, boxedReport, -1},
+		{[]string{"--json", "--json"}, jsonReport, -1},
+		{[]string{"--json", "--borders"}, textReport, 1},
+		{[]string{"--borders", "--json"}, textReport, 1},
+		{[]string{"--yaml"}, textReport, 1},
+	} {
+		if mode, code := reportArgs("--status", c.args, "usage: devopsy --status [--json | --borders]"); mode != c.mode || code != c.code {
+			t.Errorf("%q: %d, %d, want %d, %d", c.args, mode, code, c.mode, c.code)
+		}
+	}
+}
+
+// With borders, each section is a box under its title, every box's
+// columns at one width: a rule between its keys and before each project,
+// an empty row where a blank line goes inside a key, a project's heading
+// with no facts across the box, a rule around each environment, its keys
+// at the box's edge.
+func TestReportBoxed(t *testing.T) {
+	t.Parallel()
+	info := func(section, group, key string, lines ...string) remote.StatusEntry {
+		return remote.StatusEntry{Level: remote.StatusInfo, Section: section, Group: group, Key: key, Lines: lines}
+	}
+	row := func(section, group, key string, cells ...string) remote.StatusEntry {
+		e := info(section, group, key, remote.CellsJoined(cells...))
+		e.Cells = cells
+		return e
+	}
+	warn := info("server", "", "system", "reboot")
+	warn.Level = remote.StatusWarning
+	es := []remote.StatusEntry{
+		info("server", "", "system", "Linux", "clock: synchronized"),
+		warn,
+		info("server", "", "docker", "29.9.1"),
+		row("projects", "shop", "prod", "released", "1 of 1 running"),
+		row("projects", "shop", "staging", "released", "0 of 1 running"),
+	}
+	var b bytes.Buffer
+	tab := newEntryTable(&b, style{})
+	tab.borders = true
+	tab.print(es)
+	want := `
+server
+╭───────────┬──────────────────────────╮
+│ system    │ Linux                    │
+│           │ clock: synchronized      │
+│           │                          │
+│           │ warning: reboot          │
+├───────────┼──────────────────────────┤
+│ docker    │ 29.9.1                   │
+╰───────────┴──────────────────────────╯
+
+projects
+╭──────────────────────────────────────╮
+│ shop                                 │
+├───────────┬──────────────────────────┤
+│   prod    │ released  1 of 1 running │
+├───────────┼──────────────────────────┤
+│   staging │ released  0 of 1 running │
+╰───────────┴──────────────────────────╯
+`
+	if b.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
+// Whether a warning is bound to a row is decided on the order the report
+// built its entries, and moves with it (ordered): one about a line with no
+// cells (a disk that did not read) that moves after a row of cells in its
+// key is still no row's, a blank line between them.
+func TestMovedWarningStaysUnbound(t *testing.T) {
+	t.Parallel()
+	row := remote.StatusEntry{Level: remote.StatusInfo, Section: "server", Key: "disks", Cells: []string{"/mnt", "ext4"}, Lines: []string{remote.CellsJoined("/mnt", "ext4")}}
+	es := []remote.StatusEntry{
+		{Level: remote.StatusInfo, Section: "server", Key: "disks", Lines: []string{"releases /home/devopsy: it did not answer"}},
+		{Level: remote.StatusWarning, Section: "server", Key: "disks", Lines: []string{"the release root's filesystem makes no reflinks"}},
+		row,
+	}
+	_, before := blocks(es)
+	moved, _, after := ordered(es)
+	if moved[2].Level != remote.StatusWarning {
+		t.Fatalf("the control: the warning moves after its key's facts: %v", moved)
+	}
+	if before[1] || after[2] != before[1] {
+		t.Errorf("the warning bound to a row: %v before the move, %v after", before[1], after[2])
+	}
+	var b bytes.Buffer
+	newEntryTable(&b, style{}).print(es)
+	if !strings.Contains(b.String(), "/mnt  ext4\n\n") {
+		t.Errorf("no blank line between a row and a warning that is not about it:\n%s", b.String())
+	}
+}
+
+// A project's name with no facts on its heading sets no key column, with
+// borders as without: its heading runs across the box, and the keys'
+// column is as wide as the keys need. (One with facts is a key row, its
+// name in the key column.)
+func TestBoxedKeyColumnLeavesAProjectHeadingOut(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	// keyColumn is the report's system line up to its value.
+	keyColumn := func(info remote.ServerInfo, borders bool) string {
+		var b strings.Builder
+		tab := newEntryTable(&b, style{})
+		tab.borders = borders
+		tab.print(serverInfoReport(info, "vm1", "vm1:", "0.53.0", now))
+		for _, l := range strings.Split(b.String(), "\n") {
+			if i := strings.Index(l, "Debian"); i >= 0 && strings.Contains(l, "system") {
+				return l[:i]
+			}
+		}
+		t.Fatalf("no system line in:\n%s", b.String())
+		return ""
+	}
+	long := healthyServerInfo()
+	long.Environments = append(long.Environments, remote.Environment{Path: "storefront-checkout-service/prod",
+		Status: "release\t20261027115000\t{\"mode\":\"image\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"})
+	for _, borders := range []bool{false, true} {
+		if short, wide := keyColumn(healthyServerInfo(), borders), keyColumn(long, borders); short != wide {
+			t.Errorf("borders %v: a project's name moved the value column: %q, with a long project name %q", borders, short, wide)
+		}
+	}
+}
+
+func reportText(info remote.ServerInfo, borders bool) string {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	var b strings.Builder
+	tab := newEntryTable(&b, style{})
+	tab.borders = borders
+	tab.print(serverInfoReport(info, "vm1", "vm1:", "0.53.0", now))
+	return b.String()
+}
+
+// With borders, a command wider than the room widens the boxes up to the
+// terminal's width (reportWidth with none) and no further: past it, its
+// own line runs out past the box's side, every other line of every box in
+// its room.
+func TestBoxedLongLineRunsPastTheSide(t *testing.T) {
+	t.Parallel()
+	info := healthyServerInfo()
+	for i := range 8 {
+		info.Images = append(info.Images, remote.HostImage{ID: "i" + string(rune('a'+i)), Tags: []string{"registry.example.com/team/app-" + string(rune('a'+i)) + ":2026-11-14-build"}, Size: 1e6})
+	}
+	out := reportText(info, true)
+	if !strings.Contains(out, "docker rmi") {
+		t.Fatalf("the control: no docker rmi in:\n%s", out)
+	}
+	// With a terminal as wide as the command, the boxes widen to hold it.
+	var wide strings.Builder
+	tab := newEntryTable(&wide, style{})
+	tab.borders, tab.wide = true, 1000
+	tab.print(serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)))
+	for _, l := range strings.Split(wide.String(), "\n") {
+		if strings.HasPrefix(l, "│") && !strings.HasSuffix(l, "│") {
+			t.Errorf("a line runs past its box though the terminal holds it:\n%s", l)
+		}
+	}
+	// The server's box: from its title to the next.
+	server := out[strings.Index(out, "server\n"):strings.Index(out, "devopsy\n")]
+	for _, l := range strings.Split(server, "\n") {
+		if w := layout.Width(l); w > reportWidth {
+			t.Fatalf("the server's box drawn %d wide for leftovers' command, past its %d:\n%s", w, reportWidth, l)
+		}
+	}
+}
+
+// A flat report's box, which wraps nothing, widens for a long line no
+// further than the terminal, a narrow one too: a longer line runs past its
+// side alone.
+func TestFlatBoxWidensNoFurtherThanTheTerminal(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	tab := newEntryTable(&b, style{})
+	tab.borders, tab.wide = true, 80
+	url := "https://shop.example.com/" + strings.Repeat("a-long-path/", 6)
+	tab.write([]layout.Row{tab.row("project", "shop-prod"), tab.row("url", url)})
 	lines := strings.Split(b.String(), "\n")
-	whole := func(cell string) bool {
-		for _, l := range lines {
-			if strings.Contains(l, cell) {
-				return true
-			}
-		}
-		return false
+	if !strings.Contains(b.String(), url) {
+		t.Fatalf("the control: no url in:\n%s", b.String())
 	}
-	last := false
-	for _, l := range lines {
-		last = last || strings.TrimSpace(l) == cells[3]
-	}
-	if !whole(cells[0]) || !whole(cells[1]) || !whole(cells[2]) || !last {
-		t.Errorf("a cell cut, or the last cell not moved whole to its own line:\n%s", b.String())
-	}
-}
-
-// A row of cells is laid out by its cells whatever its last holds: one whose last cell is
-// empty (an environment with nothing running on it) is never cut at a word past the width,
-// and one that fits stays one line, the padding after its last shown cell counting for
-// nothing.
-func TestEntryRowWithAnEmptyLastCellIsNeverCut(t *testing.T) {
-	t.Parallel()
-	row := func(key string, cells ...string) remote.StatusEntry {
-		return remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: "shop", Key: key, Lines: []string{remote.CellsJoined(cells...)}, Cells: cells}
-	}
-	whole := func(out, cell string) bool {
-		for _, l := range strings.Split(out, "\n") {
-			if strings.Contains(l, cell) {
-				return true
-			}
-		}
-		return false
-	}
-	// Past the width: no cell is cut in two.
-	cells := []string{"released 10 min ago by somebody@a-long-runner-name.example.com", "3 of 3 running", "uid 2091094815", ""}
-	es := []remote.StatusEntry{row("prod", cells...)}
-	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
-	for _, c := range cells[:3] {
-		if !whole(b.String(), c) {
-			t.Errorf("the cell %q is cut at a word:\n%s", c, b.String())
-		}
-	}
-	// Within the width as it shows (10 of key column, 86 of cells), past it only by the
-	// padding under another row's wider uid cell: one line, as it fits, the next row after
-	// it with no empty line between.
-	short := []string{strings.Repeat("r", 60), "3 of 3 running", "uid 7", ""}
-	es = []remote.StatusEntry{row("prod", short...), row("dev", "released", "1 of 1 running", "uid 2091094815 or so", "syncing")}
-	b.Reset()
-	newEntryTable(&b, style{}, es).print(es)
-	if !strings.Contains(b.String(), short[0]+"  "+short[1]+"  "+short[2]+"\n    dev ") {
-		t.Errorf("a row that fits the width is cut for the padding after its last shown cell:\n%s", b.String())
-	}
-}
-
-// Whether a row's last cell moves goes by the row's own cells, never by the padding a wider
-// row of its run gives it: a short row beside a wide one keeps its last cell on its line.
-func TestEntryShortRowKeepsItsLastCellBesideAWideOne(t *testing.T) {
-	t.Parallel()
-	row := func(cells ...string) remote.StatusEntry {
-		return remote.StatusEntry{Level: remote.StatusInfo, Section: "leftovers", Key: "images", Lines: []string{remote.CellsJoined(cells...)}, Cells: cells}
-	}
-	wide := "registry.example.com/team/app:2026-11-14-build-1234, registry.example.com/team/app:latest"
-	es := []remote.StatusEntry{row("a:1", "4.3 MB"), row(wide, "8.0 MB")}
-	var b bytes.Buffer
-	newEntryTable(&b, style{}, es).print(es)
-	for _, l := range strings.Split(b.String(), "\n") {
-		if strings.Contains(l, "a:1") && !strings.Contains(l, "4.3 MB") {
-			t.Errorf("a:1's row fits the width, and its size moved to a line of its own:\n%s", b.String())
-		}
+	if w := layout.Width(lines[0]); w > 80 {
+		t.Errorf("on an 80-column terminal the box is %d wide for one line it cannot wrap:\n%s", w, b.String())
 	}
 }

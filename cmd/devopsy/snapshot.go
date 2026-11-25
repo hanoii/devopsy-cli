@@ -27,6 +27,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"golang.org/x/term"
@@ -1613,8 +1614,8 @@ func startStops(cwd string, names []string) error {
 // runSnapshots implements devopsy @<target> --snapshots [remove
 // <id>... [--yes]]: the snapshots there, or some removed.
 func runSnapshots(t *remote.Target, projectName string, args []string, color bool) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [remove <id>... [--yes] | restore <id> [--no-code [--accept-image <service>]] [--with-env] [--yes]]"
-	yes := false
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [--borders | remove <id>... [--yes] | restore <id> [--no-code [--accept-image <service>]] [--with-env] [--yes]]"
+	yes, borders := false, false
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -1626,6 +1627,8 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			return 0
 		case "--yes", "-y":
 			yes = true
+		case "--borders":
+			borders = true
 		case "--no-code", "--with-env":
 		default:
 			if strings.HasPrefix(a, "-") {
@@ -1634,6 +1637,15 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			}
 			words = append(words, a)
 		}
+	}
+	// --borders draws the list alone: with a word that acts, it is that
+	// word's to refuse; a word that is none is a usage error as without.
+	if borders && len(words) > 0 {
+		if !slices.Contains([]string{"restore", "remove", "export", "import"}, words[0]) {
+			report.Error(usage)
+			return 2
+		}
+		return takesNo(2, "--snapshots "+words[0], "--borders", usage)
 	}
 	if len(words) > 0 && words[0] == "restore" {
 		return runRestore(t, projectName, args)
@@ -1691,7 +1703,6 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	if code != 0 {
 		return code
 	}
-	type snap struct{ id, kind, release, taken, size, state, copy string }
 	var snaps []snap
 	mirrored := strings.Contains(out.String(), "mirror\tkept\n")
 	// Lines one by one: a taken snapshot's state is empty, its line
@@ -1717,14 +1728,9 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			fmt.Println("no snapshots on " + t.Address + " (devopsy @" + targetRef(t) + " --snapshot takes one)")
 			return 0
 		}
-		fmt.Printf("%-15s %-7s %-15s %-21s %s\n", "SNAPSHOT", "KIND", "RELEASE", "TAKEN", "SIZE")
-		for _, s := range snaps {
-			line := fmt.Sprintf("%-15s %-7s %-15s %-21s %s", s.id, s.kind, s.release, s.taken, s.size)
-			if s.state != "" {
-				line += "  " + strings.ToUpper(s.state)
-			}
-			fmt.Println(line)
-		}
+		g := snapshotsGrid(snaps, borders)
+		g.MaxWidth = terminalWidth(os.Stdout)
+		fmt.Print(g.String())
 		// How the last take here copied: an imported snapshot says nothing
 		// of that.
 		last := ""
@@ -2959,4 +2965,26 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		}
 	}
 	return code
+}
+
+// snap is a snapshot as --snapshots lists it.
+type snap struct{ id, kind, release, taken, size, state, copy string }
+
+// snapshotsGrid lays out snaps as --snapshots lists them: a header, a
+// row each, its size to the right and its state in capitals after, each
+// cell quoted as it shows; in a box with borders.
+func snapshotsGrid(snaps []snap, borders bool) *layout.Grid {
+	g := &layout.Grid{Widths: layout.NewWidths().Right(4)}
+	if borders {
+		g.Border = layout.Box
+	}
+	g.Rows = append(g.Rows, layout.Row{Header: true, Cells: layout.Cells("SNAPSHOT", "KIND", "RELEASE", "TAKEN", "SIZE")})
+	for _, s := range snaps {
+		cells := []string{s.id, s.kind, s.release, s.taken, s.size, strings.ToUpper(s.state)}
+		for i := range cells {
+			cells[i] = report.Copyable(cells[i])
+		}
+		g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(cells...)})
+	}
+	return g
 }

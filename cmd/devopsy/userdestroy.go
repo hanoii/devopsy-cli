@@ -451,9 +451,11 @@ func (x *userDestroy) print(f destroyFound, m destroyMark) int {
 		tree = filepath.Join(home, x.project)
 	}
 	sizes := x.sizes(tree, home)
+	// A flat report, a key per thing it removes.
+	var es []remote.StatusEntry
 	line := func(what string, items []string) {
 		if len(items) > 0 {
-			fmt.Printf("%s\t%s\n", what, strings.Join(items, ", "))
+			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: what, Lines: []string{strings.Join(items, ", ")}})
 		}
 	}
 	var claims []string
@@ -486,6 +488,7 @@ func (x *userDestroy) print(f destroyFound, m destroyMark) int {
 	if uid != "" {
 		line("Unix user", []string{x.who + " (uid " + uid + ")"})
 	}
+	newEntryTable(os.Stdout, style{}).print(es)
 	report.Info("no destroy: step of "+x.project+"'s runs, nor anything of its user's: what it holds is removed as it is", destroyLeaves...)
 	return 0
 }

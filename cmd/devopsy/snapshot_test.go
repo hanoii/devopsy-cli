@@ -18,6 +18,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -117,7 +118,7 @@ func TestSnapshotTake(t *testing.T) {
 	// naming none refuses.
 	out, code = s.run(nil, "@prod", "--snapshots")
 	ids := manualSnapshots(snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")})
-	if code != 0 || !strings.HasPrefix(out, "SNAPSHOT        KIND    RELEASE         TAKEN                 SIZE\n"+ids[2]+"  manual  "+rel) || strings.Count(out, " manual ") != 3 {
+	if code != 0 || !regexp.MustCompile(`^SNAPSHOT +KIND +RELEASE +TAKEN +SIZE\n`+ids[2]+`  manual  `+rel).MatchString(out) || strings.Count(out, " manual ") != 3 {
 		t.Errorf("--snapshots (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@prod", "--snapshots", "remove", "1999"); code == 0 || !strings.Contains(out, "has no snapshot 1999: nothing removed") {
@@ -4130,6 +4131,75 @@ func TestRestoreGivesVolumesTheRestoredCodesOwners(t *testing.T) {
 	for _, line := range strings.Split(docker, "\n") {
 		if own.MatchString(line) {
 			t.Errorf("the restore gave the volume's root the owner of the release it replaces, which the restored code does not name:\n%s", line)
+		}
+	}
+}
+
+// --snapshots lines its snapshots up under a header, the size to the
+// right and the state after it, each field another user could choose
+// shown escaped (report.Copyable).
+func TestSnapshotsGrid(t *testing.T) {
+	t.Parallel()
+	got := snapshotsGrid([]snap{
+		{id: "20261120090100", kind: "full", release: "20261119180200", taken: "2026-11-20 09:01 UTC", size: "1.2 GiB"},
+		{id: "20261122143300", kind: "no-code", release: "rel\x1b[2J", taken: "2026-11-22 14:33 UTC", size: "840 KiB", state: "partial"},
+	}, false).String()
+	want := "SNAPSHOT        KIND     RELEASE         TAKEN                    SIZE\n" +
+		"20261120090100  full     20261119180200  2026-11-20 09:01 UTC  1.2 GiB\n" +
+		"20261122143300  no-code  rel\\x1b[2J      2026-11-22 14:33 UTC  840 KiB  PARTIAL\n"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// --borders draws a list, so it goes with the list form alone: with a
+// word that acts it is refused, the word named, before any session; a
+// word that is none is a usage error as without it.
+func TestBordersListsOnly(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	for _, args := range [][]string{
+		{"@prod", "--releases", "remove", "failed", "--borders"},
+		{"@prod", "--snapshots", "remove", "1999", "--borders"},
+		{"@prod", "--snapshots", "--borders", "restore", "1999"},
+	} {
+		out, code := s.run(nil, args...)
+		if code == 0 || !strings.Contains(out, "takes no --borders") || !strings.Contains(out, "usage: devopsy @") {
+			t.Errorf("%q (%d):\n%s", args, code, out)
+		}
+	}
+	// A word that is no subcommand is a usage error, with --borders as
+	// without.
+	plain, plainCode := s.run(nil, "@prod", "--snapshots", "bogus")
+	boxed, boxedCode := s.run(nil, "@prod", "--snapshots", "bogus", "--borders")
+	if plain != boxed || plainCode != boxedCode {
+		t.Errorf("a word that is no subcommand, said otherwise with --borders:\nwithout (%d):\n%s\nwith (%d):\n%s", plainCode, plain, boxedCode, boxed)
+	}
+}
+
+// --snapshots' header right-aligns SIZE over the sizes, with borders as
+// without, whatever state a snapshot is in: a row of several cells keeps
+// them in their columns.
+func TestSnapshotsHeaderAlignsInABox(t *testing.T) {
+	t.Parallel()
+	snaps := []snap{
+		{id: "20261101000000", kind: "full", release: "20261031000000", taken: "2026-11-01 00:00 UTC", size: "1.2 GB"},
+		{id: "20261102000000", kind: "data", release: "20261031000000", taken: "2026-11-02 00:00 UTC", size: "12 MB", state: "incomplete"},
+	}
+	// end is the column a word in out ends at, on the first line holding it.
+	end := func(out, word string) int {
+		for _, l := range strings.Split(out, "\n") {
+			if i := strings.Index(l, word); i >= 0 {
+				return layout.Width(l[:i+len(word)])
+			}
+		}
+		t.Fatalf("no %q in:\n%s", word, out)
+		return 0
+	}
+	for _, borders := range []bool{false, true} {
+		out := snapshotsGrid(snaps, borders).String()
+		if end(out, "SIZE") != end(out, "1.2 GB") {
+			t.Errorf("borders %v: SIZE not right-aligned over the sizes:\n%s", borders, out)
 		}
 	}
 }

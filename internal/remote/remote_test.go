@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/hanoii/devopsy-cli/internal/images"
-	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"io"
 	"os"
 	"os/exec"
@@ -21,6 +19,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 func write(t *testing.T, path, content string) {
@@ -671,7 +673,7 @@ func TestFormatReleases(t *testing.T) {
 		"left\t1760000000\tapp-prod\t20261001000000\tjq:1.8\tsha256:j\t" + images.ToolKeeps + "\n" +
 		"20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
 		"20261004120000\t-\tfailed\t\t\n"
-	got := FormatReleases(out)
+	got := FormatReleases(out, false, 0)
 	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11 (11.8.9)\n  20261004120000", "FAILED",
 		"Images the project's removals left (each pruning retries):\n  mariadb:11  app-prod, release 20261001000000, ", "\n    a container of app-prod uses its image\n",
 		"Names the project's removals kept for a release's tool (each pruning removes them once no tool runs by them):\n  jq:1.8  app-prod, release 20261001000000, "} {
@@ -679,7 +681,7 @@ func TestFormatReleases(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
-	if FormatReleases("") != "No releases yet.\n" {
+	if FormatReleases("", false, 0) != "No releases yet.\n" {
 		t.Error("empty output")
 	}
 }
@@ -1902,7 +1904,7 @@ exit 0
 	if rs := ParseReleases(out); len(rs) != 1 || strings.Join(rs[0].Images, " ") != "registry/app:abc=1.2 mariadb:11=sha256:0123456789ab app-a-prod-x" {
 		t.Errorf("images with versions: %+v", rs)
 	}
-	if f := FormatReleases(out); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
+	if f := FormatReleases(out, false, 0); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
 		t.Errorf("formatted:\n%s", f)
 	}
 	// A release never made current, cut off mid-fetch: in progress while
@@ -1912,13 +1914,13 @@ exit 0
 	write(t, filepath.Join(root, "app/a/prod/releases/5", FetchingFile), "")
 	for env, want := range map[string]string{"FAKE_UNUSED=1": "FAILED", "FAKE_RELEASE_BUSY=1": "IN PROGRESS"} {
 		out, err := run(ReleasesScript(target("a")), env)
-		if rs := ParseReleases(out); err != nil || len(rs) != 2 || !strings.HasSuffix(rs[0].Line(), "  "+want) {
+		if rs := ParseReleases(out); err != nil || len(rs) != 2 || rs[0].State() != want {
 			t.Errorf("pending release with %s (%v): %+v\n%s", env, err, rs, out)
 		}
 	}
 	// Pending alone, nothing running it: incomplete.
 	os.Remove(filepath.Join(root, "app/a/prod/releases/5", FetchingFile))
-	if out, err := run(ReleasesScript(target("a"))); err != nil || !strings.HasSuffix(ParseReleases(out)[0].Line(), "  INCOMPLETE") {
+	if out, err := run(ReleasesScript(target("a"))); err != nil || ParseReleases(out)[0].State() != "INCOMPLETE" {
 		t.Errorf("pending alone (%v):\n%s", err, out)
 	}
 	os.RemoveAll(filepath.Join(root, "app/a/prod/releases/5"))
@@ -3052,8 +3054,8 @@ func TestSyncStatusLines(t *testing.T) {
 	}
 	release()
 	rs := ParseReleases("20261020000000\tcurrent\tsyncing\t\t{}\n")
-	if len(rs) != 1 || !rs[0].Syncing || !strings.HasSuffix(rs[0].Line(), "  SYNCING") {
-		t.Errorf("a syncing release: %+v %q", rs, rs[0].Line())
+	if len(rs) != 1 || !rs[0].Syncing || rs[0].State() != "SYNCING" {
+		t.Errorf("a syncing release: %+v %q", rs, rs[0].State())
 	}
 }
 
@@ -3889,6 +3891,66 @@ exit 0
 	for _, f := range kept {
 		if !fileExists(filepath.Join(base, f)) {
 			t.Errorf("%s, its script alive, is removed", f)
+		}
+	}
+}
+
+// --releases lines its releases up in columns, who at the widest name's
+// width, and shows a name or a branch another user chose escaped
+// (report.Copyable): it reaches the operator's terminal.
+func TestReleasesGrid(t *testing.T) {
+	t.Parallel()
+	rs := []Release{
+		{ID: "20261005120000", Current: true, Record: Record{By: "ci", Mode: "build", Branch: "main", Commit: "abc1234567890"}},
+		{ID: "20261004120000", Failed: true, Record: Record{By: "somebody\x1b[2J", Mode: "build", Branch: "fe\x1b]8;;x\aat", Commit: "def"}},
+	}
+	want := "* 20261005120000  ci               build main@abc1234567\n" +
+		"  20261004120000  somebody\\x1b[2J  build fe\\x1b]8;;x\\x07at@def  FAILED\n"
+	if got := ReleasesGrid(rs, false, false).String(); got != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+// The names a project's removals left or kept line up in columns under
+// --releases, each quoted as it shows: the server's file holds them.
+func TestReleasesLeftNamesInColumns(t *testing.T) {
+	t.Parallel()
+	out := "left\t1760000000\tapp-prod\t20261001000000\tjq:1.8\tsha256:j\t" + images.ToolKeeps + "\n" +
+		"left\t1760000000\tapp-prod\t20261001000000\tbusybox:1.37\tsha256:b\t" + images.ToolKeeps + "\n"
+	got := FormatReleases(out, false, 0)
+	var at []int
+	for _, l := range strings.Split(got, "\n") {
+		if strings.HasPrefix(l, "  ") && strings.Contains(l, "app-prod, release") {
+			at = append(at, strings.Index(l, "app-prod"))
+		}
+	}
+	if len(at) != 2 {
+		t.Fatalf("the control: two kept names in:\n%s", got)
+	}
+	if at[0] != at[1] {
+		t.Errorf("the kept names' environments at columns %v, not one:\n%s", at, got)
+	}
+}
+
+// --releases --borders draws each release's images on a row of their own
+// across the box, as without borders: one release's long images widen no
+// column, its state stays by its source, and at a terminal the long line
+// runs past the box's side alone.
+func TestReleasesBoxKeepsStatesNearTheirRows(t *testing.T) {
+	t.Parallel()
+	out := "20261005120000\tcurrent\tok\tapp=registry.example.com/team/app:2026-11-14-build-with-a-long-tag db=postgres:17.2-bookworm worker=registry.example.com/team/worker:2026-11-14\t{\"by\":\"ci\",\"mode\":\"build\",\"branch\":\"main\",\"commit\":\"abc1234567890\"}\n" +
+		"20261004120000\t\tfailed\tapp=sha256:abcdef\t{\"by\":\"ana\",\"mode\":\"image\"}\n"
+	boxed := FormatReleases(out, true, 0)
+	for _, l := range strings.Split(boxed, "\n") {
+		if i := strings.Index(l, "FAILED"); i >= 0 && layout.Width(l[:i]) > 60 {
+			t.Errorf("a release's state at column %d, pushed by another release's images:\n%s", layout.Width(l[:i]), boxed)
+		}
+	}
+	// At a terminal of 100, the box stays in it: the long images line runs
+	// past its side alone.
+	for _, l := range strings.Split(strings.TrimSuffix(FormatReleases(out, true, 100), "\n"), "\n") {
+		if layout.Width(l) > 100 && !strings.Contains(l, "registry.example.com/team/app") {
+			t.Errorf("a line of %d columns at a terminal of 100: %q", layout.Width(l), l)
 		}
 	}
 }

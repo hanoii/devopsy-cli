@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // leftSays is each entry of what may be dead or gone as one text, a project's first by
@@ -27,7 +28,11 @@ func leftSays(info remote.ServerInfo, host, ref string) []string {
 		es = append(es, groups[p]...)
 	}
 	for _, e := range append(es, leftovers...) {
-		s := e.Key + ": " + strings.Join(e.Lines, "\n")
+		key := e.Key
+		if e.Instance != "" {
+			key = e.Instance + "/" + key
+		}
+		s := key + ": " + strings.Join(e.Lines, "\n")
 		if e.Group != "" {
 			s = e.Group + " " + s
 		}
@@ -422,5 +427,19 @@ func TestServerInfoGoneNamesWidenNoKey(t *testing.T) {
 		if !strings.Contains(out, "\n  version    0.53.0\n") {
 			t.Errorf("%s: a long gone name widened the key column:\n%s", name, out)
 		}
+	}
+}
+
+// A gone environment's name is measured as it shows, quoted
+// (report.Copyable): one short in runes but past goneKeyMax once its
+// escape shows is keyed gone, never widening the key column.
+func TestGoneKeyMeasuredAsItShows(t *testing.T) {
+	t.Parallel()
+	hint := report.Hint("see it:", "devopsy @vm1: --gc")
+	if e := placed("shop", "pr-12\x1b[2Jx", []string{"gone, a uid claim"}, hint); e.Key != "gone" {
+		t.Errorf("a name past the column once quoted keeps its key: %+v", e)
+	}
+	if e := placed("shop", "pr-1", []string{"gone, a uid claim"}, hint); e.Key != "pr-1" {
+		t.Errorf("a short name keyed gone: %+v", e)
 	}
 }

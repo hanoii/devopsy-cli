@@ -15,6 +15,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -68,7 +69,11 @@ func runDebug(cwd string, args []string, color bool) int {
 }
 
 func debugSummary(st style, projectDir string) {
-	field := func(k, v string) { fmt.Printf("%s %s\n", st.head(fmt.Sprintf("%-22s", k)), v) }
+	// The fields in two columns, the key bold, at least 22 wide.
+	fields := &layout.Grid{Widths: layout.NewWidths().Min(0, 22).Gap(0, 1)}
+	field := func(k, v string) {
+		fields.Rows = append(fields.Rows, layout.Row{Cells: []layout.Cell{{Text: k, Paint: st.head}, {Text: v}}})
+	}
 	self, _ := os.Executable()
 	field("devopsy", version+" "+st.dim("("+tilde(self)+")"))
 	compose := "not available"
@@ -145,6 +150,7 @@ func debugSummary(st style, projectDir string) {
 			field("devopsy labels", orNone(labelList(labels)))
 		}
 	}
+	fmt.Print(fields.String())
 	fmt.Printf("\n%s devopsy --debug environments [name or address] [--yaml] | env [--show] [VAR...] | capabilities | labels | imports | schema [--user]\n", st.dim("More:"))
 }
 
@@ -277,6 +283,8 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			kind = ", alias " + t.Alias
 		}
 		fmt.Printf("%s  %s\n", st.name(st.head(n)), st.dim("("+tilde(t.File)+kind+")"))
+		// Its fields under it, the name bold, at least 9 wide.
+		rows := &layout.Grid{Widths: layout.NewWidths().Min(0, 2+9).Gap(0, 1)}
 		row := func(field, value, from string) {
 			if value == "" {
 				return
@@ -284,7 +292,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			if from != "" {
 				from = "  " + st.dim("("+tilde(from)+")")
 			}
-			fmt.Printf("  %s %s%s\n", st.head(fmt.Sprintf("%-9s", field)), value, from)
+			rows.Rows = append(rows.Rows, layout.Row{Indent: 2, Cells: []layout.Cell{{Text: field, Paint: st.head}, {Text: value + from}}})
 		}
 		if t.Host != "" {
 			row("target", t.Address, "")
@@ -317,6 +325,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		for _, k := range keys {
 			row("env", cli.DotenvLine(k, t.Env[k]), t.From["env."+k])
 		}
+		fmt.Print(rows.String())
 	}
 	return 0
 }
@@ -402,24 +411,32 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 		return file(d.Source)
 	}
 	fmt.Println(st.dim("First wins: the caller's environment, .env, inherit.env, instance.env, project.env, parent.env, devopsy-target.env, the env capability."))
+	// Each variable, then where it is set and what it overrides in two
+	// columns under it, the first at least as wide as "overridden".
+	g := &layout.Grid{Widths: layout.NewWidths().Min(0, 2+len("overridden"))}
+	line := func(s string) { g.Rows = append(g.Rows, layout.Row{Cells: []layout.Cell{{Text: s, Span: true}}}) }
+	def := func(label func(string) string, word, text string) {
+		g.Rows = append(g.Rows, layout.Row{Indent: 2, Cells: []layout.Cell{{Text: word, Paint: label}, {Text: text}}})
+	}
 	for _, v := range vars {
 		if len(v.Defs) == 0 {
-			fmt.Printf("%s %s\n", st.name(v.Name), st.warn("not set"))
+			line(st.name(v.Name) + " " + st.warn("not set"))
 			continue
 		}
 		// Masked before quoting: quoting can escape a secret out of sight.
 		quoted := func(value string) string {
 			return strings.TrimPrefix(cli.DotenvLine("", secrets.Value(v.Name, value)), "=")
 		}
-		fmt.Printf("%s=%s\n", st.name(v.Name), quoted(v.Defs[0].Value))
+		line(st.name(v.Name) + "=" + quoted(v.Defs[0].Value))
 		for i, d := range v.Defs {
 			if i == 0 {
-				fmt.Printf("  %s  %s\n", st.ok("set by    "), source(d))
+				def(st.ok, "set by", source(d))
 				continue
 			}
-			fmt.Printf("  %s  %s: %s\n", st.warn("overridden"), source(d), quoted(d.Value))
+			def(st.warn, "overridden", source(d)+": "+quoted(d.Value))
 		}
 	}
+	fmt.Print(g.String())
 	return 0
 }
 
@@ -431,16 +448,21 @@ func debugCapabilities(st style, projectDir string) {
 	for _, c := range cli.Capabilities {
 		fmt.Printf("\n%s\n", st.name(st.head(c.Name)))
 		fmt.Printf("  %s\n", wrap(c.What, 76, "  "))
-		fmt.Printf("  %s %s\n", st.head("implemented by:"), c.Who)
-		fmt.Printf("  %s %s\n", st.head("called by:     "), c.CalledBy)
+		facts := &layout.Grid{Widths: layout.NewWidths().Gap(0, 1)}
+		fact := func(label, value string) {
+			facts.Rows = append(facts.Rows, layout.Row{Indent: 2, Cells: []layout.Cell{{Text: label, Paint: st.head}, {Text: value}}})
+		}
+		fact("implemented by:", c.Who)
+		fact("called by:", c.CalledBy)
 		if projectDir != "" {
 			have := cli.ImplementedActions(projectDir, c)
 			if len(have) == 0 {
-				fmt.Printf("  %s %s\n", st.head("this project:  "), st.warn("does not implement it"))
+				fact("this project:", st.warn("does not implement it"))
 			} else {
-				fmt.Printf("  %s %s\n", st.head("this project:  "), st.ok("implements "+strings.Join(have, ", ")))
+				fact("this project:", st.ok("implements "+strings.Join(have, ", ")))
 			}
 		}
+		fmt.Print(facts.String())
 		fmt.Printf("  %s %s\n", st.head("actions:"), st.dim(".devopsy/capabilities/"+c.Name+"/<action>"))
 		for _, a := range c.Actions {
 			fmt.Printf("    %s\n", st.name(a.Usage))
@@ -459,21 +481,7 @@ func debugCapabilities(st style, projectDir string) {
 
 // wrap breaks text into lines of at most width, the next ones indented.
 func wrap(text string, width int, indent string) string {
-	var lines []string
-	line := ""
-	for _, w := range strings.Fields(text) {
-		if line != "" && len(line)+1+len(w) > width {
-			lines = append(lines, line)
-			line = w
-			continue
-		}
-		if line != "" {
-			line += " "
-		}
-		line += w
-	}
-	lines = append(lines, line)
-	return strings.Join(lines, "\n"+indent)
+	return strings.Join(layout.Wrap(strings.Join(strings.Fields(text), " "), width), "\n"+indent)
 }
 
 func debugLabels(st style, projectDir string, color bool) int {
@@ -621,10 +629,14 @@ func debugImports(st style, color bool) int {
 			state = st.warn("not imported by its current release: release it again")
 		}
 		fmt.Printf("  %s  %s\n", st.name(s.Project), s.Import.String())
+		// Its labels as wide as "release:", whether it shows or not.
+		g := &layout.Grid{Widths: layout.NewWidths().Min(0, 6+len("release:")).Gap(0, 1)}
 		if s.Imported {
-			fmt.Printf("      release: %q\n", s.Release)
+			g.Rows = append(g.Rows, layout.Row{Indent: 6, Cells: layout.Cells("release:", fmt.Sprintf("%q", s.Release))})
 		}
-		fmt.Printf("      now:     %s\n      %s\n", now, state)
+		g.Rows = append(g.Rows, layout.Row{Indent: 6, Cells: layout.Cells("now:", now)},
+			layout.Row{Indent: 6, Cells: []layout.Cell{{Text: state, Span: true}}})
+		fmt.Print(g.String())
 	}
 	if stale > 0 {
 		fmt.Printf("\n%d stale: each release keeps what it imported, so release those projects again.\n", stale)

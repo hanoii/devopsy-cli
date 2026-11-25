@@ -841,7 +841,7 @@ sync, an import or a restore did not complete, as a release is.
 Without a target, --reload runs the reload step under defaults: in place,
 once compose's required variables are set.
 `,
-	"--releases": `Usage: devopsy @<target> --releases
+	"--releases": `Usage: devopsy @<target> --releases [--borders]
        devopsy @<target> --releases remove <id|failed>... [--yes]
 
 Lists the releases on the target, newest first: id, who made it, mode,
@@ -854,7 +854,7 @@ perhaps never run (--status says what finishes it). * marks the
 current one. Under each, the images it runs: what a rollback to it
 restores, and what removing it may free. Then the images the project's
 removals left, because a container (even a stopped one) uses them: each
-pruning on the server retries them.
+pruning on the server retries them. --borders draws the list in a box.
 
 remove takes releases away, each with its images, as pruning does: its
 tags, and the images no other release on the server still tags (any
@@ -896,7 +896,7 @@ keeping a mirror. The environment's snapshots: manual keep
 (3) says how many stay, at most the server's snapshots: max_keep; where
 they go is the server's snapshots: root, else beside shared/.
 `,
-	"--snapshots": `Usage: devopsy @<target> --snapshots
+	"--snapshots": `Usage: devopsy @<target> --snapshots [--borders]
        devopsy @<target> --snapshots restore <id> [--no-code [--accept-image <service>,...]] [--with-env] [--yes]
        devopsy @<target> --snapshots remove <id>... [--yes]
        devopsy @<target> --snapshots export <id> > <file>
@@ -906,7 +906,7 @@ Lists the environment's snapshots, newest first: id, kind, the release
 it was taken in, when, and its size; IN PROGRESS for one being taken
 now, INCOMPLETE for one cut off (the next snapshot finishes it when its
 data was complete, else removes it). An id can be its start, when only
-one snapshot starts so.
+one snapshot starts so. --borders draws the list in a box.
 
 restore brings a snapshot back whole: its data, its code and the images
 that ran on them, as a new release (a --rollback after it goes back to
@@ -1055,7 +1055,7 @@ reads the project as the server does. Nothing is downloaded when the
 versions already match; a server's development build has no release to
 match.
 `,
-	"--server-info": `Usage: devopsy [@<server>] --server-info [--json]
+	"--server-info": `Usage: devopsy [@<server>] --server-info [--json | --borders]
 
 What the server is, read in one session that changes nothing and waits
 for no lock, or without a server the Linux server it runs on (in
@@ -1091,8 +1091,9 @@ admin can fix carries a code, which a project user passes on: its report
 has no fix for it.
 
 Options:
-  --json   the facts and the same lines as JSON on stdout, for scripts and
-           agents
+  --json     the facts and the same lines as JSON on stdout, for scripts
+             and agents
+  --borders  each part in a box, its keys between rules
 
 Examples:
   devopsy @vm1 --server-info
@@ -1290,7 +1291,7 @@ Examples:
   devopsy @b/prod --vars-instance set SITE_ID                # the instance's
   devopsy @vm1 --vars-project set SHARED_KEY                 # the project's
 `,
-	"--status": `Usage: devopsy [@<target>] --status [--json]
+	"--status": `Usage: devopsy [@<target>] --status [--json | --borders]
 
 What is running. In a project: its containers (state and health, as
 docker compose ps sees them, a run's left out, and the services with
@@ -1306,7 +1307,8 @@ restarting or exited on an error, a cut operation, a disk nearly full, a
 warning of the status capability's), as --server-info does.
 
 Options:
-  --json   the same as JSON on stdout, for scripts and agents
+  --json     the same as JSON on stdout, for scripts and agents
+  --borders  in a box, its keys between rules
 
 Examples:
   devopsy --status

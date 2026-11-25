@@ -123,6 +123,17 @@ func fakeBin(t *testing.T) string {
 // fakeRequired answers compose's config -q and config --variables as compose does for the
 // -f files' ${VAR:?msg} and ${VAR?msg}: -q fails on the first one unset (or empty, for :?)
 // with compose's words, --variables lists each as required.
+// killParent is a fake's shell function that kills the process that ran
+// it outright (SIGKILL, as the OOM killer does) and waits, bounded, until
+// it is gone: a kill is only sent, so a fake that exits at once can be
+// seen exiting by the parent it was to kill, which then goes on and says
+// so (seen under a loaded suite).
+const killParent = `killParent() {
+  kill -KILL "$PPID" 2>/dev/null
+  n=0; while kill -0 "$PPID" 2>/dev/null && [ $n -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+}
+`
+
 const fakeRequired = `case "$*" in *' config -q'|*' config --variables --format json')
   files= next=
   for a in "$@"; do [ -z "$next" ] || files="$files $a"; next=; [ "$a" != -f ] || next=1; done
@@ -1659,7 +1670,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("add a private key (%d):\n%s", code, out)
 	}
 	out, code = run("", "@prod", "--ssh-keys")
-	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server  [restrict]") {
+	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server    [restrict]") {
 		t.Fatalf("list (%d):\n%s", code, out)
 	}
 	// remove by comment, by fingerprint prefix; never the last one.
@@ -1929,7 +1940,7 @@ func TestReleasesRemove(t *testing.T) {
 	if out, code := run(nil, "@prod", "--releases", "remove", "1999", "--yes"); code == 0 || !strings.Contains(out, "devopsy@server:prod has no release 1999: nothing removed") {
 		t.Errorf("an unknown id (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@prod", "--releases", "drop", first); code == 0 || !strings.Contains(out, "usage: devopsy @devopsy@server:prod --releases [remove <id|failed>... [--yes]]") {
+	if out, code := run(nil, "@prod", "--releases", "drop", first); code == 0 || !strings.Contains(out, "usage: devopsy @devopsy@server:prod --releases [--borders | remove <id|failed>... [--yes]]") {
 		t.Errorf("another word (%d):\n%s", code, out)
 	}
 	if got := releases(); len(got) != 5 {
@@ -2015,5 +2026,34 @@ func TestMissingStepsExample(t *testing.T) {
 		if !strings.Contains(got, "      release: up -d --wait --remove-orphans\n") || strings.Contains(got, "--pull") {
 			t.Errorf("mode %s:\n%s", mode, got)
 		}
+	}
+}
+
+// --ssh-keys shows each key's fields as they show (report.Copyable), its
+// type too: a key's line is anyone's with the key to write.
+func TestSSHKeysShownEscaped(t *testing.T) {
+	t.Parallel()
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	project := filepath.Join(tmp, "app")
+	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
+	write(t, filepath.Join(tmp, ".ssh", "authorized_keys"),
+		"ssh-\x1b[2Jed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g sample@test\n", 0o600)
+	cmd := exec.Command(binary, "@prod", "--ssh-keys")
+	cmd.Dir = project
+	cmd.Env = []string{"DEVOPSY_HOME=" + t.TempDir(), "DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "sample@test") {
+		t.Fatalf("the control: the key not listed:\n%s", out)
+	}
+	if !strings.Contains(string(out), `\x1b[2Jed25519`) {
+		t.Errorf("a key's type not shown escaped:\n%q", out)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -695,14 +696,19 @@ func TestProjectUsersDestroyAsksFirst(t *testing.T) {
 	for _, want := range []string{"uid claims\tenv:shop:prod (", "compose names\tshop-prod, shop-stage\n", "under them\t2 containers, 1 volume, 1 network\n",
 		"images\t3 names, ", "door's space\t" + filepath.Join(c.space, "sealed", "shop"), "tree\t" + s.tree + " (", "no destroy: step of shop's runs",
 		"devopsy: error: nothing removed: no terminal to confirm it on", "add --yes to go on without asking"} {
-		if !strings.Contains(out, want) {
+		// A key and its value in the report's columns, at any width.
+		parts := strings.Split(want, "\t")
+		for i := range parts {
+			parts[i] = regexp.QuoteMeta(parts[i])
+		}
+		if !regexp.MustCompile(strings.Join(parts, " +")).MatchString(out) {
 			t.Errorf("asked with no terminal (%d), no %q:\n%s", code, want, out)
 		}
 	}
 	if code != 1 || !remote.KeysLeft(c.keys) || fileExists(c.destroying) {
 		t.Fatalf("asked with no terminal (%d), something removed: keys %v, its mark %v", code, remote.KeysLeft(c.keys), fileExists(c.destroying))
 	}
-	if out, code := runDevopsy(t, t.TempDir(), env, "@devopsy@server:", "--project-users", "remove", "shop", "--destroy", "--yes"); code != 0 || strings.Contains(out, "compose names\t") {
+	if out, code := runDevopsy(t, t.TempDir(), env, "@devopsy@server:", "--project-users", "remove", "shop", "--destroy", "--yes"); code != 0 || strings.Contains(out, "compose names ") {
 		t.Fatalf("--yes (%d):\n%s", code, out)
 	}
 	// The binary looks no user up: the home its mark would name stays.

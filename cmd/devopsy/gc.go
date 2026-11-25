@@ -74,7 +74,7 @@ func runGC(t *remote.Target, args []string) int {
 		return fail("the server's devopsy answered what this one cannot read: " + err.Error())
 	}
 	es := plan.entries()
-	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
+	newEntryTable(os.Stdout, styleFor(os.Stdout)).print(es)
 	if plan.count() == 0 {
 		report.Info("nothing to remove on " + t.Host)
 		gcLeaves(t)

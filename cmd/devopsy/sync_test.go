@@ -51,7 +51,7 @@ import (
 // is app's devopsy.mnt.owner, FAKE_DB_OWNER db's. devopsy-util is there
 // and fresh unless FAKE_UTIL_* say otherwise (below).
 const syncFakeDocker = `#!/bin/sh
-# devopsy's own compose file (images.ComposeFile) is left out of the log:
+` + killParent + `# devopsy's own compose file (images.ComposeFile) is left out of the log:
 # the tests here match the project's compose commands. A sed only where
 # it has something to do: the fake runs thousands of times, and macOS
 # makes every process dear.
@@ -226,7 +226,7 @@ case "$*" in
     script=$2; shift 2
     # FAKE_CUT_AFTER_ROOT: the devopsy that ran it killed outright once it is done.
     [ -n "${FAKE_CUT_AFTER_ROOT:-}" ] || exec sh -c "$script" "$@"
-    sh -c "$script" "$@"; kill -KILL "$PPID"; exit 137 ;;
+    sh -c "$script" "$@"; killParent; exit 137 ;;
   # docker info: the host root's docker-info.json, when a test writes one, else no more than
   # its image store. The store is the containerd one, at the floor (dockerFloors), unless the
   # file names one or FAKE_CLASSIC_STORE: the classic one, as overlay2 says it.
@@ -286,7 +286,7 @@ case "$*" in
     if [ -n "${FAKE_START_WAIT:-}" ]; then : >"$FAKE_START_WAIT"; n=0; while [ ! -e "$FAKE_START_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # FAKE_KILL_START: the devopsy starting them killed outright (SIGKILL,
     # the OOM killer) as they start.
-    [ -z "${FAKE_KILL_START:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_START:-}" ] || { killParent; exit 137; }
     # FAIL_START: a start that fails, its services left stopped.
     [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     for s in $(after start "$@"); do case " $svcs " in *" $s "*) ;; *) echo "no such service: $s" >&2; exit 1 ;; esac; done
@@ -505,7 +505,7 @@ case "$*" in
     [ -z "${FAIL_SNAPSHOT_TAR:-}" ] || exit "$FAIL_SNAPSHOT_TAR"
     # FAKE_KILL_SNAPSHOT_TAR: the devopsy writing the tars killed
     # outright (SIGKILL, the OOM killer).
-    [ -z "${FAKE_KILL_SNAPSHOT_TAR:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_SNAPSHOT_TAR:-}" ] || { killParent; exit 137; }
     # FAKE_SLOW_TAR: a tar that takes until $FAKE_SLOW_TAR.go exists.
     if [ -n "${FAKE_SLOW_TAR:-}" ]; then : >"$FAKE_SLOW_TAR"; n=0; while [ ! -e "$FAKE_SLOW_TAR.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # From the mirror (-v <mirror>:/m:ro), or a take without one from the
@@ -560,14 +560,14 @@ case "$*" in
     [ -z "${FAIL_DESTROY:-}" ] || exit "$FAIL_DESTROY"
     # FAKE_KILL_DESTROY: its devopsy (--destroy-data, which runs this)
     # killed outright meanwhile, as SIGKILL or the OOM killer would.
-    [ -z "${FAKE_KILL_DESTROY:-}" ] || kill -9 "$PPID"
+    [ -z "${FAKE_KILL_DESTROY:-}" ] || killParent
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     # FAKE_KILL_EXPORT: the devopsy exporting killed outright (SIGKILL,
     # the OOM killer) as its tar runs.
-    [ -z "${FAKE_KILL_EXPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_EXPORT:-}" ] || { killParent; exit 137; }
     # Each entry (--mount type=bind,source=<path>,target=/x/<entry>) and
     # volume (-v <name>:/x/<key>:ro) copied into a directory of its own,
     # where the script that follows the image runs, /x being it.
@@ -592,7 +592,7 @@ case "$*" in
     [ -z "${FAKE_EXTRACT_BREAK:-}" ] || echo '{' >"$FAKE_EXTRACT_BREAK"
     # FAKE_KILL_IMPORT: the devopsy that started the extraction killed
     # outright (SIGKILL, the OOM killer) as it writes.
-    [ -z "${FAKE_KILL_IMPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
+    [ -z "${FAKE_KILL_IMPORT:-}" ] || { killParent; exit 137; }
     # One entry per container (--mount, its source the entry): emptied,
     # then the members named after it extracted from the tar mounted at
     # /in (a snapshot's .tar.zst is a plain tar here), as the util image
@@ -2911,12 +2911,12 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 [ -z "${FAKE_SHOW:-}" ] || printf "$FAKE_SHOW"
 `, 0o755)
 	out, code := s.run([]string{"FAKE_DB_DOWN=1"}, "--status")
-	if code != 0 || !strings.HasPrefix(out, "project     shop\ncontainers\n") || !strings.Contains(out, "  app ") || !strings.Contains(out, "  db       exited\n") ||
+	if code != 0 || !strings.HasPrefix(out, "project     shop\n\ncontainers  app ") || !strings.Contains(out, "  db   exited\n") ||
 		!strings.Contains(out, "url         https://shop.example\n            https://www.shop.example\n") || !strings.Contains(out, "running     app\n") {
 		t.Fatalf("local status (%d):\n%s", code, out)
 	}
 	// A service with no container is listed as such.
-	if out, code := s.run([]string{"FAKE_ABSENT=db"}, "--status"); code != 0 || !strings.Contains(out, "  db       no container\n") || strings.Count(out, "  db ") != 1 {
+	if out, code := s.run([]string{"FAKE_ABSENT=db"}, "--status"); code != 0 || !strings.Contains(out, "  db   no container\n") || strings.Count(out, "  db ") != 1 {
 		t.Errorf("a service with no container (%d):\n%s", code, out)
 	}
 	// A project compose cannot read lists its containers all the same,
@@ -2925,7 +2925,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 		t.Errorf("a project compose config fails on (%d):\n%s", code, out)
 	}
 	// A container restarting needs attention.
-	if out, code := s.run([]string{"FAKE_DB_RESTARTING=1"}, "--status"); code != statusWarned || !strings.Contains(out, "  db       restarting\n") {
+	if out, code := s.run([]string{"FAKE_DB_RESTARTING=1"}, "--status"); code != statusWarned || !strings.Contains(out, "  db   restarting\n") {
 		t.Errorf("a container restarting (%d):\n%s", code, out)
 	}
 	// The capability's warning, its fix under it, every key aligned on
@@ -2946,7 +2946,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 		len(r.Entries) != 2 || r.Entries[0].Key != "url" || strings.Join(r.Entries[0].Lines, " ") != "https://shop.example https://www.shop.example" {
 		t.Errorf("--status --json (%d, %v): %+v\n%s%s", code, err, r, stdout, stderr)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet\n") || !regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !regexp.MustCompile(`\nrelease +none: not released yet\n`).MatchString(out) || !regexp.MustCompile(`\ndisks +\S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
 		t.Fatalf("unreleased status (%d):\n%s", code, out)
 	}
 	// A current that is a directory (a failed release's containers
@@ -2955,7 +2955,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	if err := os.MkdirAll(filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "mnt", "storage"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "release     none: not released yet\n") || strings.Contains(out, "containers") {
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !regexp.MustCompile(`\nrelease +none: not released yet\n`).MatchString(out) || strings.Contains(out, "containers") {
 		t.Fatalf("a current that is a directory (%d):\n%s", code, out)
 	}
 	os.RemoveAll(filepath.Join(s.root, "shop", "prod", "current"))
@@ -3974,7 +3974,7 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 		t.Errorf("the failed first release's containers stay:\n%s", docker)
 	}
 	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
-	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || len(entries) != 1 || !strings.Contains(out, "release     warning: none: "+entries[0].Name()+" failed\n            | see why:\n            | $ devopsy @devopsy@one:dev --log\n") {
+	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || len(entries) != 1 || !strings.Contains(out, "release  warning: none: "+entries[0].Name()+" failed\n         | see why:\n         | $ devopsy @devopsy@one:dev --log\n") {
 		t.Errorf("--status after a failed first release (%d):\n%s", code, out)
 	}
 	// The command it names copies as shown, a server in brackets quoted.

@@ -164,7 +164,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 	case first == "--status" || first == "--server-info":
 		r := Result{Directive: DirectiveNoFileComp}
 		if len(words) == 2 {
-			r.Candidates = []Candidate{jsonCandidate}
+			r.Candidates = []Candidate{jsonCandidate, bordersCandidate}
 		}
 		return filter(r, cur)
 	case first == "--export" || first == "--import":
@@ -220,6 +220,10 @@ func dataFlags(projectDir string, words []string, cur string, onTarget bool) Res
 // jsonCandidate is --status's and --server-info's --json, without a
 // target and with one.
 var jsonCandidate = Candidate{"--json", "the same as JSON, for scripts and agents", GroupDevopsy}
+
+// bordersCandidate is the reports' and lists' --borders: --status's,
+// --server-info's, --releases' and --snapshots'.
+var bordersCandidate = Candidate{"--borders", "the same in boxes", GroupDevopsy}
 
 // showFlag completes --env's one option.
 func showFlag(words []string, cur string) Result {
@@ -349,7 +353,11 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	case "--release-no-sync", "--rollback", "--reload", "--inherit":
 		return flags([]Candidate{help})
 	case "--status", "--server-info":
-		return flags([]Candidate{jsonCandidate, help})
+		// --json or --borders, never both.
+		if slices.Contains(words, "--json") || slices.Contains(words, "--borders") {
+			return flags([]Candidate{help})
+		}
+		return flags([]Candidate{jsonCandidate, bordersCandidate, help})
 	case "--server-setup":
 		// --root takes a directory on the server, which nothing here can list.
 		if i := slices.Index(words, "--root"); i == len(words)-2 {
@@ -398,7 +406,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	case "--releases":
 		// Ids are the server's: never offered.
 		if len(words) == 2 {
-			return filter(Result{Candidates: []Candidate{{"remove", "remove releases and the images only they hold", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+			return filter(Result{Candidates: []Candidate{{"remove", "remove releases and the images only they hold", GroupDevopsy}, bordersCandidate, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		if words[1] == "remove" {
 			return filter(Result{Candidates: []Candidate{{"failed", "every failed release", GroupDevopsy}, {"--yes", "do not ask first", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
@@ -411,7 +419,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 				{"restore", "bring a snapshot back: data, code, images", GroupDevopsy},
 				{"remove", "remove snapshots and the images only they hold", GroupDevopsy},
 				{"export", "a snapshot to stdout, one tar", GroupDevopsy},
-				{"import", "a snapshot from stdin", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+				{"import", "a snapshot from stdin", GroupDevopsy}, bordersCandidate, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		switch words[1] {
 		case "restore":

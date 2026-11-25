@@ -1808,7 +1808,7 @@ func TestServerSetupApplyWaitsForAnother(t *testing.T) {
 func stoppingSystemctl(t *testing.T, s *syncSetup, extra string) {
 	t.Helper()
 	write(t, filepath.Join(filepath.Dir(s.root), "bin", "systemctl"), `#!/bin/sh
-h=$DEVOPSY_INTERNAL_HOST_ROOT
+`+killParent+`h=$DEVOPSY_INTERNAL_HOST_ROOT
 echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
   "show -p ActiveState --value docker.service") echo active ;;
@@ -1820,7 +1820,7 @@ case "$*" in
     case $3 in *,*) echo "ActiveState=activating"; echo "Result=success"; printf 'InvocationID=' ;; esac
     cat "$h/invocation" ;;
   "restart --no-block docker.service")
-    if [ -n "${FAKE_RESTART_CUTS:-}" ]; then : >"$h/restarting"; kill -KILL "$PPID"; exit 0; fi
+    if [ -n "${FAKE_RESTART_CUTS:-}" ]; then : >"$h/restarting"; killParent; exit 0; fi
     echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json" ;;
 `+firewallUnitFake+extra+`
 esac

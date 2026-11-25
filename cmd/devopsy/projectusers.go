@@ -18,6 +18,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/howto"
+	"github.com/hanoii/devopsy-cli/internal/layout"
 	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -166,13 +167,15 @@ func listProjectUsers(d *remote.Door) int {
 	if d == nil || len(d.Users) == 0 {
 		report.Info("no project users on this server")
 	} else {
+		g := &layout.Grid{}
 		for _, name := range slices.Sorted(maps.Keys(d.Users)) {
 			exists := "no Unix user"
 			if _, err := user.Lookup(name); err == nil {
 				exists = "user there"
 			}
-			fmt.Printf("%s\tproject %s\t%s\t%s\n", name, d.Users[name].Project, exists, plural(keysOf(name), "key"))
+			g.Rows = append(g.Rows, layout.Row{Cells: layout.Cells(report.Copyable(name), "project "+report.Copyable(d.Users[name].Project), exists, plural(keysOf(name), "key"))})
 		}
+		fmt.Print(g.String())
 		for _, k := range keylessUsers(d) {
 			report.Default().Say(report.InfoLevel, keptUserLine(k), k.Held, keptUserHints(k.Project, sessionServer())...)
 		}

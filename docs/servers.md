@@ -7,7 +7,7 @@ uses most:
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps; the one left is marked rolled back
 devopsy @vm1:prod --reload       # the release again with its variables and imports as they are now, then its reload: step
-devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one
+devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one; --borders in a box
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
@@ -21,7 +21,7 @@ devopsy @vm1:prod --snapshot     # a snapshot: every service with data stopped f
 devopsy @vm1:prod --snapshots    # list them; restore, remove, export or import one
 devopsy @vm1:prod --snapshots restore <id>   # its data, code and images back, as a new release (--no-code: the data alone)
 devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   # a snapshot off the server
-devopsy @vm1:prod --status       # the release there, a sync running into or from it, the disks, its containers, images held or moved, the project's own lines; exit 3 when something needs attention, --json for fields
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, the disks, its containers, images held or moved, the project's own lines; exit 3 when something needs attention, --json for fields, --borders in a box
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -393,20 +393,28 @@ in `--shell-host`; anywhere else it refuses. It reports in four parts.
   where its record is, the values someone else set that were kept, and
   whether `/proc` shows every user's processes.
 
-`projects`, each project under its name with its project uid, then a row
-per environment: when its current release was made and by whom, its
-containers running, the uid its containers run as ([uids](#uids)) and
-what runs on it, with the role it holds and what it exports under the
-row. A role held by a compose project that is no environment is a line
-of its own.
+`projects`, each project under its name with the project user it is
+for, if any ([project users](project-users.md)), and its project uid;
+each of its instances a level under it with the instance's project uid;
+then, under the project or its instance, a row per environment: when its
+current release was made and by whom, its containers running, the uid
+its containers run as ([uids](#uids)) and what runs on it, with the role
+it holds and what it exports under the row. A role held by a compose
+project that is no environment is a line of its own. A project user's
+`--server-info` shows its own project only.
 
 `leftovers`, what may be dead or gone on the server, described below.
 
+Each part's title is underlined, a blank line before and after it. A key
+of several lines, a project and a warning get a blank line around them,
+a warning about a row (a disk's, an environment's) a blank line after it
+only, and several warnings in a row stay together. A fact that names
+what it is says it first (`clock: synchronized`, `logs: json-file`).
 Prose wraps at 100 columns, a command never, and a row of cells moves
 its last cell whole to a line of its own instead.
 
-What needs attention is a warning under the line it is about, its first
-line starting with `warning: `, its details and its fix after a `| `, as
+What needs attention is a warning under its key, after the key's facts,
+or under the row it is about, its first line starting with `warning: `, its details and its fix after a `| `, as
 devopsy's own lines show them; a fix that serves several lines in a row
 (`--server-setup` for the setup's items) comes once, after the last of
 them:
@@ -471,10 +479,17 @@ A warning only the server's admin can fix carries its
 code to pass on and no fix, and leaves out what only the admin can do
 (the hint to free what kdump keeps, data on XFS).
 
-`--json` prints the facts and the same lines for scripts and agents, each
+`--borders` draws each part in a box under its title, its keys and each
+environment between rules, every box's columns at one width. A box
+widens for a command it cannot wrap up to the terminal's width (100
+columns in a pipe); a longer command runs out past the box's side, on its
+line alone. `--json` prints the facts and
+the same lines for scripts and agents, never with `--borders`, each
 warning with its own fix, each line with its `section`, its project
-(`group`), a line of a project's heading (`head`), a row's `cells`, and
-the name of what a row is of when its key does not say it (`name`). Its
+(`group`) and instance (`instance`), a line of a project's heading
+(`head`), a row's `cells`, and the name of what a row is of when its key
+does not say it (`name`); the facts say whose report it is when a
+project user's (`project_user`). Its
 fields may change before 1.0.0: the door's `firewall_wrong`,
 `firewall_error` and `project` are gone, the setup's `firewall` (its
 `state`, `differs`, `wrong` and `unread`) saying the firewall for both
