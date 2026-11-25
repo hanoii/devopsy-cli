@@ -45,10 +45,23 @@ func SpanRow(r Row) bool {
 	return k < len(r.Cells) && r.Cells[k].Span
 }
 
-// spanAt is the index of r's first span cell, len(r.Cells) for none.
+// spanAt is the index of r's first span cell, len(r.Cells) for none:
+// the cells before it are in columns, those from it on in none.
 func spanAt(r Row) int {
 	for k, c := range r.Cells {
 		if c.Span {
+			return k
+		}
+	}
+	return len(r.Cells)
+}
+
+// runSpan is the index of r's first span cell that holds anything,
+// len(r.Cells) for none: where a box runs to its side from, an empty span
+// cell drawing nothing, as an empty cell does.
+func runSpan(r Row) int {
+	for k, c := range r.Cells {
+		if c.Span && !empty(c) {
 			return k
 		}
 	}
@@ -66,7 +79,7 @@ func (g *Grid) lastColumn() int {
 			n = max(n, firstHeld(r))
 			continue
 		}
-		sp := spanAt(r)
+		sp := runSpan(r)
 		if sp < len(r.Cells) {
 			n = max(n, sp)
 		}
@@ -109,25 +122,25 @@ func (g *Grid) heldColumns(lastCol int) []int {
 
 // runsFrom is the cell of r a box runs from to its side, with no column
 // line across it: a span row's first cell that holds anything, else its
-// first span cell, else its last cell before the box's last column when
-// that is prose (WrapWords), which so wraps in the room to the side and
-// never in a column the cells after it hold, or when the row's cells stop
-// short of that column; len(r.Cells) for none.
+// first span cell that holds anything, else its last cell before the
+// box's last column when that is prose (WrapWords), which so wraps in the
+// room to the side and never in a column the cells after it hold, or the
+// row's one cell short of that column (a heading); len(r.Cells) for none.
 // A box's widths then hang on no fit of a column but its last, and are
 // measured in one pass.
 func runsFrom(r Row, lastCol int) int {
 	if SpanRow(r) {
 		return firstHeld(r)
 	}
-	sp := spanAt(r)
+	sp := runSpan(r)
 	last := lastShown(r)
 	if last < 0 || last >= sp || last >= lastCol || empty(r.Cells[last]) {
 		return sp
 	}
-	// Prose, or a row whose cells stop short of the box's last column (a
-	// heading), runs to the side; one that reaches it with empty cells
-	// keeps them in their columns.
-	if r.Cells[last].Fit == WrapWords || len(r.Cells)-1 < lastCol {
+	// Prose runs to the side, and so does a row of one cell that stops
+	// short of the box's last column (a heading); a row of several cells
+	// keeps them in their columns, its alignment and lines with them.
+	if lastCell(r, last).Fit == WrapWords || firstHeld(r) == last && len(r.Cells)-1 < lastCol {
 		return last
 	}
 	return sp
@@ -172,7 +185,7 @@ func (g *Grid) shapeOf() boxShape {
 	}
 	for _, k := range s.cols {
 		c := s.w.col(k)
-		width := max(s.w.size(k), c.min, c.fixed)
+		width := s.w.size(k)
 		if c.fitted > 0 {
 			width = max(c.min, c.fixed, c.fitted)
 		}
@@ -210,6 +223,25 @@ func (s boxShape) start(i int) int {
 		at += s.widths[j] + 2*boxPadding + sideWidth
 	}
 	return at
+}
+
+// after is the room the box's columns after column i take, their lines
+// included.
+func (s boxShape) after(i int) int {
+	n := 0
+	for j := i + 1; j < len(s.cols); j++ {
+		n += s.widths[j] + 2*boxPadding + sideWidth
+	}
+	return n
+}
+
+// lastRoom is the room a row's last cell has in the box's column i: what
+// the box leaves inside it, less the columns after it.
+func (s boxShape) lastRoom(inside, i int) int {
+	if inside < 0 {
+		return -1
+	}
+	return max(0, inside-s.after(i))
 }
 
 // inner is the width between a box's sides.
@@ -263,7 +295,7 @@ func (g *Grid) cells(r Row, s boxShape, room int) boxLaid {
 		c := r.Cells[k]
 		indent := indentOf(r, k)
 		if k == last {
-			l.cols[i] = indented(g.fitCell(c, s.start(i)+indent, inside), indent)
+			l.cols[i] = indented(g.fitCell(lastCell(r, k), s.start(i)+indent, s.lastRoom(inside, i)), indent)
 		} else {
 			l.cols[i] = indented(cellLines(c, inside, s.start(i)+indent), indent)
 		}
@@ -273,9 +305,9 @@ func (g *Grid) cells(r Row, s boxShape, room int) boxLaid {
 	}
 	start := s.start(l.runsIn)
 	if c := r.Cells[rf]; !c.Span && rf == last {
-		// Prose before the last column, to the side.
+		// Prose before the last column, or a row's one cell, to the side.
 		indent := indentOf(r, rf)
-		l.run = indented(g.fitCell(c, start+indent, inside), indent)
+		l.run = indented(g.fitCell(lastCell(r, rf), start+indent, inside), indent)
 		return l
 	}
 	run := -1
@@ -480,11 +512,11 @@ func (g *Grid) boxRow(r Row, s boxShape, inner int) []string {
 			if j < len(l.cols[i]) {
 				line = paint(l.cols[i][j])
 			}
-			if s.w.col(s.cols[i]).align == Right {
-				line = padLeft(line, s.widths[i])
-			} else {
-				line = Pad(line, s.widths[i])
+			block := 0
+			if k := s.cols[i]; k < len(r.Cells) && r.Cells[k].Grid != nil {
+				block = linesWidth(l.cols[i])
 			}
+			line = alignLine(line, s.widths[i], s.w.col(s.cols[i]).align == Right, block)
 			b.WriteString(line)
 			used += s.widths[i]
 			if i < len(s.cols)-1 || l.run != nil {

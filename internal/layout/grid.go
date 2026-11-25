@@ -209,38 +209,17 @@ func (g *Grid) widths(r Row) *Widths {
 func (g *Grid) boxed() bool { return g.Border != NoBorder && !g.inBox }
 
 // prepare measures every grid of the tree under g before any is drawn:
-// the text cells everywhere; each grid's room, from its parent's and
-// where its cell starts (place); each nested grid, the deepest first,
-// at the width it draws in that room into its parent's column; then the
-// boxes, fitted to their rooms (fitBoxes), and the nested grids measured
-// again, a box now at its fitted width.
-func prepare(root *Grid) {
-	byDepth := [][]*Grid{}
-	var walk func(g *Grid, d int, inBox bool)
-	walk = func(g *Grid, d int, inBox bool) {
-		for len(byDepth) <= d {
-			byDepth = append(byDepth, nil)
-		}
-		g.inBox = inBox
-		byDepth[d] = append(byDepth[d], g)
-		for _, r := range g.Rows {
-			for _, c := range r.Cells {
-				if c.Grid != nil {
-					walk(c.Grid, d+1, inBox || g.boxed())
-				}
-			}
-		}
-	}
-	walk(root, 0, false)
-	all := func(f func(g *Grid)) {
-		for _, gs := range byDepth {
-			for _, g := range gs {
-				f(g)
-			}
-		}
-	}
+// the text cells everywhere; then passes (tree.pass) until one changes
+// nothing, each giving every grid its room from where its row places it,
+// every nested grid's width as it draws there, the deepest first, into
+// its parent's column, and the boxes fitted to their rooms (fitBoxes),
+// every grid measured again as it then draws, so each pass's state holds
+// by itself. The bound only guards a tree no pass settles (a Widths shared
+// across depths).
+func prepare(root *Grid) *tree {
+	t := newTree(root)
 	// A render measures afresh: what an earlier one measured goes.
-	all(func(g *Grid) {
+	t.all(func(g *Grid) {
 		g.fit, g.natural, g.boxRoom = -1, 0, -1
 		for _, r := range g.Rows {
 			w := g.widths(r)
@@ -250,7 +229,7 @@ func prepare(root *Grid) {
 			}
 		}
 	})
-	all(func(g *Grid) {
+	t.all(func(g *Grid) {
 		for _, r := range g.Rows {
 			w := g.widths(r)
 			for k, c := range measured(r) {
@@ -262,16 +241,85 @@ func prepare(root *Grid) {
 		}
 	})
 	root.fit = roomOf(root.Width, -1, 0)
-	nested := func() {
-		all(func(g *Grid) {
+	for range len(t.byDepth) + 3 {
+		before := t.state()
+		t.pass()
+		if equal(before, t.state()) {
+			break
+		}
+	}
+	return t
+}
+
+// tree is a grid and every grid in its cells, by depth, and its boxes.
+type tree struct {
+	byDepth [][]*Grid
+	boxes   []*Grid
+}
+
+func newTree(root *Grid) *tree {
+	t := &tree{}
+	var walk func(g *Grid, d int, inBox bool)
+	walk = func(g *Grid, d int, inBox bool) {
+		for len(t.byDepth) <= d {
+			t.byDepth = append(t.byDepth, nil)
+		}
+		g.inBox = inBox
+		t.byDepth[d] = append(t.byDepth[d], g)
+		if g.boxed() {
+			t.boxes = append(t.boxes, g)
+		}
+		for _, r := range g.Rows {
+			for _, c := range r.Cells {
+				if c.Grid != nil {
+					walk(c.Grid, d+1, inBox || g.boxed())
+				}
+			}
+		}
+	}
+	walk(root, 0, false)
+	return t
+}
+
+func (t *tree) all(f func(g *Grid)) {
+	for _, gs := range t.byDepth {
+		for _, g := range gs {
+			f(g)
+		}
+	}
+}
+
+// pass is one pass of prepare's: rooms, natural widths, boxes fitted and
+// every grid measured as it then draws.
+func (t *tree) pass() {
+	for _, gs := range t.byDepth {
+		for _, g := range gs {
+			g.roomsBelow()
+		}
+	}
+	t.naturals()
+	if len(t.boxes) > 0 {
+		fitBoxes(t.boxes)
+		t.naturals()
+	}
+}
+
+// naturals measures each nested grid as it draws in its room, the
+// deepest first, into its parent's column (nest).
+func (t *tree) naturals() {
+	for d := len(t.byDepth) - 1; d >= 1; d-- {
+		for _, g := range t.byDepth[d] {
+			g.natural = linesWidth(g.render(g.fit))
+		}
+		t.all(func(g *Grid) {
 			for _, r := range g.Rows {
 				for _, c := range g.widths(r).cols {
 					c.nest = 0
 				}
 			}
 		})
-		for d := len(byDepth) - 1; d >= 0; d-- {
-			for _, g := range byDepth[d] {
+		for e := len(t.byDepth) - 1; e >= 0; e-- {
+			for _, g := range t.byDepth[e] {
 				for _, r := range g.Rows {
 					w := g.widths(r)
 					for k, c := range measured(r) {
@@ -284,58 +332,21 @@ func prepare(root *Grid) {
 			}
 		}
 	}
-	// state is every grid's room and natural width and every box column's
-	// fit, to tell when a pass changed nothing.
-	state := func() []int {
-		var out []int
-		all(func(g *Grid) {
-			out = append(out, g.fit, g.natural)
-			for _, r := range g.Rows {
-				for _, c := range g.widths(r).cols {
-					out = append(out, c.fitted)
-				}
+}
+
+// state is every grid's room, natural width and box room, and every
+// column's fit and nested width, to tell when a pass changed nothing.
+func (t *tree) state() []int {
+	var out []int
+	t.all(func(g *Grid) {
+		out = append(out, g.fit, g.natural, g.boxRoom)
+		for _, r := range g.Rows {
+			for _, c := range g.widths(r).cols {
+				out = append(out, c.fitted, c.nest)
 			}
-		})
-		return out
-	}
-	// Each grid's room from where its row places it, then each nested
-	// grid's natural width in it, the deepest first, into its parent's
-	// column, and the boxes fitted to their rooms: again until a pass
-	// changes nothing, as a grid's room hangs on the grids before it in its
-	// row and a box's on what it holds, bounded by the tree's depth.
-	var boxes []*Grid
-	all(func(g *Grid) {
-		if g.boxed() {
-			boxes = append(boxes, g)
 		}
 	})
-	naturals := func() {
-		for d := len(byDepth) - 1; d >= 1; d-- {
-			for _, g := range byDepth[d] {
-				g.natural = linesWidth(g.render(g.fit))
-			}
-			nested()
-		}
-	}
-	// A pass ends with every box fitted and every grid measured as it
-	// then draws, so each pass's state holds by itself; the bound only
-	// guards a tree no pass settles (Widths shared across depths).
-	for range len(byDepth) + 3 {
-		before := state()
-		for _, gs := range byDepth {
-			for _, g := range gs {
-				g.roomsBelow()
-			}
-		}
-		naturals()
-		if len(boxes) > 0 {
-			fitBoxes(boxes)
-			naturals()
-		}
-		if equal(before, state()) {
-			break
-		}
-	}
+	return out
 }
 
 func equal(a, b []int) bool {
@@ -351,16 +362,38 @@ func equal(a, b []int) bool {
 }
 
 // measured are the cells of r its columns measure, by their index: those
-// before its first span cell, which runs free with every cell after it.
+// before its first span cell (spanAt), which runs free with every cell
+// after it.
 func measured(r Row) map[int]Cell {
 	out := map[int]Cell{}
-	for k, c := range r.Cells {
-		if c.Span {
-			break
-		}
-		out[k] = c
+	for k := range spanAt(r) {
+		out[k] = r.Cells[k]
 	}
 	return out
+}
+
+// lastCell is r's last cell that holds anything, its fit the row's: its
+// own, else the row's positional last cell's (an empty last cell says how
+// the row fits too).
+func lastCell(r Row, last int) Cell {
+	c := r.Cells[last]
+	if p := r.Cells[len(r.Cells)-1]; c.Fit == Keep {
+		c.Fit = p.Fit
+	}
+	return c
+}
+
+// alignLine is a cell's line padded to width, on its left when right; a
+// grid's lines (block, its widest) padded to it first, so the grid moves
+// as one and keeps its own columns.
+func alignLine(s string, width int, right bool, block int) string {
+	if !right {
+		return Pad(s, width)
+	}
+	if block > 0 {
+		s = Pad(s, block)
+	}
+	return padLeft(s, width)
 }
 
 // roomOf is the room a grid has in a cell that starts at start, of a
@@ -389,9 +422,16 @@ func (g *Grid) roomsBelow() {
 			room = g.fit
 		}
 		for _, r := range g.Rows {
+			last := lastShown(r)
 			for i, k := range s.drawn(r) {
 				if c := r.Cells[k]; c.Grid != nil {
-					c.Grid.fit = roomOf(c.Grid.Width, insideRoom(room), s.start(i)+indentOf(r, k))
+					// Where cells lays it: a row's last in what the columns
+					// after it leave.
+					inside := insideRoom(room)
+					if k == last {
+						inside = s.lastRoom(inside, i)
+					}
+					c.Grid.fit = roomOf(c.Grid.Width, inside, s.start(i)+indentOf(r, k))
 				}
 			}
 			// A grid the row runs to the side from, from its column.
@@ -546,10 +586,7 @@ func (g *Grid) place(r Row, room, from int) rowPlace {
 	move := r.Cells[len(r.Cells)-1].Fit == MoveLast && room >= 0 && last > from
 	// inColumn: before the row's first span cell, padded to its column.
 	inColumn := make([]bool, len(r.Cells))
-	for k, c := range r.Cells {
-		if c.Span {
-			break
-		}
+	for k := range spanAt(r) {
 		inColumn[k] = true
 	}
 	// own is the width of shown cells from..to as they are, a right
@@ -662,7 +699,7 @@ func (g *Grid) renderFrom(r Row, room, from int) []string {
 		indent := indentOf(r, s.k)
 		var text []string
 		if s.last {
-			text = g.fitCell(c, s.at+indent, room)
+			text = g.fitCell(lastCell(r, s.k), s.at+indent, room)
 		} else {
 			text = cellLines(c, room, s.at+indent)
 		}
@@ -728,11 +765,8 @@ func compose(cs []placed) []string {
 			if i < len(c.lines) {
 				s = c.lines[i]
 			}
-			switch {
-			case c.pad > 0 && c.right:
-				s = padLeft(Pad(s, block[j]), c.pad)
-			case c.pad > 0:
-				s = Pad(s, c.pad)
+			if c.pad > 0 {
+				s = alignLine(s, c.pad, c.right, block[j])
 			}
 			b.WriteString(s)
 			col += Width(s)

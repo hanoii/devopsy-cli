@@ -344,88 +344,14 @@ func boxesSquare(lines []string) string {
 	return ""
 }
 
-// settledBreak runs one more pass of prepare's loop over root as prepared
-// and says what it changed.
+// settledBreak says what one more pass of prepare's (tree.pass) changes
+// on root as it was rendered, "" when nothing: prepare ended on a pass
+// that changed nothing.
 func settledBreak(root *Grid) string {
-	byDepth := [][]*Grid{}
-	var walk func(g *Grid, d int)
-	walk = func(g *Grid, d int) {
-		for len(byDepth) <= d {
-			byDepth = append(byDepth, nil)
-		}
-		byDepth[d] = append(byDepth[d], g)
-		for _, r := range g.Rows {
-			for _, c := range r.Cells {
-				if c.Grid != nil {
-					walk(c.Grid, d+1)
-				}
-			}
-		}
-	}
-	walk(root, 0)
-	all := func(f func(g *Grid)) {
-		for _, gs := range byDepth {
-			for _, g := range gs {
-				f(g)
-			}
-		}
-	}
-	state := func() []int {
-		var out []int
-		all(func(g *Grid) {
-			out = append(out, g.fit, g.natural, g.boxRoom)
-			for _, r := range g.Rows {
-				for _, c := range g.widths(r).cols {
-					out = append(out, c.fitted, c.nest)
-				}
-			}
-		})
-		return out
-	}
-	nested := func() {
-		all(func(g *Grid) {
-			for _, r := range g.Rows {
-				for _, c := range g.widths(r).cols {
-					c.nest = 0
-				}
-			}
-		})
-		for d := len(byDepth) - 1; d >= 0; d-- {
-			for _, g := range byDepth[d] {
-				for _, r := range g.Rows {
-					w := g.widths(r)
-					for k, c := range measured(r) {
-						if c.Grid != nil {
-							col := w.col(k)
-							col.nest = max(col.nest, indentOf(r, k)+c.Grid.natural)
-						}
-					}
-				}
-			}
-		}
-	}
-	var boxes []*Grid
-	all(func(g *Grid) {
-		if g.boxed() {
-			boxes = append(boxes, g)
-		}
-	})
-	before := state()
-	for _, gs := range byDepth {
-		for _, g := range gs {
-			g.roomsBelow()
-		}
-	}
-	for d := len(byDepth) - 1; d >= 1; d-- {
-		for _, g := range byDepth[d] {
-			g.natural = linesWidth(g.render(g.fit))
-		}
-		nested()
-	}
-	if len(boxes) > 0 {
-		fitBoxes(boxes)
-	}
-	if after := state(); !equal(before, after) {
+	t := prepare(root)
+	before := t.state()
+	t.pass()
+	if after := t.state(); !equal(before, after) {
 		return fmt.Sprintf("one more pass of prepare changes the layout: %v to %v", before, after)
 	}
 	return ""

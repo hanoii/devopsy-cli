@@ -473,7 +473,14 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		case lineSection:
 			out = append(out, layout.Row{Widths: keys, Break: true, Underline: true, Cells: []layout.Cell{{Text: l.value, Span: true, Paint: t.st.head}}})
 		case lineGroup:
-			out = append(out, layout.Row{Widths: keys, Break: brk, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}})
+			heading := layout.Row{Widths: keys, Break: brk, Indent: l.indent, Cells: []layout.Cell{{Text: l.key, Span: true, Paint: t.st.name}}}
+			if t.borders && l.indent > 2 {
+				// An instance's heading in a box is a key row, its value
+				// empty, as an instance's heading with facts is: never a
+				// row across the box cutting its project's block.
+				heading.Cells = []layout.Cell{{Text: l.key, Paint: t.st.name}, {}}
+			}
+			out = append(out, heading)
 		case lineEntry:
 			key := layout.Cell{Text: l.key}
 			value := layout.Cell{Text: l.value, Fit: prose}
