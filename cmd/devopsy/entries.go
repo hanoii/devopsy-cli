@@ -167,10 +167,10 @@ type entryTable struct {
 	// width is where a section's prose wraps, reportWidth.
 	width int
 	// borders draws each section, or a flat report, in a box: a rule
-	// between its top-level entries (its keys and projects), what is
-	// nested under one (instances, environments) in its block; wide is the
-	// terminal's width, the most a box widens to for a line it cannot wrap
-	// (reportWidth when there is none).
+	// between its keys, projects, instances and environments, the key
+	// column left open inside a project; wide is the terminal's width, the
+	// most a box widens to for a line it cannot wrap (reportWidth when
+	// there is none).
 	borders bool
 	wide    int
 }
@@ -510,20 +510,23 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 		pending = false
 		first := l.entry >= 0 && (j == 0 || laid[j-1].entry != l.entry)
 		last := l.entry >= 0 && (j+1 == len(laid) || laid[j+1].entry != l.entry)
-		// A top-level entry's first line, a key's outside a group or a
-		// project's heading: where a box draws its rule, what is nested
-		// under it (an instance, an environment, their lines) in its block.
-		keyStart := false
+		// A key's first line, a project's or an instance's heading: where a
+		// box draws its rule, open in the key column (nested) under a
+		// project, so the project's keys read as one cell across its rows.
+		keyStart, nested := false, false
 		switch {
 		case l.kind == lineSection:
 			brk, pending = true, !t.borders
 		case l.group && l.indent == 2 && (l.kind == lineGroup || l.key != ""):
 			// A project's heading, with facts of its own or none.
 			brk, keyStart = true, true
+		case l.kind == lineGroup:
+			// An instance's heading.
+			keyStart, nested = true, true
 		case first:
 			i := l.entry
 			brk = brk || (block[i] && !bound[i] && !stacks(i)) || (start[i] == i && long(i))
-			keyStart = start[i] == i && es[i].Group == ""
+			keyStart, nested = start[i] == i, es[i].Group != ""
 		}
 		if last {
 			i := l.entry
@@ -600,11 +603,16 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 			out = append(out, layout.Row{Widths: keys, Break: brk, Cells: []layout.Cell{{}, bar}})
 		}
 		if t.borders && l.kind != lineSection {
-			// In a box: a rule at each top-level entry, an empty row where a
-			// blank line goes inside one, a section's keys at its edge.
+			// In a box: a rule at each key, project, instance and
+			// environment, open in the key column inside a project, an empty
+			// row where a blank line goes inside a key, a section's keys at
+			// its edge.
 			r := &out[len(out)-1]
 			blank := r.Break && !keyStart
 			r.Break = keyStart
+			if nested {
+				r.Open = 1
+			}
 			if l.section != "" {
 				r.Indent = max(0, r.Indent-2)
 			}

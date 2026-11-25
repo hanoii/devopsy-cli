@@ -143,6 +143,11 @@ type Row struct {
 	// Break puts a blank line before the row (a rule line in a box),
 	// unless it is the grid's first.
 	Break bool
+	// Open is how many of a box's columns, from its first, the rule a
+	// Break draws leaves open, so their cells read as one across it (a key
+	// spanning the rows of its values); a rule the box needs anyway (under
+	// a Header, where a row across the box starts or ends) is whole.
+	Open int
 	// Underline puts a line of - under the row, as wide as its text; a
 	// box draws none.
 	Underline bool

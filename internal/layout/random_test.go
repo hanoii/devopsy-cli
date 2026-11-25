@@ -131,6 +131,10 @@ func (g *randomGen) grid(d int, pad string) *Grid {
 		if g.p(g.o.brk) {
 			r.Break = true
 			rd += "Break "
+			if g.p(0.4) {
+				r.Open = 1 + g.rnd.Intn(3)
+				rd += fmt.Sprintf("Open=%d ", r.Open)
+			}
 		}
 		if g.p(g.o.header) {
 			r.Header = true
@@ -211,6 +215,9 @@ var boxJoins = map[rune][4]bool{
 	'┬': {false, true, true, true},
 	'┴': {true, false, true, true},
 	'┼': {true, true, true, true},
+	'└': {true, false, false, true},
+	'┌': {false, true, false, true},
+	'╶': {false, false, false, true},
 }
 
 // boxJoined says what in lines does not join: every box character meets
@@ -335,7 +342,8 @@ func boxesSquare(lines []string) string {
 				if l == '╰' && r == '╯' {
 					break
 				}
-				if !(l == '│' && r == '│' || l == '├' && r == '┤') {
+				// A rule, whole or with its first columns open.
+				if !(l == '│' && r == '│' || (l == '├' || l == '│') && r == '┤') {
 					return fmt.Sprintf("line %d: the box from line %d col %d..%d has %c and %c for sides", yy, y, x, x2, l, r)
 				}
 			}

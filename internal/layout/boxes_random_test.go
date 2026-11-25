@@ -119,6 +119,10 @@ func (g *reportGen) rows(out *Grid, w *Widths, cols, d int, pad string, uniform 
 		if g.p(0.1) {
 			r.Break = true
 			rd += "Break "
+			if g.p(0.4) {
+				r.Open = 1 + g.rnd.Intn(3)
+				rd += fmt.Sprintf("Open=%d ", r.Open)
+			}
 		}
 		if g.p(0.08) {
 			r.Indent = 1 + g.rnd.Intn(3)

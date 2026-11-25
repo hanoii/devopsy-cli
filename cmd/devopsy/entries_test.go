@@ -362,10 +362,10 @@ func TestReportArgs(t *testing.T) {
 }
 
 // With borders, each section is a box under its title, every box's
-// columns at one width: a rule between its top-level entries (its keys
-// and projects) and none inside one, so a project's instances and
-// environments stay in its block; an empty row where a blank line goes
-// inside an entry; every heading a key row, one with no facts its value
+// columns at one width: a rule at each key, project, instance and
+// environment, the key column open in it inside a project, so its keys
+// read as one cell across its rows; an empty row where a blank line goes
+// inside a key; every heading a key row, one with no facts its value
 // empty; its keys at the box's edge.
 func TestReportBoxed(t *testing.T) {
 	t.Parallel()
@@ -408,12 +408,17 @@ server
 projects
 ╭───────────┬──────────────────────────╮
 │ shop      │                          │
+│           ├──────────────────────────┤
 │   prod    │ released  1 of 1 running │
+│           ├──────────────────────────┤
 │   staging │ released  0 of 1 running │
 ├───────────┼──────────────────────────┤
 │ tunnel    │                          │
+│           ├──────────────────────────┤
 │   prod    │ released  1 of 1 running │
+│           ├──────────────────────────┤
 │   eu      │                          │
+│           ├──────────────────────────┤
 │     prod  │ released  2 of 2 running │
 ╰───────────┴──────────────────────────╯
 `
@@ -513,7 +518,8 @@ func TestBoxedLongLineRunsPastTheSide(t *testing.T) {
 	tab.borders, tab.wide = true, 1000
 	tab.print(serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)))
 	for _, l := range strings.Split(wide.String(), "\n") {
-		if strings.HasPrefix(l, "│") && !strings.HasSuffix(l, "│") {
+		// A row's line, or a rule open in the key column.
+		if strings.HasPrefix(l, "│") && !strings.HasSuffix(l, "│") && !strings.HasSuffix(l, "┤") {
 			t.Errorf("a line runs past its box though the terminal holds it:\n%s", l)
 		}
 	}
