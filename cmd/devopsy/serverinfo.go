@@ -435,10 +435,12 @@ func serverFacts() (remote.ServerInfo, error) {
 	}, ownedByMe); err != nil {
 		info.EnvironmentsUnread = err.Error()
 	}
-	info.UIDsDir, info.UIDs = uidFacts(info.Root)
 	if asProjectUser() {
+		// The claims are the deploy user's, in a directory closed to every other user.
+		info.UIDs = askDoorClaims()
 		ownView(&info, currentLogin().name)
 	} else {
+		info.UIDsDir, info.UIDs = uidFacts(info.Root)
 		d, _ := remote.ServerDoor()
 		leftFacts(&info, r, d, trees)
 	}
@@ -1955,8 +1957,9 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		}
 		// A claim left harms nothing: its uid stays reserved, and only freeing it could hand
 		// its files to another environment. An environment's is what is left of it
-		// (leftEntries); a project's is said under its heading.
-		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" && o.Env == "" {
+		// (leftEntries); a project's is said under its heading, to the admin alone, whose
+		// claims directory it is.
+		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" && o.Env == "" && info.ProjectUser == "" {
 			e := entry(remote.StatusInfo, o.Project, o.Project, []string{c.Owner + "'s uid claim " + uid + " is left: " + why}, rm(report.Hint))
 			e.Head, e.Instance = true, o.Instance
 			staleProject[o.Project] = append(staleProject[o.Project], e)

@@ -1606,6 +1606,19 @@ func TestServerInfoProjectClaimLeftIsRemovedOnTheServer(t *testing.T) {
 	if !found {
 		t.Fatalf("no line of project:blog's claim left in:\n%+v", es)
 	}
+	// A project user's report says its uids as the admin's does, but no claim left: the
+	// claims directory is the deploy user's, and its rm no command the project user can run.
+	own := releasedAt([]string{"shop/eu/prod"}, "project:shop:eu", "env:shop:eu:prod", "project:shop")
+	own.ProjectUser, own.UIDsDir = "devopsy-shop", ""
+	out := reportAt(own)
+	if !strings.Contains(out, "project uid 100") || !strings.Contains(out, "101") {
+		t.Errorf("a project user's report misses its instance's project uid or its environment's uid:\n%s", out)
+	}
+	for _, e := range serverInfoReport(own, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)) {
+		if len(e.Remedies) > 0 && e.Group == "shop" {
+			t.Errorf("a project user is offered a claim's removal: %+v", e)
+		}
+	}
 }
 
 // Every uid claim is said somewhere: one whose environment has no row and that is not judged

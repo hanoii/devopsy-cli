@@ -355,10 +355,15 @@ func TestDoorProjectsLife(t *testing.T) {
 	if out := release("a second release", "--release"); !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | report W0001 to the server's admin\n") {
 		t.Errorf("a release beside a wiped firewall:\n%s", out)
 	}
-	// Its --server-info says it too, with no setup of the admin's in it.
+	// Its --server-info says it too, with no setup of the admin's in it, and prod's uid, read
+	// through the door from the deploy user's claims.
+	uid, code := doorAs(t, "devopsy", "readlink /home/devopsy/"+cli.UIDsDir+"/env:doorlife:prod")
+	if uid = strings.TrimSpace(uid); code != 0 || uid == "" {
+		t.Fatalf("prod's uid claim (%d): %s", code, uid)
+	}
 	if out, _ := op(t, "/", "devopsy @devopsy-doorlife@doorsrv: --server-info 2>&1"); !saysWords(out, "W0001: the server's firewall is not loaded as devopsy loads it") ||
-		!saysWords(out, "report W0001 to the server's admin") || strings.Contains(out, "\n  setup ") || strings.Contains(out, "--server-setup") {
-		t.Errorf("a project user's --server-info beside a wiped firewall:\n%s", out)
+		!saysWords(out, "report W0001 to the server's admin") || strings.Contains(out, "\n  setup ") || strings.Contains(out, "--server-setup") || !strings.Contains(out, "uid "+uid) {
+		t.Errorf("a project user's --server-info beside a wiped firewall, prod's uid %s:\n%s", uid, out)
 	}
 	if out, code := doorRoot(t, remote.FirewallScript); code != 0 {
 		t.Fatalf("the firewall loaded again (%d): %s", code, out)
