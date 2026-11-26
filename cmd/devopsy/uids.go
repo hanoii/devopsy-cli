@@ -47,14 +47,9 @@ func claimsStore(root string) uids.Store {
 }
 
 // askDoorUIDs asks the door's "uids" request for the environment at base, through
-// doorAnswer, its cap and its deadline.
+// doorAnswered, its cap and its deadline.
 func askDoorUIDs(base string) (uint32, uint32, error) {
-	c, err := doorCommand("uids", base)
-	if err != nil {
-		return 0, 0, err
-	}
-	c.Stderr = errOut
-	out, err := doorAnswer(c, 64, doorUIDsWait)
+	out, err := doorAnswered(true, 64, doorUIDsWait, "uids", base)
 	if err != nil {
 		return 0, 0, fmt.Errorf("the door gave no uids: %w", err)
 	}
@@ -110,14 +105,11 @@ func (s *doorSide) uidClaims(w io.Writer) int {
 // and a read of the claims directory, which takes no lock.
 const doorClaimsWait = 30 * time.Second
 
-// askDoorClaims asks the door's "uid-claims" request through doorAnswer, its cap and its
-// deadline, for a project user's --server-info: what fails is the one claim that says it.
+// askDoorClaims asks the door's "uid-claims" request through doorAnswered, its cap and its
+// deadline, for a project user's --server-info, the door's refusal said as it said it: what
+// fails is the one claim that says it.
 func askDoorClaims() []remote.UIDClaim {
-	c, err := doorCommand("uid-claims")
-	if err != nil {
-		return []remote.UIDClaim{{Bad: err.Error()}}
-	}
-	out, err := doorAnswer(c, 1<<20, doorClaimsWait)
+	out, err := doorAnswered(true, 1<<20, doorClaimsWait, "uid-claims")
 	if err != nil {
 		return []remote.UIDClaim{{Bad: "the door gave none: " + err.Error()}}
 	}

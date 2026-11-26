@@ -91,6 +91,19 @@ func doorRead(who string, args ...string) *exec.Cmd {
 	return c
 }
 
+// doorAnswered asks the door args through doorAnswer, at most max bytes and nothing after
+// within, the door's own lines passed on to stderr as it said them when say is set.
+func doorAnswered(say bool, max int, within time.Duration, args ...string) ([]byte, error) {
+	c, err := doorCommand(args...)
+	if err != nil {
+		return nil, err
+	}
+	if say {
+		c.Stderr = errOut
+	}
+	return doorAnswer(c, max, within)
+}
+
 // doorAnswer runs c, a read as a project user (doorRead), for what it prints: at most max bytes,
 // past which it fails, and, when within is not zero, nothing after within, its session killed
 // then. The read runs on files that user writes, which make it as long, and last as long, as
