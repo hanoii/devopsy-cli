@@ -140,6 +140,15 @@ type Row struct {
 	// Indent is written before the first cell and counted in its width,
 	// so rows at different indents share the columns after it.
 	Indent int
+	// Level is the row's depth in a tree its grid draws guides for (├─,
+	// └─ and the │ running down to a later sibling), after its indent and
+	// counted in its first cell's width, three columns a level: 0 a root,
+	// with none, a node at 1 its child. A tree's rows share one Indent.
+	Level int
+	// Continues makes the row go on with the node of the row before it (a
+	// warning under an environment's line): it starts no node, and the
+	// guides run on by it.
+	Continues bool
 	// Break puts a blank line before the row (a rule line in a box),
 	// unless it is the grid's first.
 	Break bool
@@ -461,7 +470,7 @@ func (g *Grid) roomsBelow() {
 
 func indentOf(r Row, k int) int {
 	if k == 0 {
-		return r.Indent
+		return r.Indent + guideWidth*max(0, r.Level)
 	}
 	return 0
 }
@@ -515,27 +524,29 @@ func (g *Grid) render(room int) []string {
 	var out []string
 	for i, r := range g.Rows {
 		if r.Break && i > 0 {
-			out = append(out, "")
+			guide, _ := guided("", g.gapGuide(i), g.firstWidth(r))
+			out = append(out, guide)
 		}
 		lines := g.renderRow(r, room)
 		under := ""
 		if r.Underline && len(lines) > 0 {
-			// Under every line of the row, as wide as the widest, at the
-			// row's indent.
+			// Under every line of the row, as wide as the widest, after the
+			// row's indent and guides.
 			n := 0
 			for _, l := range lines {
 				n = max(n, Width(strings.TrimLeft(Strip(l), " ")))
 			}
 			if n > 0 {
-				under = strings.Repeat(" ", r.Indent) + strings.Repeat("-", n)
+				under = strings.Repeat(" ", indentOf(r, 0)) + strings.Repeat("-", n)
 			}
 		}
-		if r.Paint != nil {
-			for j := range lines {
-				if lines[j] != "" {
-					lines[j] = r.Paint(lines[j])
-				}
+		// The guides before the row's paint, which colors what follows them.
+		for j := range lines {
+			guide, rest := guided(lines[j], g.rowGuide(i, j), g.firstWidth(r))
+			if r.Paint != nil && rest != "" {
+				rest = r.Paint(rest)
 			}
+			lines[j] = guide + rest
 		}
 		out = append(out, lines...)
 		if under != "" {

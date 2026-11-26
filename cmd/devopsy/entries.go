@@ -602,6 +602,15 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 			}
 			out = append(out, layout.Row{Widths: keys, Break: brk, Cells: []layout.Cell{{}, bar}})
 		}
+		if l.kind == lineGroup || l.entry >= 0 && es[l.entry].Group != "" {
+			// A project is a tree, its name the root, its instances and
+			// environments nodes, each at its depth (an indent of two a
+			// level), what is not a key's first line (or has no key) going on
+			// with the node before it.
+			r := &out[len(out)-1]
+			r.Indent, r.Level = 2, (l.indent-2)/2
+			r.Continues = !keyStart || l.kind == lineEntry && l.key == ""
+		}
 		if t.borders && l.kind != lineSection {
 			// In a box: a rule at each key, project, instance and
 			// environment, open in the key column inside a project, an empty
@@ -617,7 +626,8 @@ func (t entryTable) rows(es []remote.StatusEntry) (out []layout.Row, pending boo
 				r.Indent = max(0, r.Indent-2)
 			}
 			if blank {
-				out = append(out[:len(out)-1], layout.Row{Widths: keys}, *r)
+				gap := layout.Row{Widths: keys, Indent: r.Indent, Level: r.Level, Continues: true}
+				out = append(out[:len(out)-1], gap, *r)
 			}
 		}
 	}

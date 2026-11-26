@@ -470,8 +470,8 @@ func (g *Grid) renderBox() []string {
 	inner := s.inner()
 	// A rule: a junction at each column line, joining those of the row
 	// above and below it, its first open columns left blank between the
-	// lines that go on through it.
-	rule := func(left, right string, above, below *Row, open int) string {
+	// lines that go on through it, a tree's guides in the first (guide).
+	rule := func(left, right string, above, below *Row, open int, guide string) string {
 		if len(s.cols) == 0 {
 			return left + strings.Repeat(boxLine, inner) + right
 		}
@@ -482,11 +482,14 @@ func (g *Grid) renderBox() []string {
 		}
 		b.WriteString(left)
 		for i, w := range s.widths {
-			fill := boxLine
-			if i < open {
-				fill = " "
+			switch {
+			case i == 0 && i < open && s.cols[0] == 0 && guide != "" && Width(guide) <= w:
+				b.WriteString(strings.Repeat(" ", boxPadding) + Pad(guide, w) + strings.Repeat(" ", boxPadding))
+			case i < open:
+				b.WriteString(strings.Repeat(" ", w+2*boxPadding))
+			default:
+				b.WriteString(strings.Repeat(boxLine, w+2*boxPadding))
 			}
-			b.WriteString(strings.Repeat(fill, w+2*boxPadding))
 			if i == len(s.widths)-1 {
 				break
 			}
@@ -522,34 +525,43 @@ func (g *Grid) renderBox() []string {
 		r := &g.Rows[i]
 		switch {
 		case prev == nil:
-			out = append(out, rule("╭", "╮", nil, r, 0))
+			out = append(out, rule("╭", "╮", nil, r, 0, ""))
 		case prev.Header || across(*prev, s.lastCol) != across(*r, s.lastCol):
 			// A rule under a header, and where the box goes from a row
 			// across it to columns or back, so its lines join: whole.
-			out = append(out, rule("├", "┤", prev, r, 0))
+			out = append(out, rule("├", "┤", prev, r, 0, ""))
 		case r.Break && (len(s.cols) == 0 || r.Open < len(s.cols)):
 			// A rule at a break, its open columns left blank; with all of
 			// them open, none.
-			out = append(out, rule("├", "┤", prev, r, max(0, r.Open)))
+			out = append(out, rule("├", "┤", prev, r, max(0, r.Open), g.gapGuide(i)))
 		}
-		out = append(out, g.boxRow(*r, s, inner)...)
+		out = append(out, g.boxRow(i, s, inner)...)
 		prev = r
 	}
 	if prev != nil {
-		out = append(out, rule("╰", "╯", prev, nil, 0))
+		out = append(out, rule("╰", "╯", prev, nil, 0, ""))
 	}
 	return out
 }
 
-// boxRow is one row of a box: its cells padded to their columns between
-// the box's lines, then what runs to the side.
-func (g *Grid) boxRow(r Row, s boxShape, inner int) []string {
+// boxRow is row at of a box: its cells padded to their columns between
+// the box's lines, then what runs to the side, a tree's guides before
+// its first cell.
+func (g *Grid) boxRow(at int, s boxShape, inner int) []string {
+	r := g.Rows[at]
 	pad := strings.Repeat(" ", boxPadding)
 	paint := func(line string) string {
 		if r.Paint != nil && line != "" {
 			return r.Paint(line)
 		}
 		return line
+	}
+	// first paints line j of what starts at the row's origin, its guide
+	// before the paint, in most columns (the first column's, or the box's
+	// inside for what runs from it to the side).
+	first := func(line string, j, most int) string {
+		guide, rest := guided(line, g.rowGuide(at, j), most)
+		return guide + paint(rest)
 	}
 	l := g.cells(r, s, g.boxRoom)
 	height := max(1, len(l.run))
@@ -571,7 +583,12 @@ lines:
 		for i := range upTo {
 			line := ""
 			if j < len(l.cols[i]) {
-				line = paint(l.cols[i][j])
+				line = l.cols[i][j]
+			}
+			if i == 0 && s.cols[0] == 0 {
+				line = first(line, j, s.widths[0])
+			} else {
+				line = paint(line)
 			}
 			block := 0
 			if k := s.cols[i]; k < len(r.Cells) && r.Cells[k].Grid != nil {
@@ -600,7 +617,12 @@ lines:
 		if l.run != nil {
 			line := ""
 			if j < len(l.run) {
-				line = paint(l.run[j])
+				line = l.run[j]
+			}
+			if upTo == 0 && runsFrom(r, s.lastCol) == 0 {
+				line = first(line, j, content)
+			} else {
+				line = paint(line)
 			}
 			if Width(line) > content-used {
 				// Past the box's MaxWidth: the line runs out past the side.

@@ -1088,3 +1088,62 @@ func TestBoxOpenRule(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// A tree's guides (Row.Level) go after a row's indent and count in its
+// first column: a node's branch a fork, its parent's last child's a
+// corner, and a │ running down to each later sibling and first child
+// through the lines between (a row that continues its node, a cell's
+// later lines, a blank line, a box's open rule), a root ending them. A
+// row's paint colors what follows its guide, never the guide.
+func TestTreeGuides(t *testing.T) {
+	t.Parallel()
+	paint := func(s string) string { return strings.ReplaceAll(s, " ", ".") }
+	rows := func(box bool) []Row {
+		open := 0
+		if box {
+			open = 1
+		}
+		return []Row{
+			{Cells: Cells("shop", ""), Indent: 2},
+			{Cells: Cells("prod", "up"), Indent: 2, Level: 1, Break: true, Open: open},
+			{Cells: Cells("", "warning: disk"), Indent: 2, Level: 1, Continues: true, Paint: paint},
+			{Cells: Cells("eu", "one\ntwo"), Indent: 2, Level: 1, Break: true, Open: open},
+			{Cells: Cells("prod", "up"), Indent: 2, Level: 2, Break: true, Open: open},
+			{Cells: Cells("blog", "up"), Indent: 2, Break: true},
+		}
+	}
+	plain := (&Grid{Rows: rows(false)}).String()
+	want := `  shop
+  │
+  ├─ prod     up
+  │...........warning:.disk
+  │
+  └─ eu       one
+     │        two
+     │
+     └─ prod  up
+
+  blog        up
+`
+	if plain != want {
+		t.Errorf("plain, got:\n%s\nwant:\n%s", plain, want)
+	}
+	boxed := (&Grid{Border: Box, Rows: rows(true)}).String()
+	want = `╭──────────────┬───────────────╮
+│   shop       │               │
+│   │          ├───────────────┤
+│   ├─ prod    │ up            │
+│   │..        │ warning:.disk │
+│   │          ├───────────────┤
+│   └─ eu      │ one           │
+│      │       │ two           │
+│      │       ├───────────────┤
+│      └─ prod │ up            │
+├──────────────┼───────────────┤
+│   blog       │ up            │
+╰──────────────┴───────────────╯
+`
+	if boxed != want {
+		t.Errorf("boxed, got:\n%s\nwant:\n%s", boxed, want)
+	}
+}

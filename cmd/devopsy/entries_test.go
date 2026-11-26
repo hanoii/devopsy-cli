@@ -80,38 +80,38 @@ func TestEntryTableSections(t *testing.T) {
 server
 ------
 
-  system     Linux
-  disks      /  xfs
+  system      Linux
+  disks       /  xfs
 
-             warning: / is 95% full
-             | to fix it:
-             | $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
+              warning: / is 95% full
+              | to fix it:
+              | $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
 
-  setup      a line long enough to wrap at a word once it runs past the report's width, which it
-             does here
+  setup       a line long enough to wrap at a word once it runs past the report's width, which it
+              does here
 
 projects
 --------
 
-  app        project uid 1
-    prod     released just now by ci          1 of 1 running  uid 2
+  app         project uid 1
+  └─ prod     released just now by ci          1 of 1 running  uid 2
 
-  shop       project uid 3
-    staging  released 2 days ago by somebody  1 of 2 running  uid 4
+  shop        project uid 3
+  └─ staging  released 2 days ago by somebody  1 of 2 running  uid 4
 
-             warning: app restarting
+              warning: app restarting
 
   web
-    dev      gone                             x
+  └─ dev      gone                             x
 
 leftovers
 ---------
 
-  images     busybox:1.37  4.3 MB
-             alpine:3      8.0 MB
-             no release holds them
-             | remove them:
-             | $ docker rmi busybox:1.37 alpine:3
+  images      busybox:1.37  4.3 MB
+              alpine:3      8.0 MB
+              no release holds them
+              | remove them:
+              | $ docker rmi busybox:1.37 alpine:3
 `
 	if b.String() != want {
 		t.Errorf("sections:\n%s\nwant:\n%s", b.String(), want)
@@ -296,38 +296,38 @@ func TestReportBlankLines(t *testing.T) {
 server
 ------
 
-  system  Linux
-  arch    amd64
+  system   Linux
+  arch     amd64
 
-  docker  29.9.1
-          containers' proxy: x
-          its noProxy leaves ::1
-          | add it:
-          | $ devopsy --server-setup-howto proxy
+  docker   29.9.1
+           containers' proxy: x
+           its noProxy leaves ::1
+           | add it:
+           | $ devopsy --server-setup-howto proxy
 
-          warning: no apparmor_parser
-          warning: logs grow
+           warning: no apparmor_parser
+           warning: logs grow
 
-  disks   /     xfs
-          warning: / is full
-          | to fix it:
-          | $ devopsy @vm1: --gc
+  disks    /     xfs
+           warning: / is full
+           | to fix it:
+           | $ devopsy @vm1: --gc
 
-          /mnt  ext4
+           /mnt  ext4
 
 projects
 --------
 
   shop
-    prod  released  1 of 1 running
-    pr-1  gone      a uid claim
-          | remove it:
-          | $ devopsy @vm1: --gc
-
-    dev   released  1 of 1 running
+  ├─ prod  released  1 of 1 running
+  ├─ pr-1  gone      a uid claim
+  │        | remove it:
+  │        | $ devopsy @vm1: --gc
+  │
+  └─ dev   released  1 of 1 running
 
   web
-    prod  released  1 of 1 running
+  └─ prod  released  1 of 1 running
 `
 	if b.String() != want {
 		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
@@ -396,31 +396,31 @@ func TestReportBoxed(t *testing.T) {
 	tab.print(es)
 	want := `
 server
-╭───────────┬──────────────────────────╮
-│ system    │ Linux                    │
-│           │ clock: synchronized      │
-│           │                          │
-│           │ warning: reboot          │
-├───────────┼──────────────────────────┤
-│ docker    │ 29.9.1                   │
-╰───────────┴──────────────────────────╯
+╭────────────┬──────────────────────────╮
+│ system     │ Linux                    │
+│            │ clock: synchronized      │
+│            │                          │
+│            │ warning: reboot          │
+├────────────┼──────────────────────────┤
+│ docker     │ 29.9.1                   │
+╰────────────┴──────────────────────────╯
 
 projects
-╭───────────┬──────────────────────────╮
-│ shop      │                          │
-│           ├──────────────────────────┤
-│   prod    │ released  1 of 1 running │
-│           ├──────────────────────────┤
-│   staging │ released  0 of 1 running │
-├───────────┼──────────────────────────┤
-│ tunnel    │                          │
-│           ├──────────────────────────┤
-│   prod    │ released  1 of 1 running │
-│           ├──────────────────────────┤
-│   eu      │                          │
-│           ├──────────────────────────┤
-│     prod  │ released  2 of 2 running │
-╰───────────┴──────────────────────────╯
+╭────────────┬──────────────────────────╮
+│ shop       │                          │
+│ │          ├──────────────────────────┤
+│ ├─ prod    │ released  1 of 1 running │
+│ │          ├──────────────────────────┤
+│ └─ staging │ released  0 of 1 running │
+├────────────┼──────────────────────────┤
+│ tunnel     │                          │
+│ │          ├──────────────────────────┤
+│ ├─ prod    │ released  1 of 1 running │
+│ │          ├──────────────────────────┤
+│ └─ eu      │                          │
+│    │       ├──────────────────────────┤
+│    └─ prod │ released  2 of 2 running │
+╰────────────┴──────────────────────────╯
 `
 	if b.String() != want {
 		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
