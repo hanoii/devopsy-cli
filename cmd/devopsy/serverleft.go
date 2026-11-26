@@ -31,21 +31,26 @@ import (
 // remove (its own listing, gcScope.find, counted: --server-info runs on a timer, and sizes and
 // the build cache are --gc's own listing's), the images with a tag, the volumes, what a cut
 // --destroy left, the snapshot root's environments and the project users with no key that
-// still hold environments. The containers are info's, as hostContainers read them, never read
-// again. A read that fails is said in its *Unread, never taken for none.
+// still hold environments. The containers are info's, as hostContainers read them, and the
+// images one docker image ls for both the count and the list, never read again. A read that
+// fails is said in its *Unread, never taken for none.
 func leftFacts(info *remote.ServerInfo, r remote.Releases, d *remote.Door, trees map[string]string) {
 	var containersErr error
 	if info.ContainersUnread != "" {
 		containersErr = errors.New(info.ContainersUnread)
 	}
 	g := &gcScope{docker: "docker", root: r.Root, ages: r.GC, door: d, now: time.Now(), counts: true, containers: info.Containers, containersErr: containersErr}
+	if info.Docker.Error == "" {
+		g.images, g.imagesErr = imageRows(g.docker)
+		g.imagesRead = true
+	}
 	info.GC = g.find().facts()
 	if info.Docker.Error == "" {
 		var err error
 		if info.Volumes, err = hostVolumes(g.docker); err != nil {
 			info.VolumesUnread = err.Error()
 		}
-		if info.Images, err = hostImages(g.docker, info.Containers); err != nil {
+		if info.Images, err = hostImages(g.images, g.imagesErr, info.Containers); err != nil {
 			info.ImagesUnread = err.Error()
 		}
 	}
@@ -69,10 +74,10 @@ func (p gcPlan) facts() *remote.GCFacts {
 	return &remote.GCFacts{OneOffs: len(p.OneOffs), Snapshots: len(p.Snapshots), Left: len(p.Left), Util: len(p.Util), Dangling: len(p.Dangling.Images), Unread: p.Unread}
 }
 
-// hostImages are the images with a tag, by docker image ls (imageRows), each with every tag it
-// has, its size as it gives it, and how many of containers use it.
-func hostImages(docker string, containers []remote.HostContainer) ([]remote.HostImage, error) {
-	rows, err := imageRows(docker)
+// hostImages are the images with a tag, of docker image ls' rows (imageRows, err its
+// failure), each with every tag it has, its size as it gives it, and how many of containers
+// use it.
+func hostImages(rows []imageRow, err error, containers []remote.HostContainer) ([]remote.HostImage, error) {
 	if err != nil {
 		return nil, err
 	}

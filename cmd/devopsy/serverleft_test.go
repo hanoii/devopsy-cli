@@ -248,7 +248,8 @@ func TestSnapshotEnvDirs(t *testing.T) {
 // --server-info counts what --gc would remove and sizes nothing of Docker's but its images, as
 // monitors run it on a timer: no docker system df -v (it sizes every volume), no inspect --size,
 // no builder's cache (buildx, buildctl), no image inspect for a size, no second ps or inspect of
-// the containers (the one-offs and the images in use are hostContainers' read), and no walk of a
+// the containers (the one-offs and the images in use are hostContainers' read), no second
+// listing of the images (the old util images are the list's read), and no walk of a
 // release snapshot. An exited one-off of a listed environment past the age, a release snapshot
 // whose release is gone, an old util image and a dangling image no container uses are counted; an image's size
 // comes from docker image ls, a volume no container uses from docker volume ls.
@@ -301,6 +302,9 @@ exit 0
 	}
 	if n := strings.Count(calls, "ps -aq --no-trunc\n"); n != 1 {
 		t.Errorf("%d listings of the containers:\n%s", n, calls)
+	}
+	if n := strings.Count(calls, "image ls --no-trunc --format "); n != 1 {
+		t.Errorf("%d listings of the images:\n%s", n, calls)
 	}
 }
 

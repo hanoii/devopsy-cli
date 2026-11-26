@@ -325,6 +325,11 @@ type gcScope struct {
 	counts        bool
 	containers    []remote.HostContainer
 	containersErr error
+	// images are docker image ls' rows as --server-info read them for its own list, when it
+	// did (imagesRead): the count's old util images come from them, never a second listing.
+	images     []imageRow
+	imagesErr  error
+	imagesRead bool
 	// listedAt is when what remove removes was listed, the server's time: the build cache goes
 	// by the cutoff its listing had.
 	listedAt time.Time
@@ -904,7 +909,10 @@ func parseDockerSize(s string) int64 {
 // with its image's size when it is the image's last name: devopsy's own images, which no
 // release, --destroy or pruning removes, since only its util image's tag bump leaves them.
 func (g *gcScope) oldUtil() ([]gcTag, error) {
-	rows, err := imageRows(g.docker)
+	rows, err := g.images, g.imagesErr
+	if !g.imagesRead {
+		rows, err = imageRows(g.docker)
+	}
 	if err != nil {
 		return nil, err
 	}
