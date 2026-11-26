@@ -19,6 +19,7 @@ Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `interna
 - A release's owner is read from where it is (`releaseOwners`), its target lines checked against its place under the release root, never from a variable a `.env` could set.
 - The claims directory is the configured release root's whenever the release, as reached, is under it, never one under a disk a project directory links to: one directory per server keeps every uid one owner's.
 - A project user's devopsy asks the door's `uids` request, whose answer is the two numbers alone (`askDoorUIDs`); the door reads the owner from the path in the caller's tree (`ownerAt`).
+- A project user's `--server-info` asks the door's `uid-claims` request, whose answer is the claims the request read of the caller's project, one owner and uid a line (`askDoorClaims`), never a claim made: the claims directory is closed to every other user, and a report changes nothing.
 - Without a target the uids are the plain hashes, under the caller's and the `.env`'s, the project's from `config.yaml`'s `project:` alone (`CommittedName`) so it matches every server's.
 - `--vars set` and a config's `env:` refuse the two names (`uids.Reserved`).
 - A release whose compose files read either variable needs the server's `uids` feature (`cli.ReadsUIDs` of `cli.ComposeVariables`, `remote.WithAlsoNeeded`), checked in its first session and its upload's: an older server leaves them unset, and compose would refuse after the upload.

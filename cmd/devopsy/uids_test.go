@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -634,6 +635,34 @@ func TestReleaseRootMoveKeepsUIDs(t *testing.T) {
 		}
 		if uid != was[o] {
 			t.Errorf("%s runs as %d after the move, %d before, its data's owner", o, uid, was[o])
+		}
+	}
+}
+
+// The door's "uid-claims" answer is the claims it read for the caller's project, read back as
+// --server-info's claims: a project user's report shows its uids as the
+// deploy user's does, from a directory closed to it, and a report claims nothing.
+func TestDoorUIDClaimsReadBack(t *testing.T) {
+	t.Parallel()
+	claims := []uids.Claim{
+		{Owner: uids.Owner{Project: "shop", Instance: "eu", Env: "prod"}, UID: 2000000003},
+		{Owner: uids.Owner{Project: "shop", Instance: "eu"}, UID: 1900000001},
+	}
+	var out bytes.Buffer
+	if code := (&doorSide{claims: claims}).uidClaims(&out); code != 0 {
+		t.Fatalf("uid-claims: %d", code)
+	}
+	got, err := parseUIDClaims(out.String())
+	want := []remote.UIDClaim{
+		{Owner: "env:shop:eu:prod", UID: 2000000003, Name: "env:shop:eu:prod"},
+		{Owner: "project:shop:eu", UID: 1900000001, Name: "project:shop:eu"},
+	}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("read back: %+v, %v; want %+v", got, err, want)
+	}
+	for _, bad := range []string{"env:shop:prod\n", "env:shop:prod 12 x\n", "shop 12\n", "env:shop:prod x\n"} {
+		if _, err := parseUIDClaims(bad); err == nil {
+			t.Errorf("%q read as claims", bad)
 		}
 	}
 }

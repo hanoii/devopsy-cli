@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,14 +47,9 @@ func claimsStore(root string) uids.Store {
 }
 
 // askDoorUIDs asks the door's "uids" request for the environment at base, through
-// doorAnswer, its cap and its deadline.
+// doorAnswered, its cap and its deadline.
 func askDoorUIDs(base string) (uint32, uint32, error) {
-	c, err := doorCommand("uids", base)
-	if err != nil {
-		return 0, 0, err
-	}
-	c.Stderr = errOut
-	out, err := doorAnswer(c, 64, doorUIDsWait)
+	out, err := doorAnswered(true, 64, doorUIDsWait, "uids", base)
 	if err != nil {
 		return 0, 0, fmt.Errorf("the door gave no uids: %w", err)
 	}
@@ -93,6 +89,56 @@ func (s *doorSide) uids(base string) int {
 	}
 	fmt.Println(e, p)
 	return 0
+}
+
+// uidClaims answers "uid-claims", for a project user's --server-info: the claims of the
+// caller's project the door read at the request's start (Store.ListOf, its project's alone),
+// one "<owner> <uid>" line each. It claims nothing: a report changes nothing.
+func (s *doorSide) uidClaims(w io.Writer) int {
+	for _, c := range s.claims {
+		fmt.Fprintln(w, c.Owner, c.UID)
+	}
+	return 0
+}
+
+// doorClaimsWait bounds a project user's wait for the door's claims: sudo, the door's checks
+// and a read of the claims directory, which takes no lock.
+const doorClaimsWait = 30 * time.Second
+
+// askDoorClaims asks the door's "uid-claims" request through doorAnswered, its cap and its
+// deadline, for a project user's --server-info, the door's refusal said as it said it: what
+// fails is the one claim that says it.
+func askDoorClaims() []remote.UIDClaim {
+	out, err := doorAnswered(true, 1<<20, doorClaimsWait, "uid-claims")
+	if err != nil {
+		return []remote.UIDClaim{{Bad: "the door gave none: " + err.Error()}}
+	}
+	claims, err := parseUIDClaims(string(out))
+	if err != nil {
+		return []remote.UIDClaim{{Bad: "the door's answer: " + err.Error()}}
+	}
+	return claims
+}
+
+// parseUIDClaims reads the door's "uid-claims" answer, each line an owner and its uid.
+func parseUIDClaims(s string) ([]remote.UIDClaim, error) {
+	var out []remote.UIDClaim
+	for line := range strings.Lines(s) {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("%q is no claim", strings.TrimSpace(line))
+		}
+		o, err := uids.ParseOwner(fields[0])
+		if err != nil {
+			return nil, err
+		}
+		uid, err := uids.ParseUID(fields[1])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, remote.UIDClaim{Owner: o.String(), UID: uid, Name: o.String()})
+	}
+	return out, nil
 }
 
 // ownerAt is the owner of the environment at base in the caller's tree: <tree>/<environment>

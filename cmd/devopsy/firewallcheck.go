@@ -215,13 +215,9 @@ func warnDoorFirewallTo(l *report.Logger, ask func() (string, error)) {
 	}
 }
 
-// askDoorFirewall asks the door's "firewall" request through doorAnswer, its cap and its
+// askDoorFirewall asks the door's "firewall" request through doorAnswered, its cap and its
 // deadline.
 func askDoorFirewall() (string, error) {
-	c, err := doorCommand("firewall")
-	if err != nil {
-		return "", err
-	}
-	out, err := doorAnswer(c, 64, doorFirewallWait)
+	out, err := doorAnswered(false, 64, doorFirewallWait, "firewall")
 	return strings.TrimSpace(string(out)), err
 }

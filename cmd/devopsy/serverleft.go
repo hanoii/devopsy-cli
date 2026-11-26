@@ -468,7 +468,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 		why := notLookedFor(info, dockerUp)
 		for _, name := range slices.Sorted(maps.Keys(left)) {
 			c := left[name]
-			e := goneEntry(info, name, &c, claimLeftWords(c, nil, why), claimRemoval(report.Hint, ref, info.UIDsDir, c))
+			e := goneEntry(info, name, &c, claimLeftWords(c, nil, why), claimRemoval(report.Hint, ref, info, c)...)
 			groups[e.Group] = append(groups[e.Group], e)
 		}
 	}
@@ -536,7 +536,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 			}
 			c := g.claim
 			if c != nil && len(left) == 0 {
-				e := goneEntry(info, name, c, claimLeftWords(*c, nil, why), claimRemoval(report.Hint, ref, info.UIDsDir, *c))
+				e := goneEntry(info, name, c, claimLeftWords(*c, nil, why), claimRemoval(report.Hint, ref, info, *c)...)
 				groups[e.Group] = append(groups[e.Group], e)
 				continue
 			}
@@ -602,9 +602,9 @@ const goneKeyMax = 12
 
 // placed is project's row of key with lines and hint, key past goneKeyMax said in its first
 // line under gone, the row its own by its Name.
-func placed(project, key string, lines []string, hint report.Remedy) remote.StatusEntry {
+func placed(project, key string, lines []string, hints ...report.Remedy) remote.StatusEntry {
 	instance, key := instanceOf(key)
-	e := remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Instance: instance, Key: key, Lines: lines, Remedies: []report.Remedy{hint}}
+	e := remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Instance: instance, Key: key, Lines: lines, Remedies: hints}
 	// As it shows: quoted (report.Copyable), in columns.
 	if layout.Width(report.Copyable(key)) > goneKeyMax {
 		e.Key, e.Name = "gone", key
@@ -618,16 +618,16 @@ func placed(project, key string, lines []string, hint report.Remedy) remote.Stat
 // claim's owner says them, else as projectOfName finds them; a name of no project on the
 // server a project of its own, its name the line above the row, so a heading never widens
 // the key column. A claim's row is never a heading.
-func goneEntry(info remote.ServerInfo, name string, c *remote.UIDClaim, what string, hint report.Remedy) remote.StatusEntry {
+func goneEntry(info remote.ServerInfo, name string, c *remote.UIDClaim, what string, hints ...report.Remedy) remote.StatusEntry {
 	if c != nil {
 		project, key := claimKey(*c)
-		return placed(project, key, []string{"gone, " + what}, hint)
+		return placed(project, key, []string{"gone, " + what}, hints...)
 	}
 	project, key, own := projectOfName(name, info)
 	if own {
-		return remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: name, Name: name, Lines: []string{"gone, " + what}, Remedies: []report.Remedy{hint}}
+		return remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: name, Name: name, Lines: []string{"gone, " + what}, Remedies: hints}
 	}
-	return placed(project, key, []string{"gone, " + what}, hint)
+	return placed(project, key, []string{"gone, " + what}, hints...)
 }
 
 // claimLeftWords are what is left of a gone environment whose claim c is left, besides left:
@@ -692,9 +692,13 @@ func claimRm(dir string, c remote.UIDClaim) string {
 }
 
 // claimRemoval is the way out of claim c left, of kind, on the server ref names: every claim
-// left is removed by hand, as the deploy user, once nothing of its owner is left.
-func claimRemoval(kind func(string, ...string) report.Remedy, ref, dir string, c remote.UIDClaim) report.Remedy {
-	return onServerRemedy(kind, ref, "remove it by hand once nothing of it is left:", claimRm(dir, c))
+// left is removed by hand, as the deploy user, once nothing of its owner is left. A project
+// user's report offers none: the claims directory is the deploy user's, closed to it.
+func claimRemoval(kind func(string, ...string) report.Remedy, ref string, info remote.ServerInfo, c remote.UIDClaim) []report.Remedy {
+	if info.ProjectUser != "" {
+		return nil
+	}
+	return []report.Remedy{onServerRemedy(kind, ref, "remove it by hand once nothing of it is left:", claimRm(info.UIDsDir, c))}
 }
 
 // projectOfName is the project a compose name with no environment is filed under, and its

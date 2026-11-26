@@ -2768,11 +2768,13 @@ func containersChain() string {
 	return b.String()
 }
 
-// The door refuses "firewall" with any argument: the request has none.
-func TestDoorRefusesAFirewallWithArguments(t *testing.T) {
+// The door refuses "firewall" and "uid-claims" with any argument: the requests have none.
+func TestDoorRefusesArgumentsToRequestsWithNone(t *testing.T) {
 	t.Parallel()
-	if code := (&doorSide{}).answer([]string{"firewall", "x"}, nil, nil); code != 2 {
-		t.Errorf("firewall x: %d", code)
+	for _, request := range []string{"firewall", "uid-claims"} {
+		if code := (&doorSide{}).answer([]string{request, "x"}, nil, nil); code != 2 {
+			t.Errorf("%s x: %d", request, code)
+		}
 	}
 }
 
