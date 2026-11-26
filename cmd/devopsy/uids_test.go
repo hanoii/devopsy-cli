@@ -218,8 +218,8 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 	}
 	out, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
 	for _, want := range []string{
-		"\n  blog       project uid " + uid["project:blog"] + "\n    prod     gone, only its uid claim " + uid["env:blog:prod"] + " is left\n",
-		"\n  shop       project uid " + uid["project:shop"] + "\n    prod     not released yet  uid " + uid["env:shop:prod"] + "\n",
+		"\n  blog       project uid " + uid["project:blog"] + "\n  └─ prod    gone, only its uid claim " + uid["env:blog:prod"] + " is left\n",
+		"\n  shop       project uid " + uid["project:shop"] + "\n  └─ prod    not released yet  uid " + uid["env:shop:prod"] + "\n",
 		"\n  uids       warning: stray in " + info.UIDsDir + " is no claim: ",
 	} {
 		if !strings.Contains(out, want) {

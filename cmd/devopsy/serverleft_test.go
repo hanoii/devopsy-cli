@@ -315,7 +315,7 @@ func TestServerInfoGoneClaimSaysWhatIsLeft(t *testing.T) {
 		Containers:   []remote.HostContainer{{Project: "shop-pr-1", Service: "web", State: "exited", Released: true}},
 	}
 	out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
-	if !strings.Contains(out, "\n    pr-1     gone, no environment on the server, and left: its uid claim 1000002, containers web (exited)\n") || strings.Contains(out, "only its uid claim") {
+	if !strings.Contains(out, "\n  ├─ pr-1    gone, no environment on the server, and left: its uid claim 1000002, containers web (exited)\n") || strings.Contains(out, "only its uid claim") {
 		t.Errorf("shop-pr-1's row, its claim and its container:\n%s", out)
 	}
 }
@@ -368,7 +368,7 @@ func TestServerInfoGoneEnvironmentNamedAsItsProject(t *testing.T) {
 		_, projects, _ := strings.Cut(out, "\nprojects\n")
 		row := false
 		for _, l := range strings.Split(projects, "\n") {
-			row = row || strings.HasPrefix(l, "    shop ") && strings.Contains(l, "gone")
+			row = row || childAt("\n"+l, "shop") == 0 && strings.Contains(l, "gone")
 		}
 		if !row {
 			t.Errorf("%s: the gone shop/shop has no row of its own under shop:\n%s", name, projects)
@@ -408,7 +408,7 @@ func TestServerInfoLongGoneNameIsARowOfItsOwn(t *testing.T) {
 	out := reportAt(info)
 	lines := strings.Split(out, "\n")
 	for i, l := range lines {
-		if strings.Contains(l, "a-feature-branch-name: ") && !strings.HasPrefix(l, "    gone ") {
+		if strings.Contains(l, "a-feature-branch-name: ") && childAt("\n"+l, "gone") != 0 {
 			t.Errorf("the gone a-feature-branch-name is a line of the live shop/gone's row (after %q):\n%s", lines[i-1], out)
 		}
 	}

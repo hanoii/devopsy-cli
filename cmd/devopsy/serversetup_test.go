@@ -1201,7 +1201,7 @@ func TestServerSetupNamesAVolumeThatHoldsReleases(t *testing.T) {
 	if fileExists(filepath.Join(home, uids.DirName)) {
 		t.Errorf("a claims directory in the home, %s, which releases never lived in", filepath.Join(home, uids.DirName))
 	}
-	if out, code := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "uid "+strconv.FormatUint(uint64(was), 10)) || !strings.Contains(out, "\n  shop") || !strings.Contains(out, "\n    prod ") {
+	if out, code := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "uid "+strconv.FormatUint(uint64(was), 10)) || !strings.Contains(out, "\n  shop") || childAt(out, "prod") < 0 {
 		t.Errorf("--server-info (%d) shows no claim or environment of the volume's:\n%s", code, out)
 	}
 }

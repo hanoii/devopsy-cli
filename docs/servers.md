@@ -393,10 +393,10 @@ in `--shell-host`; anywhere else it refuses. It reports in four parts.
   where its record is, the values someone else set that were kept, and
   whether `/proc` shows every user's processes.
 
-`projects`, each project under its name with the project user it is
-for, if any ([project users](project-users.md)), and its project uid;
-each of its instances a level under it with the instance's project uid;
-then, under the project or its instance, a row per environment: when its
+`projects`, each project a tree under its name with the project user it
+is for, if any ([project users](project-users.md)), and its project uid;
+each of its instances a branch of it with the instance's project uid;
+then, on a branch of the project or its instance, a row per environment: when its
 current release was made and by whom, its containers running, the uid
 its containers run as ([uids](#uids)) and what runs on it, with the role
 it holds and what it exports under the row. A role held by a compose
