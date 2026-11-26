@@ -1606,18 +1606,66 @@ func TestServerInfoProjectClaimLeftIsRemovedOnTheServer(t *testing.T) {
 	if !found {
 		t.Fatalf("no line of project:blog's claim left in:\n%+v", es)
 	}
-	// A project user's report says its uids as the admin's does, but no claim left: the
-	// claims directory is the deploy user's, and its rm no command the project user can run.
-	own := releasedAt([]string{"shop/eu/prod"}, "project:shop:eu", "env:shop:eu:prod", "project:shop")
-	own.ProjectUser, own.UIDsDir = "devopsy-shop", ""
-	out := reportAt(own)
-	if !strings.Contains(out, "project uid 100") || !strings.Contains(out, "101") {
+}
+
+// projectUserInfo is info as a project user's own --server-info reads it (serverFacts): its
+// docker the door's, no claims directory of its own, its claims the door's answer, each named
+// by its owner (parseUIDClaims).
+func projectUserInfo(paths []string, owners ...string) remote.ServerInfo {
+	info := releasedAt(paths)
+	info.ProjectUser, info.UIDsDir, info.Docker.Door = "devopsy-shop", "", true
+	for i, o := range owners {
+		info.UIDs = append(info.UIDs, remote.UIDClaim{Owner: o, UID: uint32(100 + i), Name: o})
+	}
+	return info
+}
+
+// A project user's report says its uids as the admin's does, and every claim left, but offers
+// no claim's removal: the claims directory is the deploy user's, closed to it.
+func TestServerInfoProjectUserClaims(t *testing.T) {
+	t.Parallel()
+	// eu/prod is live; eu/staging is gone with its claim left, and shop's own project claim
+	// is left too, no environment of shop's own holding one.
+	info := projectUserInfo([]string{"shop/eu/prod"}, "project:shop:eu", "env:shop:eu:prod", "env:shop:eu:staging", "project:shop")
+	out := reportAt(info)
+	if !strings.Contains(out, "project uid 100") || !strings.Contains(out, "uid 101") {
 		t.Errorf("a project user's report misses its instance's project uid or its environment's uid:\n%s", out)
 	}
-	for _, e := range serverInfoReport(own, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)) {
-		if len(e.Remedies) > 0 && e.Group == "shop" {
-			t.Errorf("a project user is offered a claim's removal: %+v", e)
+	es := serverInfoReport(info, "vm1", "devopsy-shop@vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC))
+	for _, uid := range []string{"102", "103"} {
+		said := false
+		for _, e := range es {
+			said = said || strings.Contains(strings.Join(e.Lines, " "), "uid claim "+uid+" is left")
 		}
+		if !said {
+			t.Errorf("the claim of uid %s left is not said:\n%s", uid, out)
+		}
+	}
+	for _, e := range es {
+		if cmds := fixText(e.Remedies); strings.Contains(cmds, "$ rm ") {
+			t.Errorf("a project user is offered a claim's removal: %v\n%s", e.Lines, cmds)
+		}
+	}
+}
+
+// The door not answering a project user's claims is a warning of the claims unread, with no
+// removal offered and no uid shown as if none were claimed.
+func TestServerInfoProjectUserClaimsUnread(t *testing.T) {
+	t.Parallel()
+	info := projectUserInfo([]string{"shop/prod"})
+	info.UIDs = []remote.UIDClaim{{Bad: "the door gave none: exit status 2"}}
+	warned := false
+	for _, e := range serverInfoReport(info, "vm1", "devopsy-shop@vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)) {
+		if e.Key != "uids" {
+			continue
+		}
+		warned = e.Level == remote.StatusWarning && strings.Contains(e.Lines[0], "the door gave none")
+		if len(e.Remedies) > 0 {
+			t.Errorf("claims the door did not answer offer %s", fixText(e.Remedies))
+		}
+	}
+	if !warned {
+		t.Error("claims the door did not answer are no warning")
 	}
 }
 

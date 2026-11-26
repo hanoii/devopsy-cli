@@ -1929,8 +1929,8 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 	projectUIDs := map[string]map[string][]string{}
 	staleProject := map[string][]remote.StatusEntry{}
 	for _, c := range info.UIDs {
-		rm := func(kind func(string, ...string) report.Remedy) report.Remedy {
-			return claimRemoval(kind, ref, info.UIDsDir, c)
+		rm := func(kind func(string, ...string) report.Remedy) []report.Remedy {
+			return claimRemoval(kind, ref, info, c)
 		}
 		switch {
 		case c.Bad != "" && c.Name == info.UIDsDir:
@@ -1938,12 +1938,12 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 			topAdd(remote.StatusWarning, "uids", "the uid claims could not be read: "+oneLine(c.Bad))
 			continue
 		case c.Bad != "":
-			topAdd(remote.StatusWarning, "uids", c.Name+" in "+info.UIDsDir+" is no claim: "+c.Bad, rm(report.Fix))
+			topAdd(remote.StatusWarning, "uids", c.Name+" in "+info.UIDsDir+" is no claim: "+c.Bad, rm(report.Fix)...)
 			continue
 		}
 		o, err := uids.ParseOwner(c.Owner)
 		if err != nil {
-			topAdd(remote.StatusWarning, "uids", c.Owner+"'s uid claim is left: "+err.Error(), rm(report.Fix))
+			topAdd(remote.StatusWarning, "uids", c.Owner+"'s uid claim is left: "+err.Error(), rm(report.Fix)...)
 			continue
 		}
 		uid := strconv.FormatUint(uint64(c.UID), 10)
@@ -1957,10 +1957,9 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		}
 		// A claim left harms nothing: its uid stays reserved, and only freeing it could hand
 		// its files to another environment. An environment's is what is left of it
-		// (leftEntries); a project's is said under its heading, to the admin alone, whose
-		// claims directory it is.
-		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" && o.Env == "" && info.ProjectUser == "" {
-			e := entry(remote.StatusInfo, o.Project, o.Project, []string{c.Owner + "'s uid claim " + uid + " is left: " + why}, rm(report.Hint))
+		// (leftEntries); a project's is said under its heading.
+		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" && o.Env == "" {
+			e := entry(remote.StatusInfo, o.Project, o.Project, []string{c.Owner + "'s uid claim " + uid + " is left: " + why}, rm(report.Hint)...)
 			e.Head, e.Instance = true, o.Instance
 			staleProject[o.Project] = append(staleProject[o.Project], e)
 		}
