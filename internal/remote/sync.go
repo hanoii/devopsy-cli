@@ -74,8 +74,10 @@ const (
 	// its way out): with the lock held (ImportRunning), an import runs.
 	SyncImportingFile = ".devopsy-sync.importing"
 	// SyncedFile is the child's record of its last sync that completed
-	// (finish child go accepted it): its UTC time and the parent's
-	// address, tab separated, written by the child's devopsy itself, so
+	// (finish child go accepted it): its UTC time, the parent's address
+	// and whether the parent was on the child's server ("same", else
+	// "other", as the sync found it), tab separated, written by the
+	// child's devopsy itself, so
 	// --status's "last synced" holds whatever happened to the operator's
 	// session (its log, which said it before, is saved only by a session
 	// that lasted).
@@ -565,6 +567,9 @@ const (
 	SyncToTargetEnv  = "DEVOPSY_SYNC_TO_TARGET"
 	// SyncFromTargetEnv is the parent's address.
 	SyncFromTargetEnv = "DEVOPSY_SYNC_FROM_TARGET"
+	// SyncSameServerEnv is set on the child's side when the parent is on
+	// its server (SyncOptions.SameServerFrom), for SyncedFile.
+	SyncSameServerEnv = "DEVOPSY_INTERNAL_SYNC_SAME_SERVER"
 	// DataVolumesEnv and DataCustomEnv name a side's services copied as
 	// devopsy.data.copy=volumes and custom (depends_on order), and
 	// DataStopEnv what the operation stops on that side (cli.DataStops),
@@ -639,6 +644,7 @@ func (o *SyncOptions) sameServerCopy() string {
 `
 	}
 	if o.SameServerFrom != "" {
+		s += "export " + SyncSameServerEnv + "=1\n"
 		s += sameServerParentEnv(o.SameServerFrom, o.SameServerHeader, o.SameServerKeep, `"$base"/`+Quote(ParentPendingOf(SyncInheritPending(o.ID))))
 	}
 	return s
@@ -990,7 +996,7 @@ rm -f "$base/` + SyncHoldingFile + `"
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
-const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + SyncResetEnv + " " + images.SyncImagesEnv + "\n"
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncSameServerEnv + " " + SyncToTargetEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + SyncResetEnv + " " + images.SyncImagesEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody

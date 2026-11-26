@@ -361,7 +361,8 @@ type laidLine struct {
 // layOut lays out es in the order print shows them: a section's heading
 // on each change of section, a project's heading on each change of
 // group when its first entry is not one of the heading's (Head), an
-// instance's the same way under it, a key
+// instance's the same way under it, a child's row a level under its
+// parent's (Parent), a key
 // on the first line of each run of it, a warning's first line in a
 // section starting with its level's mark (report.WarnLevel.Mark),
 // a row of cells with its run (cellRuns), each key, name,
@@ -373,6 +374,8 @@ func layOut(es []remote.StatusEntry) []laidLine {
 	var out []laidLine
 	runs := cellRuns(es)
 	var prev remote.StatusEntry
+	// How deep each row of the instance (or group) so far sits under its parents (Parent).
+	depths := map[string]int{}
 	for i, e := range es {
 		newSection := i == 0 || e.Section != prev.Section
 		if newSection && e.Section != "" {
@@ -383,6 +386,9 @@ func layOut(es []remote.StatusEntry) []laidLine {
 			out = append(out, laidLine{kind: lineGroup, entry: -1, section: e.Section, indent: 2, key: report.Copyable(e.Group), group: true})
 		}
 		newInstance := newGroup || e.Instance != prev.Instance
+		if newInstance {
+			clear(depths)
+		}
 		if e.Instance != "" && newInstance && !e.Head {
 			out = append(out, laidLine{kind: lineGroup, entry: -1, section: e.Section, indent: 4, key: report.Copyable(e.Instance), group: true})
 		}
@@ -396,6 +402,15 @@ func layOut(es []remote.StatusEntry) []laidLine {
 			indent = 4
 		case e.Section != "":
 			indent = 2
+		}
+		if !e.Head && e.Group != "" {
+			// A child a level under its parent's row, laid out before it (projectRows).
+			depth := 0
+			if d, ok := depths[e.Parent]; ok && e.Parent != "" {
+				depth = d + 1
+			}
+			depths[cmp.Or(e.Name, e.Key)] = depth
+			indent += 2 * depth
 		}
 		newKey := newInstance || !sameRun(prev, e)
 		key := report.Copyable(e.Key)

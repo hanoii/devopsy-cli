@@ -399,7 +399,13 @@ each of its instances a branch of it with the instance's project uid;
 then, on a branch of the project or its instance, a row per environment: when its
 current release was made and by whom, its containers running, the uid
 its containers run as ([uids](#uids)) and what runs on it, with the role
-it holds and what it exports under the row. A role held by a compose
+it holds and what it exports under the row. A child environment
+([syncs](syncs.md)) is a branch of its parent's row when its parent is
+on this server: the environment released for the address the child's
+current release names as its parent's, or, once a sync from that parent
+completed, the environment of that address on this server when the sync
+found the parent there, however the server was spelled. Otherwise its
+row says its parent's address (`parent @vm2:prod`). A role held by a compose
 project that is no environment is a line of its own. A project user's
 `--server-info` shows its own project only.
 
@@ -491,7 +497,8 @@ line alone. `--json` prints the facts and
 the same lines for scripts and agents, never with `--borders` or
 `--no-borders`, each
 warning with its own fix, each line with its `section`, its project
-(`group`) and instance (`instance`), a line of a project's heading
+(`group`) and instance (`instance`), the row a child environment's row
+is a branch of (`parent`), a line of a project's heading
 (`head`), a row's `cells`, and the name of what a row is of when its key
 does not say it (`name`); the facts say whose report it is when a
 project user's (`project_user`). Its

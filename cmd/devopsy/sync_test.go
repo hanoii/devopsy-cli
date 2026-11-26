@@ -2868,7 +2868,7 @@ func TestReleaseCurrentDirectory(t *testing.T) {
 // records its last completed sync itself (remote.SyncedFile), where the
 // operator's log, which said it before, has no copy line for a session
 // lost (found by hand, 2026-10-27: "never synced" after a sync that
-// completed).
+// completed), with whether its parent was on the child's server.
 func TestSyncPushLostSaysCopyDecides(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -2882,6 +2882,20 @@ func TestSyncPushLostSaysCopyDecides(t *testing.T) {
 	}
 	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "parent      prod  last synced just now") {
 		t.Errorf("--status after a sync whose push was lost once its copy completed (%d):\n%s", code, out)
+	}
+	// The record says where the parent was, as the sync found it, for --server-info's tree:
+	// on the child's server here, then on another.
+	where := func() []string {
+		return strings.Split(strings.TrimSpace(readString(filepath.Join(s.root, "shop", "dev", remote.SyncedFile))), "\t")
+	}
+	if f := where(); len(f) != 3 || f[2] != "same" {
+		t.Errorf("the sync's record on one server: %q", f)
+	}
+	if out, code := s.run([]string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}, "@devopsy@two:dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("a sync across servers (%d):\n%s", code, out)
+	}
+	if f := where(); len(f) != 3 || f[1] != "devopsy@one:prod" || f[2] != "other" {
+		t.Errorf("the sync's record across servers: %q", f)
 	}
 
 	// A sync that does not complete (its finish refuses the copy) is no

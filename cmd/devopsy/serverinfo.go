@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -1748,6 +1749,52 @@ func nameChunk(s string) (chunk, rest string) {
 	return s[:i], s[i:]
 }
 
+// envParents are the environments of envs whose parent is one of envs, by path, each its
+// parent's name, in its project and instance. When the child's last sync was from the parent
+// its current release names (DEVOPSY_PARENT_TARGET), the sync's own finding decides: on this
+// server, the environment of that address's [<instance>/]<environment>, however the server was
+// spelled; on another, none. Else the one whose current release was made for that address
+// (DEVOPSY_TARGET), as the two releases resolved it. A chain that comes back on itself, which
+// no config resolves but a project user's tree can say, nests none of its environments.
+func envParents(envs []remote.Environment) map[string]string {
+	at := map[string]string{} // <project>/<address>: the path released for it
+	for _, e := range envs {
+		project, _, _ := strings.Cut(e.Path, "/")
+		if h := parseStatus(e.Status); h.target != "" {
+			at[project+"/"+h.target] = e.Path
+		}
+	}
+	up := map[string]string{} // path: its parent's path
+	for _, e := range envs {
+		project, _, _ := strings.Cut(e.Path, "/")
+		h := parseStatus(e.Status)
+		p, ok := at[project+"/"+h.parent]
+		if h.parent != "" && h.syncedFrom == h.parent {
+			// An address's environment part follows its last colon: none is in a name.
+			p, ok = project+"/"+h.parent[strings.LastIndex(h.parent, ":")+1:], h.syncedWhere == "same"
+			ok = ok && slices.ContainsFunc(envs, func(o remote.Environment) bool { return o.Path == p })
+		}
+		if ok && h.parent != "" && p != e.Path && path.Dir(p) == path.Dir(e.Path) {
+			up[e.Path] = p
+		}
+	}
+	out := map[string]string{}
+	for child, p := range up {
+		seen := map[string]bool{child: true}
+		for q := p; q != ""; q = up[q] {
+			if seen[q] {
+				p = ""
+				break
+			}
+			seen[q] = true
+		}
+		if p != "" {
+			out[child] = path.Base(p)
+		}
+	}
+	return out
+}
+
 // projectRows are a project's entries in the order it shows them: its
 // heading's first, then each row and each instance by name, an
 // instance's heading first in it and its rows by name, what is left of
@@ -1791,13 +1838,61 @@ func projectRows(es []remote.StatusEntry) []remote.StatusEntry {
 	}
 	slices.SortStableFunc(blocks, func(a, b *block) int { return byName(a.name, b.name) })
 	for _, b := range blocks {
-		head = append(head, b.heads...)
 		slices.SortStableFunc(b.rows, func(x, y []remote.StatusEntry) int { return byName(rowOf(x[0]), rowOf(y[0])) })
-		for _, r := range b.rows {
-			head = append(head, r...)
+	}
+	// Each row with its children's after it (Parent), in its instance or out of any, a row
+	// whose parent has no row there at the top: out of an instance each row is a block.
+	var rows [][]remote.StatusEntry
+	for _, b := range blocks {
+		if !b.instance {
+			rows = append(rows, b.rows...)
+		}
+	}
+	for _, b := range blocks {
+		if b.instance {
+			head = append(head, b.heads...)
+			head = append(head, underParents(b.rows, rowOf)...)
+			continue
+		}
+		if r := b.rows[0]; !slices.ContainsFunc(rows, func(o []remote.StatusEntry) bool { return rowOf(o[0]) == r[0].Parent }) {
+			head = append(head, b.heads...)
+			head = append(head, underParents(slices.Insert(childrenOf(rows, rowOf(r[0]), rowOf), 0, r), rowOf)...)
 		}
 	}
 	return head
+}
+
+// childrenOf are rows' descendants of the row named parent (Parent), at any depth.
+func childrenOf(rows [][]remote.StatusEntry, parent string, rowOf func(remote.StatusEntry) string) [][]remote.StatusEntry {
+	var out [][]remote.StatusEntry
+	for _, r := range rows {
+		if r[0].Parent == parent {
+			out = append(out, r)
+			out = append(out, childrenOf(rows, rowOf(r[0]), rowOf)...)
+		}
+	}
+	return out
+}
+
+// underParents are rows, in their order, each followed by its children's (Parent), a row
+// whose parent is not among them at the top.
+func underParents(rows [][]remote.StatusEntry, rowOf func(remote.StatusEntry) string) []remote.StatusEntry {
+	named := map[string]bool{}
+	for _, r := range rows {
+		named[rowOf(r[0])] = true
+	}
+	var out []remote.StatusEntry
+	var under func(parent string)
+	under = func(parent string) {
+		for _, r := range rows {
+			if p := r[0].Parent; p == parent && parent != "" || parent == "" && !named[p] {
+				out = append(out, r...)
+				under(rowOf(r[0]))
+			}
+		}
+	}
+	under("")
+	return out
 }
 
 // ownSections are --server-info's sections before its projects, each
@@ -1971,6 +2066,7 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 	if info.EnvironmentsUnread != "" {
 		topAdd(remote.StatusWarning, "environments", "not every environment could be read: "+oneLine(info.EnvironmentsUnread))
 	}
+	parents := envParents(info.Environments)
 	for _, env := range info.Environments {
 		project, rest, _ := strings.Cut(env.Path, "/")
 		instance, name := instanceOf(rest)
@@ -2029,7 +2125,11 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 			cells[3] = "an operation running"
 		}
 		e := entry(remote.StatusInfo, project, name, []string{remote.CellsJoined(cells...)})
-		e.Instance, e.Cells = instance, cells
+		e.Instance, e.Cells, e.Parent = instance, cells, parents[env.Path]
+		// A parent not here (on another server, not released, or named otherwise) is said.
+		if h.parent != "" && e.Parent == "" {
+			e.Lines = append(e.Lines, "parent @"+h.parent)
+		}
 		if roles := held[compose]; len(roles) > 0 {
 			e.Lines = append(e.Lines, roleLine("role", compose, roles))
 		}
@@ -2049,7 +2149,7 @@ func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (gr
 		// shows them, said once after the last (sharedLater).
 		for _, lines := range problems {
 			w := entry(remote.StatusWarning, project, name, lines, statusHint(host, info.Root, env))
-			w.Instance = instance
+			w.Instance, w.Parent = instance, e.Parent
 			groups[project] = append(groups[project], w)
 		}
 	}
