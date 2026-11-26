@@ -992,8 +992,9 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		}
 	}
 	// The environment's uid after its containers: on the same line, or wrapped to the next one
-	// past a long name of the operator's host in "released ... by" (a CI runner's).
-	if !regexp.MustCompile(`0 of 1 running(  |\n {13})uid `).MatchString(out) {
+	// past a long name of the operator's host in "released ... by" (a CI runner's), at the
+	// values' column, past the tree's guides.
+	if !regexp.MustCompile(`0 of 1 running(  |\n[ │]+)uid `).MatchString(out) {
 		t.Errorf("no uid after prod's containers in (%d):\n%s", code, out)
 	}
 	for _, want := range []string{
