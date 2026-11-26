@@ -55,7 +55,8 @@ const StatusNoContainer = "none"
 // parts (--server-info's server, projects, leftovers; a project in
 // projects), empty in a flat one; Instance places it under its group's
 // instance (an environment's row, a claim's, what is left of one), shown
-// under the instance's name; Head marks a line of its group's heading,
+// under the instance's name; Parent nests a row under the row of that name in its group and
+// instance (a child environment under its parent), a level deeper; Head marks a line of its group's heading,
 // or of its instance's with Instance, shown on the name's line; Name is what a row is of when
 // its key does not say it (a gone environment's long name, keyed gone),
 // a row of its own apart from another of the same key; Cells are its first line's
@@ -66,6 +67,7 @@ type StatusEntry struct {
 	Section  string          `json:"section,omitempty"`
 	Group    string          `json:"group,omitempty"`
 	Instance string          `json:"instance,omitempty"`
+	Parent   string          `json:"parent,omitempty"`
 	Head     bool            `json:"head,omitempty"`
 	Key      string          `json:"key"`
 	Name     string          `json:"name,omitempty"`
@@ -124,7 +126,10 @@ fi
 
 // EnvStatus prints an environment's state lines ($base set), which
 // --status and --server-info read: "none" (with the newest release's id
-// when it failed), else release, kept, synced and cut; then
+// when it failed), else release, kept, synced (and synced-from, the last
+// sync's parent and where it was), the current release's own
+// address and its parent's (target, parent, from its TargetEnvFile) and
+// cut; then
 // partialStatus's, and "busy" while something holds its release lock (a
 // mark is then what is running: a restore's, an import's, a sync's).
 var EnvStatus = fmt.Sprintf(`cur=$(readlink "$base/current" 2>/dev/null || true)
@@ -145,6 +150,11 @@ else
   printf 'kept\t%%s\n' "$kept"
   # The last sync that completed, whatever its run step did after it.
   printf 'synced\t%%s\n' "$(cut -f1 "$base/`+SyncedFile+`" 2>/dev/null)"
+  # Its parent then, and whether it was on this server.
+  if [ -s "$base/`+SyncedFile+`" ]; then printf 'synced-from\t%%s\n' "$(cut -f2,3 "$base/`+SyncedFile+`")"; fi
+  # Where the release went and its parent, as its release resolved both:
+  # --server-info nests a child under the environment its parent is here.
+  sed -n "s/^DEVOPSY_TARGET='\(.*\)'\$/target`+"\t"+`\1/p; s/^DEVOPSY_PARENT_TARGET='\(.*\)'\$/parent`+"\t"+`\1/p" "$base/$cur/`+TargetEnvFile+`" 2>/dev/null || true
   # An activation cut off past its switch (ActivatingFile), its run step
   # perhaps never run: its line, while nothing holds the lock and its
   # release is current (as --releases' CUT: one cut before its switch is

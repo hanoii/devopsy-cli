@@ -575,6 +575,8 @@ type envState struct {
 	id                                       string // the current release
 	record                                   *remote.Record
 	kept, synced, partial, left              string
+	target, parent                           string // the release's address and its parent's
+	syncedFrom, syncedWhere                  string // the last sync's parent, and "same" when on this server
 	cut                                      *remote.Activating
 	syncing, source, importing, snapshotting bool
 	busy                                     bool // its release lock held
@@ -601,6 +603,12 @@ func parseStatus(header string) envState {
 			h.kept = value
 		case "synced":
 			h.synced = value
+		case "synced-from":
+			h.syncedFrom, h.syncedWhere, _ = strings.Cut(value, "\t")
+		case "target":
+			h.target = value
+		case "parent":
+			h.parent = value
 		case "partial":
 			// The mark (remote.IncompleteLine), or nothing for a sync's
 			// files no holder settled yet.

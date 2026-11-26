@@ -2916,7 +2916,9 @@ exit 0
 
 // --status's last sync is the child's own record of its last completed
 // sync (SyncedFile), never the operator's session logs, which a session
-// lost before it saved them lacks: a copy line there does not count.
+// lost before it saved them lacks: a copy line there does not count. Its
+// parent and where it was come with it, and the release's own address and
+// its parent's, which --server-info nests a child by.
 func TestStatusLastSync(t *testing.T) {
 	t.Parallel()
 	bin, root := t.TempDir(), t.TempDir()
@@ -2943,9 +2945,15 @@ func TestStatusLastSync(t *testing.T) {
 	if out := status(); !strings.Contains(out, "synced\t\n") {
 		t.Errorf("no record, a log's copy line:\n%s", out)
 	}
-	write(t, filepath.Join(base, SyncedFile), "2026-10-02 10:00:03\tprod\n")
-	if out := status(); !strings.Contains(out, "synced\t2026-10-02 10:00:03\n") {
+	write(t, filepath.Join(base, SyncedFile), "2026-10-02 10:00:03\tvm1:prod\tsame\n")
+	if out := status(); !strings.Contains(out, "synced\t2026-10-02 10:00:03\n") || !strings.Contains(out, "synced-from\tvm1:prod\tsame\n") {
 		t.Errorf("last sync:\n%s", out)
+	}
+	// The current release's address and its parent's, as its devopsy-target.env says them,
+	// for --server-info's tree.
+	write(t, filepath.Join(base, "releases", "1", TargetEnvFile), "# Written by devopsy\nDEVOPSY_TARGET='vm1:dev'\nDEVOPSY_PARENT='prod'\nDEVOPSY_PARENT_TARGET='vm1:prod'\nAPP_DEVOPSY_TARGET='x'\n")
+	if out := status(); !strings.Contains(out, "\ntarget\tvm1:dev\nparent\tvm1:prod\n") {
+		t.Errorf("the release's address and its parent's:\n%s", out)
 	}
 }
 

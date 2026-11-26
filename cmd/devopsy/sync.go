@@ -3122,7 +3122,11 @@ func childFinish(p place, services []cli.SyncService, set []cli.Stopped, env []s
 		}
 	} else if word == "go" {
 		// What --status says is the last sync (remote.SyncedFile).
-		line := time.Now().UTC().Format("2006-01-02 15:04:05") + "\t" + os.Getenv(remote.SyncFromTargetEnv) + "\n"
+		where := "other"
+		if os.Getenv(remote.SyncSameServerEnv) != "" {
+			where = "same"
+		}
+		line := time.Now().UTC().Format("2006-01-02 15:04:05") + "\t" + os.Getenv(remote.SyncFromTargetEnv) + "\t" + where + "\n"
 		if err := os.WriteFile(filepath.Join(p.base, remote.SyncedFile), []byte(line), 0o644); err != nil {
 			report.Warn("could not record the sync for --status: " + err.Error())
 		}

@@ -1731,3 +1731,67 @@ func TestServerInfoDocsNameEveryEntryField(t *testing.T) {
 		}
 	}
 }
+
+// A child environment is a branch of its parent's row when its parent is here: the
+// environment of its project and instance released for the address the child's release names
+// as its parent's, or, when its last sync was from that parent, the environment of that
+// address's part on this server as the sync found it, however the server was spelled. A
+// parent elsewhere, a sync that found it on another server, another project's environment of
+// that address and a loop nest nothing, the parent said in words.
+func TestServerInfoChildrenUnderParents(t *testing.T) {
+	t.Parallel()
+	st := func(target, parent, synced string) string {
+		s := "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\ntarget\t" + target + "\n"
+		if parent != "" {
+			s += "parent\t" + parent + "\n"
+		}
+		if synced != "" {
+			s += "synced-from\t" + synced + "\n"
+		}
+		return s
+	}
+	info := releasedAt(nil)
+	info.Environments = []remote.Environment{
+		{Path: "shop/prod", Status: st("vm1:prod", "", "")},
+		{Path: "shop/stage", Status: st("vm1:stage", "vm1:prod", "")},
+		{Path: "shop/pr-7", Status: st("vm1:pr-7", "vm1:stage", "")},
+		{Path: "shop/qa", Status: st("vm1.example.com:qa", "vm1.example.com:prod", "vm1.example.com:prod\tsame")},
+		{Path: "shop/demo", Status: st("vm1:demo", "vm1:prod", "vm1:prod\tother")},
+		{Path: "shop/dev", Status: st("vm1:dev", "vm2:prod", "")},
+		{Path: "shop/x", Status: st("vm1:x", "vm1:y", "")},
+		{Path: "shop/y", Status: st("vm1:y", "vm1:x", "")},
+		{Path: "shop/eu/prod", Status: st("vm1:eu/prod", "", "")},
+		{Path: "shop/eu/stage", Status: st("vm1:eu/stage", "vm1:eu/prod", "")},
+		{Path: "blog/prod", Status: st("vm1:prod", "", "")},
+		{Path: "blog/stage", Status: st("vm1:stage", "vm1:prod", "")},
+	}
+	out := reportAt(info)
+	want := `
+projects
+--------
+
+  blog
+  └─ prod         released 10 min ago by ana
+     └─ stage     released 10 min ago by ana
+
+  shop
+  ├─ demo         released 10 min ago by ana
+  │               parent @vm1:prod
+  ├─ dev          released 10 min ago by ana
+  │               parent @vm2:prod
+  ├─ eu
+  │  └─ prod      released 10 min ago by ana
+  │     └─ stage  released 10 min ago by ana
+  ├─ prod         released 10 min ago by ana
+  │  ├─ qa        released 10 min ago by ana
+  │  └─ stage     released 10 min ago by ana
+  │     └─ pr-7   released 10 min ago by ana
+  ├─ x            released 10 min ago by ana
+  │               parent @vm1:y
+  └─ y            released 10 min ago by ana
+                  parent @vm1:x
+`
+	if i := strings.Index(out, "\nprojects\n"); i < 0 || out[i:] != want {
+		t.Errorf("got:%s\nwant:%s", out[max(i, 0):], want)
+	}
+}
